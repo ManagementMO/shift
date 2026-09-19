@@ -11,6 +11,7 @@ from cityshift.contracts import (
     DemandSet,
     InterventionProposal,
     Investigation,
+    InvestigationOptions,
     RunStatus,
     ScenarioSpec,
     ServicePlan,
@@ -131,9 +132,9 @@ class Service:
         return r
 
     # prompt-to-edit ------------------------------------------------------------------------------
-    def preview_edit(self, sid: str, prompt: str) -> InterventionProposal:
+    def preview_edit(self, sid: str, prompt: str, use_ai: bool = True) -> InterventionProposal:
         scenario = self.scenario(sid)
-        return edits.preview(self.pack(scenario.pack_id), scenario, prompt, llm=LLMClient())
+        return edits.preview(self.pack(scenario.pack_id), scenario, prompt, llm=LLMClient() if use_ai else None)
 
     def apply_edit(self, sid: str, proposal: InterventionProposal) -> ScenarioSpec:
         scenario = self.scenario(sid)
@@ -141,11 +142,11 @@ class Service:
         return self.register_scenario(child, self.demand(sid))
 
     # agents --------------------------------------------------------------------------------------
-    def investigate(self, sid: str, problem: str, constraint: str) -> Investigation:
+    def investigate(self, sid: str, problem: str, constraint: str, options: InvestigationOptions | None = None) -> Investigation:
         scenario = self.scenario(sid)
         demand = self.demand(sid)
         pack = self.pack(scenario.pack_id)
-        inv = new_investigation(sid, problem, constraint)
+        inv = new_investigation(sid, problem, constraint, options)
         self.store.put_investigation(inv)
         runner = InvestigationRunner(self.store)
         self.agent_pool.submit(runner.run, inv, pack, scenario, demand)

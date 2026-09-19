@@ -13,12 +13,13 @@ router = APIRouter(prefix="/api/scenarios", tags=["edit"])
 
 class EditPrompt(BaseModel):
     prompt: str
+    use_ai: bool = True
 
 
 @router.post("/{sid}/edit/preview")
 def preview_edit(sid: str, req: EditPrompt) -> dict:
     try:
-        return get_service().preview_edit(sid, req.prompt).model_dump(mode="json")
+        return get_service().preview_edit(sid, req.prompt, req.use_ai).model_dump(mode="json")
     except KeyError:
         raise HTTPException(404, f"scenario {sid} not found")
 

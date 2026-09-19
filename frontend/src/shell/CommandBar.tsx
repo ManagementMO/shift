@@ -3,6 +3,7 @@ import { api } from '../api'
 import { useStore } from '../store'
 import { ghostFromProposal } from './ghost'
 import ProposalCard from './ProposalCard'
+import Icon from '../components/Icon'
 
 const SUGGESTIONS = [
   'Close Front St W from 05:00 to 30:00',
@@ -57,13 +58,13 @@ export default function CommandBar() {
           void submit(text)
         }}
       >
-        <span className="prompt-glyph">{busy ? '◌' : '›'}</span>
+        <span className="prompt-glyph" aria-hidden="true">{busy ? <span className="command-spinner" /> : <Icon name="message" size={16} />}</span>
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          placeholder="Describe an intervention — the agent proposes, you confirm"
+          placeholder="Describe a change to the city…"
           disabled={!scenarioId || busy}
         />
         <button type="submit" disabled={busy || !text.trim()}>

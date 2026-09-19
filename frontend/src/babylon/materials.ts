@@ -25,7 +25,7 @@ export class CityMaterials {
     material = new StandardMaterial(`city-${kind}`, this.scene)
     material.diffuseTexture = texture
     material.diffuseColor = Color3.White()
-    material.ambientColor = new Color3(0.6, 0.6, 0.6)
+    material.ambientColor = new Color3(0.25, 0.25, 0.25)
     material.specularColor = new Color3(recipe.specular, recipe.specular, recipe.specular)
     material.specularPower = kind === 'glass' || kind === 'water' ? 96 : 24
     this.materials.set(kind, material)

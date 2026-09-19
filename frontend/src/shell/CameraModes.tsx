@@ -12,7 +12,7 @@ const MODES: { id: CameraMode; label: string; key: string }[] = [
   { id: 'incident', label: 'Incident', key: '5' },
 ]
 
-export default function CameraModes() {
+export default function CameraModes({ active = true }: { active?: boolean }) {
   const cameraMode = useStore((s) => s.cameraMode)
   const setCameraMode = useStore((s) => s.setCameraMode)
 
@@ -28,9 +28,10 @@ export default function CameraModes() {
   }, [primaryRunId])
 
   useEffect(() => {
+    if (!active) return
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      const target = e.target
+      if (target instanceof HTMLElement && target.closest('input, textarea, select, button, [contenteditable="true"]')) return
       if (e.key === '6') {
         egress()
         return
@@ -40,7 +41,7 @@ export default function CameraModes() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [active])
 
   return (
     <nav className="cams" aria-label="Camera">

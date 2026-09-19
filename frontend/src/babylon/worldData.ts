@@ -60,7 +60,11 @@ export interface WorldBuilding {
   id: string
   ring: Flat
   holes?: Flat[]
+  base?: number
   h: number
+  source_id?: string
+  source_height?: number
+  roofs?: { ring: Flat; holes?: Flat[] }[]
   cat: BuildingCategory
   lm?: string
   name?: string
@@ -125,6 +129,7 @@ export interface WorldData {
   landmarks: WorldLandmark[]
   green: Flat[]
   sand: Flat[]
+  surfaces?: Record<'ground' | 'grass' | 'sand' | 'pavement' | 'asphalt' | 'rail', { ring: Flat; holes?: Flat[] }[]>
   rail: Flat[]
   water: { ring: Flat; holes?: Flat[] }[]
   counts: Record<string, number>
@@ -139,6 +144,9 @@ export function loadWorld(packId: string): Promise<WorldData> {
     p = fetch(`/api/packs/${packId}/world`).then(async (r) => {
       if (!r.ok) throw new Error(`world.json for ${packId}: HTTP ${r.status} (run make_pack ${packId} --pack-only)`)
       return (await r.json()) as WorldData
+    }).catch((error: unknown) => {
+      cache.delete(packId)
+      throw error
     })
     cache.set(packId, p)
   }

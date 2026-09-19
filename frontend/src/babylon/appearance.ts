@@ -1,7 +1,7 @@
 import type { WorldBuilding } from './worldData'
 
 export const TEXTURE_RECIPES = {
-  glass: { metres: [8, 12.8], specular: 0.55 },
+  glass: { metres: [8, 12.8], specular: 0.22 },
   masonry: { metres: [9, 12.8], specular: 0.12 },
   brick: { metres: [8, 6.4], specular: 0.08 },
   industrial: { metres: [12, 8], specular: 0.2 },
@@ -11,7 +11,7 @@ export const TEXTURE_RECIPES = {
   grass: { metres: [18, 18], specular: 0.01 },
   sand: { metres: [8, 8], specular: 0.02 },
   concrete: { metres: [8, 8], specular: 0.1 },
-  water: { metres: [48, 48], specular: 0.6 },
+  water: { metres: [48, 48], specular: 0.24 },
 } as const
 
 export type TextureKind = keyof typeof TEXTURE_RECIPES
@@ -57,7 +57,7 @@ export function texturePixels(kind: TextureKind, size = 256): Uint8Array {
         const cx = fract(u * 3), cy = fract(v * (brick ? 2 : 4))
         if (cx > 0.2 && cx < 0.8 && cy > 0.24 && cy < 0.85) {
           const reflection = noise(Math.floor(u * 3), Math.floor(v * 4)) * 40
-          r = 69 + reflection; g = 100 + reflection; b = 117 + reflection
+          r = 115 + reflection; g = 133 + reflection; b = 144 + reflection
           if (Math.abs(cx - 0.5) < 0.015 || Math.abs(cy - 0.56) < 0.016) { r = 179; g = 182; b = 171 }
         } else if (cy > 0.19 && cy < 0.25 && cx > 0.16 && cx < 0.84) {
           r = 248; g = 238; b = 217

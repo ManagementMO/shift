@@ -16,7 +16,7 @@ const DRAG_PX = 5
  * Drop-in for `WorldMap`: the Babylon miniature Toronto driven by the same store, clock and shell.  Registers a
  * `SyncMap` adapter so camera modes, the agent bubble and compare sync work unchanged.
  */
-export default function WorldBabylon({ runId, side }: { runId: string | null; side: 'solo' | 'left' | 'right' }) {
+export default function WorldBabylon({ runId, side, onWorldReady, onWorldError }: { runId: string | null; side: 'solo' | 'left' | 'right'; onWorldReady?: (scene: WorldScene) => void; onWorldError?: (message: string) => void }) {
   const pack = useStore((s) => s.pack)
   const sceneRef = useRef<WorldScene | null>(null)
   const runIdRef = useRef(runId)
@@ -93,6 +93,7 @@ export default function WorldBabylon({ runId, side }: { runId: string | null; si
       canvas.addEventListener('pointerdown', onDown)
       canvas.addEventListener('pointerup', onUp)
 
+      onWorldReady?.(ws)
       ws.scene.onDisposeObservable.addOnce(() => {
         canvas.removeEventListener('pointerdown', onDown)
         canvas.removeEventListener('pointerup', onUp)
@@ -106,11 +107,11 @@ export default function WorldBabylon({ runId, side }: { runId: string | null; si
         if (window.__cityshift?.babylon === ws) window.__cityshift.babylon = undefined
       })
     },
-    [side],
+    [side, onWorldReady],
   )
 
   if (!pack) return <div className={`world world-${side} bworld`} />
-  return <WorldCanvas packId={pack.pack_id} onReady={onReady} className={`world world-${side} bworld`} />
+  return <WorldCanvas packId={pack.pack_id} onReady={onReady} onError={onWorldError} className={`world world-${side} bworld`} />
 }
 
 /** Active closures, ghost proposal and focus corridor for sim time `t`, from the store. */

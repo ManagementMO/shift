@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { useStore } from '../store'
 import { api } from '../api'
+import SimulationSettings from './SimulationSettings'
+import Icon, { BrandMark } from '../components/Icon'
+import type { Renderer } from '../types'
 
 const CITY_NAMES: Record<string, string> = { toronto: 'Toronto', waterloo: 'Waterloo' }
 
@@ -13,7 +16,7 @@ function runStatus(status: string | undefined, progress: number | undefined, loa
   return { label: status, cls: 'bad' }
 }
 
-export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => void }) {
+export default function TopStrip({ onOpenScenarios, onGlobe, active = true, renderer = 'babylon' }: { onOpenScenarios: () => void; onGlobe?: () => void; active?: boolean; renderer?: Renderer }) {
   const pack = useStore((s) => s.pack)
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
   const run = useStore((s) => s.runs.find((r) => r.run_id === s.primaryRunId) ?? s.runs.find((r) => r.status === 'running' || r.status === 'queued'))
@@ -43,13 +46,15 @@ export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => v
 
   return (
     <header className="strip">
+      {onGlobe && <button className="ghostbtn globe-return" onClick={onGlobe} title="Return to the global view"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="12" cy="12" r="9" /><ellipse cx="12" cy="12" rx="4" ry="9" /><path d="M3 12h18" /></svg>Globe</button>}
       <div className="brand">
-        <span className="wordmark">CITY<span className="slash">//</span>SHIFT</span>
+        <BrandMark size={22} />
+        <span className="wordmark">Concrete Consequences</span>
         <span className="city">{pack ? CITY_NAMES[pack.pack_id] ?? pack.name : '—'}</span>
       </div>
       <button className="scenario-name" onClick={onOpenScenarios} title={scenario?.label}>
         {title}
-        <span className="chev">▾</span>
+        <span className="chev"><Icon name="chevron" size={13} /></span>
       </button>
       <div className={`status ${st.cls}`}>
         <i />
@@ -63,11 +68,9 @@ export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => v
           {shared ? 'Exported' : 'Share'}
         </button>
         <button className={`ghostbtn ${lens && lens !== 'diagnostics' ? 'on' : ''}`} onClick={() => setLens(lens && lens !== 'diagnostics' ? null : 'people')}>
-          Lens
+          Inspect
         </button>
-        <button className={`ghostbtn ${lens === 'diagnostics' ? 'on' : ''}`} onClick={() => setLens(lens === 'diagnostics' ? null : 'diagnostics')}>
-          Developer
-        </button>
+        <SimulationSettings city disabled={!active} showCityAppearance={renderer === 'babylon'} />
       </div>
       {shared && (
         <div className="toast">

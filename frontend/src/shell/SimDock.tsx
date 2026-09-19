@@ -6,7 +6,7 @@ import { fmt } from '../util'
 
 const SPEEDS = [1, 10, 100]
 
-export default function SimDock() {
+export default function SimDock({ active = true }: { active?: boolean }) {
   const t = useStore((s) => s.t)
   const playing = useStore((s) => s.playing)
   const speed = useStore((s) => s.speed)
@@ -16,9 +16,10 @@ export default function SimDock() {
   const horizon = scenario?.constraints.horizon_s ?? primary?.tMax ?? 2700
 
   useEffect(() => {
+    if (!active) return
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      const target = e.target
+      if (target instanceof HTMLElement && target.closest('input, textarea, select, button, [contenteditable="true"]')) return
       if (e.code === 'Space') {
         e.preventDefault()
         clock.toggle()
@@ -27,7 +28,7 @@ export default function SimDock() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [active])
 
   const summary = primary ? cohortSummaryAt(primary, t) : null
   const buses = primary ? entitiesAt(primary, t).filter((e) => e.kind === 'bus').length : 0

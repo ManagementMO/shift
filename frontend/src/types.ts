@@ -243,7 +243,8 @@ export type AgentDecision = {
 export type Investigation = {
   investigation_id: string
   scenario_id: string
-  status: 'running' | 'completed' | 'failed'
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  engine: string
   problem: string
   constraint: string
   decisions: AgentDecision[]

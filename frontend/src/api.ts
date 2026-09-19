@@ -17,6 +17,8 @@ import type {
   ValidationReport,
 } from './types'
 
+import { investigationOptions, usePreferences } from './preferences'
+
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
 async function get<T>(path: string): Promise<T> {
@@ -67,12 +69,12 @@ export const api = {
   },
   // prompt-to-edit
   previewEdit: (sid: string, prompt: string) =>
-    post<InterventionProposal>(`/api/scenarios/${sid}/edit/preview`, { prompt }),
+    post<InterventionProposal>(`/api/scenarios/${sid}/edit/preview`, { prompt, use_ai: usePreferences.getState().preferences.aiEnabled }),
   applyEdit: (sid: string, proposal: InterventionProposal) =>
     post<ScenarioSpec>(`/api/scenarios/${sid}/edit/apply`, proposal),
   // agents
   investigate: (sid: string, problem: string, constraint: string) =>
-    post<Investigation>(`/api/scenarios/${sid}/investigate`, { problem, constraint }),
+    post<Investigation>(`/api/scenarios/${sid}/investigate`, { problem, constraint, options: investigationOptions(usePreferences.getState().preferences) }),
   investigation: (id: string) => get<Investigation>(`/api/investigations/${id}`),
   // evidence
   evidence: (bid: string) => get<EvidenceBundle>(`/api/evidence/${bid}`),

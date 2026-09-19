@@ -17,11 +17,13 @@ import sys
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 
 import sumolib
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
 from shapely.ops import polygonize, unary_union
+from shapely.strtree import STRtree
 
 from cityshift.citypack.build import PACK_ROOT
 
@@ -192,6 +194,16 @@ def relation_polygons(osm: OsmData, members: list[tuple[str, str, str]], frame: 
     return [p for p in iter_polys(result) if p.area > 1.0]
 
 
+def building_base(tags: dict[str, str]) -> float:
+    height = parse_height(tags.get("min_height")) or parse_height(tags.get("building:min_height"))
+    if height is not None:
+        return height
+    try:
+        return max(0.0, min(600.0, float(tags.get("building:min_level", "0")) * LEVEL_M))
+    except ValueError:
+        return 0.0
+
+
 def building_height(tags: dict[str, str]) -> float:
     h = parse_height(tags.get("height")) or parse_height(tags.get("building:height"))
     if h is None:
@@ -204,8 +216,7 @@ def building_height(tags: dict[str, str]) -> float:
             h = levels * LEVEL_M + (1.5 if tags.get("roof:shape") not in (None, "flat") else 0.6)
     if h is None:
         h = DEFAULT_HEIGHT.get(tags.get("building", "yes"), 10.0)
-    min_h = parse_height(tags.get("min_height")) or 0.0
-    return max(2.5, h - min_h)
+    return max(2.5, h - building_base(tags))
 
 
 def compile_buildings(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[list[dict], list[dict]]:
@@ -228,7 +239,7 @@ def compile_buildings(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[l
             h = lm[2] or h
         elif h >= 90:
             cat = "tower"
-        rec: dict = {"id": key, "ring": ring, "h": q(h), "cat": cat}
+        rec: dict = {"id": key, "ring": ring, "h": q(h), "base": q(building_base(tags)), "cat": cat}
         if holes:
             rec["holes"] = holes
         name = tags.get("name")
@@ -261,15 +272,79 @@ def compile_buildings(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[l
             poly = poly.buffer(0)
         for i, p in enumerate(iter_polys(poly)):
             emit(p, tags, f"w{wid}" if i == 0 else f"w{wid}.{i}")
-    return buildings, landmarks
+    return resolve_building_volumes(buildings), landmarks
 
 
-def compile_areas(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[list[list[float]], list[list[float]], list[list[float]]]:
-    green: list[list[float]] = []
-    sand: list[list[float]] = []
+def polygon_record(poly: Polygon) -> dict:
+    return {
+        "ring": [v for point in list(poly.exterior.coords)[:-1] for v in point],
+        "holes": [[v for point in list(h.coords)[:-1] for v in point] for h in poly.interiors],
+    }
+
+
+def resolve_building_volumes(buildings: list[dict]) -> list[dict]:
+    if not buildings:
+        return []
+    shapes = [Polygon(list(zip(b["ring"][::2], b["ring"][1::2], strict=True)),
+                      [list(zip(h[::2], h[1::2], strict=True)) for h in b.get("holes", [])]).buffer(0)
+              for b in buildings]
+    bases = [b.get("base", 0) for b in buildings]
+    tops = [base + b["h"] for base, b in zip(bases, buildings, strict=True)]
+    tree = STRtree(shapes)
+    parents = list(range(len(buildings)))
+
+    def root(i):
+        while parents[i] != i:
+            parents[i] = parents[parents[i]]
+            i = parents[i]
+        return i
+
+    for i, shape in enumerate(shapes):
+        if buildings[i]["cat"] == "landmark":
+            continue
+        for index in tree.query(shape, predicate="intersects"):
+            j = int(index)
+            if j <= i or buildings[j]["cat"] == "landmark":
+                continue
+            if min(tops[i], tops[j]) <= max(bases[i], bases[j]):
+                continue
+            if shape.intersection(shapes[j]).area > 0.01:
+                parents[root(j)] = root(i)
+    groups: dict[int, list[int]] = {}
+    for i in range(len(buildings)):
+        groups.setdefault(root(i), []).append(i)
+    out: list[dict] = []
+    for group in groups.values():
+        if len(group) == 1:
+            out.append(buildings[group[0]])
+            continue
+        levels = sorted({v for i in group for v in (bases[i], tops[i])})
+        for low, high in pairwise(levels):
+            active = sorted((i for i in group if bases[i] <= low and tops[i] >= high),
+                            key=lambda i: (tops[i], shapes[i].area, buildings[i]["id"]))
+            occupied = Polygon()
+            above = unary_union([shapes[i] for i in group if bases[i] <= high and tops[i] > high])
+            for i in active:
+                visible = shapes[i].difference(occupied)
+                occupied = unary_union([occupied, shapes[i]])
+                source = buildings[i]
+                for part, poly in enumerate(iter_polys(visible)):
+                    if poly.area < 0.01:
+                        continue
+                    out.append({**source, **polygon_record(poly), "id": f'{source["id"]}:volume:{low:g}:{part}',
+                                "source_id": source["id"], "source_height": source["h"],
+                                "base": low, "h": high - low,
+                                "roofs": [polygon_record(p) for p in iter_polys(poly.difference(above)) if p.area >= 0.01]})
+    return out
+
+
+def compile_areas(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[list[dict], list[dict], list[list[float]]]:
+    green: list[dict] = []
+    sand: list[dict] = []
     rail: list[list[float]] = []
+    seen_relation_ways: set[str] = set()
 
-    def polys_for(tags: dict[str, str]) -> list[list[float]] | None:
+    def polys_for(tags: dict[str, str]) -> list[dict] | None:
         keys = {(k, v) for k, v in tags.items()}
         if keys & GREEN_TAGS:
             return green
@@ -281,10 +356,16 @@ def compile_areas(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[list[
         target = polys_for(tags) if tags.get("type") == "multipolygon" else None
         if target is None:
             continue
-        for poly in relation_polygons(osm, members, frame):
+        polygons = relation_polygons(osm, members, frame)
+        if polygons:
+            seen_relation_ways.update(ref for kind, ref, _ in members if kind == "way")
+        for poly in polygons:
             if poly.intersects(clip) and poly.area > 40:
-                target.append(polygon_rings(poly)[0])
-    for refs, tags in osm.ways.values():
+                ring, holes = polygon_rings(poly)
+                target.append({"ring": ring, "holes": holes})
+    for wid, (refs, tags) in osm.ways.items():
+        if wid in seen_relation_ways:
+            continue
         if tags.get("railway") in RAIL_VALUES and tags.get("tunnel") != "yes" and tags.get("service") not in ("yard", "siding", "spur"):
             pts = way_coords(osm, refs, frame)
             if len(pts) >= 2 and LineString(pts).intersects(clip):
@@ -301,7 +382,8 @@ def compile_areas(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[list[
             poly = poly.buffer(0)
         for p in iter_polys(poly):
             if p.intersects(clip) and p.area > 40:
-                target.append(polygon_rings(p)[0])
+                ring, holes = polygon_rings(p)
+                target.append({"ring": ring, "holes": holes})
     return green, sand, rail
 
 
@@ -435,6 +517,59 @@ def compile_network(net: sumolib.net.Net, frame: WorldFrame) -> tuple[list[dict]
     return roads, junctions, probes
 
 
+def compile_surfaces(plate: Polygon, roads: list[dict], junctions: list[dict], green: list[dict],
+                     sand: list[dict], rail: list[list[float]], water: list[dict]) -> dict[str, list[dict]]:
+    def points(ring):
+        return list(zip(ring[::2], ring[1::2], strict=True))
+
+    def polygon(area):
+        return Polygon(points(area["ring"]), [points(h) for h in area.get("holes", [])]).buffer(0)
+
+    def ribbon(shape, width):
+        return LineString(points(shape)).buffer(width / 2, cap_style=2, join_style=2, mitre_limit=2)
+
+    raw: dict[str, list] = {k: [] for k in ("asphalt", "pavement", "rail", "sand", "grass")}
+    for road in roads:
+        if road["kind"] == "path" or not road.get("lanes"):
+            raw["pavement"].append(ribbon(road["shape"], max(1.6, min(road["w"], 4))))
+        else:
+            for lane in road["lanes"]:
+                kind = "pavement" if lane["allow"] == ["ped"] else "asphalt"
+                raw[kind].append(ribbon(lane["shape"], lane["w"]))
+    for junction in junctions:
+        raw["asphalt" if junction["kind"] == "road" else "pavement"].append(polygon(junction))
+    raw["rail"] = [ribbon(line, 1.6) for line in rail if len(line) >= 4]
+    raw["grass"] = [polygon(a) for a in green]
+    raw["sand"] = [polygon(a) for a in sand]
+    land = plate.difference(unary_union([polygon(a) for a in water]))
+    occupied = Polygon()
+    out: dict[str, list[dict]] = {}
+    x0, z0, x1, z1 = plate.bounds
+    tiles = [box(x, z, min(x + 800, x1), min(z + 800, z1))
+             for x in range(int(x0 // 800) * 800, int(x1) + 1, 800)
+             for z in range(int(z0 // 800) * 800, int(z1) + 1, 800)]
+
+    def emit(kind, surface):
+        out[kind] = []
+        for tile in tiles:
+            if not surface.intersects(tile):
+                continue
+            for poly in iter_polys(surface.intersection(tile)):
+                if poly.area < 0.01:
+                    continue
+                out[kind].append(polygon_record(poly))
+
+    for kind, pieces in raw.items():
+        surface = unary_union(pieces).intersection(plate)
+        if kind in ("grass", "sand"):
+            surface = surface.intersection(land)
+        surface = surface.difference(occupied)
+        emit(kind, surface)
+        occupied = unary_union([occupied, surface])
+    emit("ground", land.difference(occupied))
+    return out
+
+
 def compile_world(pack_id: str, out_path: Path | None = None) -> Path:
     pack_dir = PACK_ROOT / pack_id
     pack = json.loads((pack_dir / "pack.json").read_text())
@@ -453,6 +588,11 @@ def compile_world(pack_id: str, out_path: Path | None = None) -> Path:
         probes.append(Point(sum(r[0::2]) / (len(r) // 2), sum(r[1::2]) / (len(r) // 2)))
     green, sand, rail = compile_areas(osm, frame, clip)
     water = compile_water(PACK_ROOT.parent / "osm" / f"{pack_id}_water" / "lake.json", osm, frame, clip, probes)
+
+    x0, z0, x1, z1 = bw
+    pad_x, pad_z = (x1 - x0) * 0.3, (z1 - z0) * 0.3
+    surfaces = compile_surfaces(box(x0 - pad_x, z0 - pad_z, x1 + pad_x, z1 + pad_z),
+                                roads, junctions, green, sand, rail, water)
 
     stops = []
     for s in pack["stops"]:
@@ -497,8 +637,9 @@ def compile_world(pack_id: str, out_path: Path | None = None) -> Path:
         "junctions": junctions,
         "buildings": buildings,
         "landmarks": landmarks,
-        "green": green,
-        "sand": sand,
+        "green": [a["ring"] for a in green],
+        "sand": [a["ring"] for a in sand],
+        "surfaces": surfaces,
         "rail": rail,
         "water": water,
         "counts": {"roads": len(roads), "junctions": len(junctions), "buildings": len(buildings), "water": len(water), "green": len(green), "rail": len(rail)},

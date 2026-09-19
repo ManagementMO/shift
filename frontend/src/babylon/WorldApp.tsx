@@ -76,7 +76,7 @@ export default function WorldApp() {
 
       <div className="bworld-top">
         <div className="bworld-brand">
-          <b>CITY//SHIFT</b>
+          <b>Concrete Consequences</b>
           <span className="small dim">world · {packId}</span>
         </div>
         {world && (

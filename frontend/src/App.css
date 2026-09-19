@@ -1,26 +1,29 @@
 :root {
-  color-scheme: light;
-  --ink: #16202c;
-  --ink-2: #3b4a5c;
-  --dim: #6b7a8c;
-  --glass: rgba(250, 251, 253, 0.74);
-  --glass-strong: rgba(250, 251, 253, 0.9);
-  --glass-line: rgba(255, 255, 255, 0.75);
-  --glass-shadow: 0 12px 34px rgba(18, 30, 48, 0.16), 0 1px 0 rgba(255, 255, 255, 0.7) inset;
-  --accent: #0c7d8a;
-  --accent-soft: rgba(12, 125, 138, 0.14);
-  --closure: #e2493b;
-  --hazard: #7a4fd6;
-  --ok: #1f9d55;
-  --warn: #c27c0e;
-  --bad: #c73a2e;
-  --walking: #2a9d8f;
-  --waiting: #e9a23b;
-  --riding: #3b6fe2;
-  --arrived: #7f8c9a;
-  --bus: #f2c14e;
-  --r: 16px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  color-scheme: dark;
+  --ink: #eeede9;
+  --ink-2: #b9b9b5;
+  --dim: #898985;
+  --glass: rgba(12, 12, 12, 0.96);
+  --glass-strong: rgba(16, 16, 16, 0.99);
+  --glass-line: rgba(255, 255, 255, 0.14);
+  --glass-shadow: none;
+  --surface: #181818;
+  --surface-raised: #292929;
+  --accent: #e7e7e1;
+  --on-accent: #111;
+  --accent-soft: rgba(255, 255, 255, 0.09);
+  --closure: #f07869;
+  --hazard: #b699ec;
+  --ok: #7ad7a4;
+  --warn: #ebbd71;
+  --bad: #ff998d;
+  --walking: #72cabb;
+  --waiting: #ebbd71;
+  --riding: #89b0ff;
+  --arrived: #a9b6c0;
+  --bus: #eed187;
+  --r: 3px;
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
 }
@@ -32,7 +35,7 @@ body,
 #root {
   margin: 0;
   height: 100%;
-  background: #cfd8de;
+  background: #090909;
   color: var(--ink);
   overflow: hidden;
 }
@@ -128,8 +131,8 @@ button:disabled {
 
 .glass {
   background: var(--glass);
-  backdrop-filter: blur(22px) saturate(1.25);
-  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border: 1px solid var(--glass-line);
   box-shadow: var(--glass-shadow);
   border-radius: var(--r);
@@ -138,32 +141,32 @@ button:disabled {
 /* ---------- top strip ---------- */
 .strip {
   position: absolute;
-  top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 0;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
   gap: 14px;
-  height: 44px;
-  padding: 0 8px 0 16px;
+  height: 56px;
+  padding: 0 16px;
   background: var(--glass);
-  backdrop-filter: blur(22px) saturate(1.25);
-  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border: 1px solid var(--glass-line);
   box-shadow: var(--glass-shadow);
-  border-radius: 999px;
+  border-radius: 0;
   z-index: 20;
   white-space: nowrap;
 }
 .brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
 }
 .wordmark {
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.045em;
+  font-size: 18px;
 }
 .wordmark .slash {
   color: var(--accent);
@@ -172,21 +175,25 @@ button:disabled {
   color: var(--ink-2);
   font-weight: 500;
   padding-left: 10px;
-  border-left: 1px solid rgba(22, 32, 44, 0.16);
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
 }
 .scenario-name {
   color: var(--ink);
   font-weight: 500;
-  max-width: 46vw;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   padding: 6px 10px;
-  border-radius: 999px;
+  border-radius: var(--r);
 }
 .scenario-name:hover {
-  background: rgba(22, 32, 44, 0.06);
+  background: rgba(255, 255, 255, 0.06);
 }
 .scenario-name .chev {
+  display: inline-flex;
+  vertical-align: middle;
   color: var(--dim);
   margin-left: 6px;
   font-size: 10px;
@@ -218,21 +225,21 @@ button:disabled {
 @keyframes pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(12, 125, 138, 0.35);
+    box-shadow: 0 0 0 0 rgba(240, 240, 235, 0.35);
   }
   50% {
-    box-shadow: 0 0 0 6px rgba(12, 125, 138, 0);
+    box-shadow: 0 0 0 6px rgba(240, 240, 235, 0);
   }
 }
 .strip-actions {
   display: flex;
   gap: 4px;
   padding-left: 6px;
-  border-left: 1px solid rgba(22, 32, 44, 0.12);
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
 }
 .ghostbtn {
   padding: 6px 11px;
-  border-radius: 999px;
+  border-radius: var(--r);
   color: var(--ink-2);
   font-weight: 500;
   font-size: 12px;
@@ -240,7 +247,7 @@ button:disabled {
   transition: background 0.15s, color 0.15s;
 }
 .ghostbtn:hover:not(:disabled) {
-  background: rgba(22, 32, 44, 0.06);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--ink);
 }
 .ghostbtn.on {
@@ -276,8 +283,8 @@ button:disabled {
   gap: 2px;
   padding: 6px;
   background: var(--glass);
-  backdrop-filter: blur(22px) saturate(1.25);
-  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border: 1px solid var(--glass-line);
   box-shadow: var(--glass-shadow);
   border-radius: 18px;
@@ -298,19 +305,19 @@ button:disabled {
   line-height: 1;
 }
 .railbtn:hover {
-  background: rgba(22, 32, 44, 0.07);
+  background: rgba(255, 255, 255, 0.07);
 }
 .railbtn.on {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .railbtn .tip {
   position: absolute;
   left: 48px;
   top: 50%;
   transform: translateY(-50%);
-  background: var(--ink);
-  color: #fff;
+  background: var(--accent);
+  color: var(--on-accent);
   font-size: 11px;
   padding: 3px 8px;
   border-radius: 6px;
@@ -333,8 +340,8 @@ button:disabled {
   overflow: auto;
   padding: 14px 16px 16px;
   background: var(--glass-strong);
-  backdrop-filter: blur(24px) saturate(1.3);
-  -webkit-backdrop-filter: blur(24px) saturate(1.3);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border: 1px solid var(--glass-line);
   box-shadow: var(--glass-shadow);
   border-radius: var(--r);
@@ -368,7 +375,7 @@ button:disabled {
 }
 .seg {
   display: inline-flex;
-  background: rgba(22, 32, 44, 0.07);
+  background: rgba(255, 255, 255, 0.07);
   border-radius: 10px;
   padding: 3px;
   gap: 2px;
@@ -381,7 +388,7 @@ button:disabled {
   color: var(--ink-2);
 }
 .seg button.on {
-  background: #fff;
+  background: var(--surface-raised);
   color: var(--ink);
   box-shadow: 0 1px 4px rgba(18, 30, 48, 0.14);
 }
@@ -402,7 +409,7 @@ button:disabled {
   color: var(--ink);
 }
 .listitem:hover {
-  background: rgba(22, 32, 44, 0.06);
+  background: rgba(255, 255, 255, 0.06);
 }
 .listitem.on {
   background: var(--accent-soft);
@@ -426,8 +433,8 @@ button:disabled {
   display: block;
 }
 button.primary {
-  background: var(--ink);
-  color: #fff;
+  background: var(--accent);
+  color: var(--on-accent);
   padding: 9px 14px;
   border-radius: 12px;
   font-weight: 600;
@@ -435,7 +442,7 @@ button.primary {
   transition: transform 0.1s, background 0.15s;
 }
 button.primary:hover:not(:disabled) {
-  background: #22303f;
+  background: #fff;
 }
 button.primary:active:not(:disabled) {
   transform: translateY(1px);
@@ -444,8 +451,8 @@ input[type='text'],
 input:not([type]),
 select,
 textarea {
-  background: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(22, 32, 44, 0.14);
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 10px;
   padding: 7px 10px;
   width: 100%;
@@ -474,7 +481,7 @@ input[type='checkbox'] {
   color: var(--ink-2);
 }
 .iconbtn:hover:not(:disabled) {
-  background: rgba(22, 32, 44, 0.07);
+  background: rgba(255, 255, 255, 0.07);
 }
 .iconbtn.small {
   width: 26px;
@@ -486,9 +493,9 @@ input[type='checkbox'] {
 .proposal {
   border-radius: 14px;
   padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.86);
-  border: 1px solid rgba(12, 125, 138, 0.35);
-  box-shadow: 0 6px 20px rgba(12, 125, 138, 0.12);
+  background: var(--surface);
+  border: 1px solid rgba(240, 240, 235, 0.35);
+  box-shadow: 0 6px 20px rgba(240, 240, 235, 0.12);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -524,8 +531,8 @@ input[type='checkbox'] {
   gap: 2px;
   padding: 6px;
   background: var(--glass);
-  backdrop-filter: blur(22px) saturate(1.25);
-  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border: 1px solid var(--glass-line);
   box-shadow: var(--glass-shadow);
   border-radius: 14px;
@@ -540,16 +547,16 @@ input[type='checkbox'] {
   text-align: left;
 }
 .cams button:hover {
-  background: rgba(22, 32, 44, 0.07);
+  background: rgba(255, 255, 255, 0.07);
 }
 .cams button.on {
-  background: var(--ink);
-  color: #fff;
+  background: var(--accent);
+  color: var(--on-accent);
 }
 .cams button.hero {
   margin-top: 4px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 /* ---------- drawers (scenario left, lens right) ---------- */
@@ -560,8 +567,8 @@ input[type='checkbox'] {
   width: 380px;
   padding: 14px 16px;
   background: var(--glass-strong);
-  backdrop-filter: blur(24px) saturate(1.3);
-  -webkit-backdrop-filter: blur(24px) saturate(1.3);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border: 1px solid var(--glass-line);
   box-shadow: var(--glass-shadow);
   border-radius: var(--r);
@@ -587,19 +594,19 @@ input[type='checkbox'] {
   top: 0;
   padding: 10px 10px 8px 12px;
   background: var(--glass-strong);
-  border-bottom: 1px solid rgba(22, 32, 44, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   justify-content: flex-start;
   z-index: 1;
 }
 .tabs button {
   padding: 6px 11px;
-  border-radius: 999px;
+  border-radius: var(--r);
   font-weight: 500;
   color: var(--ink-2);
 }
 .tabs button.on {
-  background: var(--ink);
-  color: #fff;
+  background: var(--accent);
+  color: var(--on-accent);
 }
 .tabs .iconbtn {
   margin-left: auto;
@@ -632,8 +639,8 @@ input[type='checkbox'] {
 .bar .track,
 .fleetcard .track {
   height: 8px;
-  border-radius: 999px;
-  background: rgba(22, 32, 44, 0.08);
+  border-radius: var(--r);
+  background: rgba(255, 255, 255, 0.08);
   overflow: hidden;
   display: block;
 }
@@ -641,7 +648,7 @@ input[type='checkbox'] {
 .fleetcard .track i {
   display: block;
   height: 100%;
-  border-radius: 999px;
+  border-radius: var(--r);
   background: var(--riding);
   transition: width 0.2s;
 }
@@ -675,8 +682,8 @@ input[type='checkbox'] {
   text-align: left;
   padding: 10px 12px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid rgba(22, 32, 44, 0.1);
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -692,17 +699,17 @@ input[type='checkbox'] {
   padding: 2px 7px;
   font-size: 11px;
   border-radius: 6px;
-  background: rgba(22, 32, 44, 0.06);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--ink-2);
 }
 .tiny:hover {
-  background: rgba(22, 32, 44, 0.12);
+  background: rgba(255, 255, 255, 0.12);
 }
 .plan {
-  border: 1px solid rgba(22, 32, 44, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
   padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.66);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -717,10 +724,10 @@ input[type='checkbox'] {
 }
 .pill {
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--r);
   font-size: 11px;
   font-weight: 500;
-  background: rgba(22, 32, 44, 0.08);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--ink-2);
   white-space: nowrap;
 }
@@ -742,7 +749,7 @@ input[type='checkbox'] {
 }
 .pill.waiting {
   background: rgba(233, 162, 59, 0.18);
-  color: #9a5f08;
+  color: var(--waiting);
 }
 .pill.riding,
 .pill.driving {
@@ -755,14 +762,14 @@ input[type='checkbox'] {
 }
 .pill.unroutable,
 .pill.not_departed {
-  background: rgba(22, 32, 44, 0.08);
+  background: rgba(255, 255, 255, 0.08);
 }
 .pill.bus {
   background: rgba(242, 193, 78, 0.3);
-  color: #7a5a00;
+  color: var(--bus);
 }
 .pill.car {
-  background: rgba(22, 32, 44, 0.08);
+  background: rgba(255, 255, 255, 0.08);
 }
 .inspector h2,
 .compare h2 {
@@ -775,7 +782,7 @@ input[type='checkbox'] {
 .spark {
   display: block;
   margin: 4px 0;
-  background: rgba(22, 32, 44, 0.05);
+  background: rgba(255, 255, 255, 0.05);
   border-radius: 6px;
 }
 .spark polyline {
@@ -786,7 +793,7 @@ input[type='checkbox'] {
 }
 .duty {
   padding: 3px 0;
-  border-bottom: 1px dashed rgba(22, 32, 44, 0.12);
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.12);
 }
 .duty.now {
   color: var(--accent);
@@ -806,7 +813,7 @@ table {
 td,
 th {
   padding: 4px 4px;
-  border-bottom: 1px solid rgba(22, 32, 44, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   text-align: left;
 }
 th {
@@ -827,12 +834,12 @@ details summary {
 .decisions {
   border-radius: 12px;
   padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.66);
-  border: 1px solid rgba(22, 32, 44, 0.1);
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 .decision {
   padding: 4px 0;
-  border-bottom: 1px dashed rgba(22, 32, 44, 0.12);
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.12);
 }
 .decision .role {
   font-weight: 600;
@@ -841,7 +848,7 @@ details summary {
 .inspector button:not(.tiny) {
   padding: 5px 10px;
   border-radius: 8px;
-  background: rgba(22, 32, 44, 0.06);
+  background: rgba(255, 255, 255, 0.06);
   margin-top: 6px;
 }
 
@@ -853,8 +860,8 @@ details summary {
   width: 260px;
   padding: 12px 14px;
   background: var(--glass-strong);
-  backdrop-filter: blur(24px) saturate(1.3);
-  -webkit-backdrop-filter: blur(24px) saturate(1.3);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border: 1px solid var(--glass-line);
   box-shadow: var(--glass-shadow);
   border-radius: 14px;
@@ -921,22 +928,32 @@ details summary {
   height: 44px;
   padding: 0 6px 0 14px;
   background: var(--glass);
-  backdrop-filter: blur(22px) saturate(1.25);
-  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border: 1px solid var(--glass-line);
   box-shadow: var(--glass-shadow);
-  border-radius: 999px;
+  border-radius: var(--r);
   transition: box-shadow 0.15s;
 }
 .command.focused form {
-  box-shadow: var(--glass-shadow), 0 0 0 3px rgba(12, 125, 138, 0.25);
+  border-color: var(--accent);
 }
 .command .prompt-glyph {
-  color: var(--accent);
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  color: var(--dim);
+}
+.command-spinner {
+  width: 14px;
+  height: 14px;
+  border: 1px solid #555;
+  border-top-color: #eee;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 .command input {
   flex: 1;
+  min-width: 0;
   background: none;
   border: 0;
   padding: 0;
@@ -948,9 +965,9 @@ details summary {
 }
 .command form button {
   padding: 7px 14px;
-  border-radius: 999px;
-  background: var(--ink);
-  color: #fff;
+  border-radius: var(--r);
+  background: var(--accent);
+  color: var(--on-accent);
   font-weight: 600;
   font-size: 12px;
 }
@@ -966,7 +983,7 @@ details summary {
 }
 .suggestions button {
   padding: 6px 11px;
-  border-radius: 999px;
+  border-radius: var(--r);
   background: var(--glass-strong);
   border: 1px solid var(--glass-line);
   box-shadow: 0 4px 14px rgba(18, 30, 48, 0.12);
@@ -991,8 +1008,8 @@ details summary {
   gap: 18px;
   padding: 10px 16px 8px 12px;
   background: var(--glass);
-  backdrop-filter: blur(22px) saturate(1.25);
-  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   border: 1px solid var(--glass-line);
   box-shadow: var(--glass-shadow);
   border-radius: 20px;
@@ -1006,29 +1023,29 @@ details summary {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: var(--ink);
-  color: #fff;
+  background: var(--accent);
+  color: var(--on-accent);
   font-size: 14px;
 }
 .iconbtn.play:hover:not(:disabled) {
-  background: #22303f;
+  background: #fff;
 }
 .speeds {
   display: inline-flex;
-  background: rgba(22, 32, 44, 0.07);
-  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: var(--r);
   padding: 3px;
 }
 .speeds button {
   padding: 4px 9px;
-  border-radius: 999px;
+  border-radius: var(--r);
   font-size: 11.5px;
   font-weight: 600;
   color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
 .speeds button.on {
-  background: #fff;
+  background: var(--surface-raised);
   color: var(--ink);
   box-shadow: 0 1px 4px rgba(18, 30, 48, 0.14);
 }
@@ -1064,8 +1081,8 @@ details summary {
 }
 .dock-timeline input[type='range']::-webkit-slider-runnable-track {
   height: 6px;
-  border-radius: 999px;
-  background: rgba(22, 32, 44, 0.12);
+  border-radius: var(--r);
+  background: rgba(255, 255, 255, 0.12);
 }
 .dock-timeline input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -1073,7 +1090,7 @@ details summary {
   height: 18px;
   margin-top: -6px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--surface-raised);
   border: 2px solid var(--ink);
   box-shadow: 0 2px 8px rgba(18, 30, 48, 0.3);
   cursor: grab;
@@ -1095,7 +1112,7 @@ details summary {
   position: absolute;
   top: 0;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--r);
   opacity: 0.55;
 }
 .band.closure {
@@ -1149,7 +1166,7 @@ details summary {
   font-weight: 600;
   margin-left: 4px;
   padding: 1px 5px;
-  border-radius: 999px;
+  border-radius: var(--r);
   background: rgba(20, 24, 32, 0.07);
   color: var(--dim);
   vertical-align: 2px;
@@ -1225,7 +1242,7 @@ details summary {
   width: 30px;
   height: 30px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--surface-raised);
   color: var(--ink);
   display: grid;
   place-items: center;
@@ -1242,7 +1259,7 @@ details summary {
   background: var(--glass-strong);
   border: 1px solid var(--glass-line);
   box-shadow: var(--glass-shadow);
-  border-radius: 999px;
+  border-radius: var(--r);
   z-index: 16;
   font-size: 12.5px;
 }
@@ -1262,7 +1279,7 @@ details summary {
 .split-label select {
   width: auto;
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: var(--r);
 }
 
 /* ---------- overlays ---------- */
@@ -1274,7 +1291,7 @@ details summary {
   background: var(--glass-strong);
   border: 1px solid var(--glass-line);
   box-shadow: var(--glass-shadow);
-  border-radius: 999px;
+  border-radius: var(--r);
   padding: 8px 16px;
   z-index: 19;
 }
@@ -1324,7 +1341,7 @@ details summary {
   bottom: 150px;
   transform: translateX(-50%);
   max-width: 640px;
-  background: #fbe9e7;
+  background: #352328;
   color: var(--bad);
   border: 1px solid rgba(199, 58, 46, 0.35);
   border-radius: 12px;
@@ -1332,4 +1349,99 @@ details summary {
   cursor: pointer;
   z-index: 50;
   font-size: 12px;
+}
+
+:where(button, input, select, textarea, summary, a):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.clock, .metric .val, .display-mode {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+.rail, .cams, .dock, .command form, .railbtn, .cams button, .ghostbtn, .seg, .seg button, .plan, .proposal, .fleetcard, .listitem, .bubble, button.primary, input, select, textarea, .iconbtn:not(.play) {
+  border-radius: var(--r);
+}
+.railbtn:focus-visible .tip {
+  opacity: 1;
+}
+.display-panel {
+  position: absolute;
+  top: 72px;
+  right: 14px;
+  width: 224px;
+  z-index: 19;
+  padding: 12px 14px;
+}
+.display-panel summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  list-style: none;
+}
+.display-panel summary::-webkit-details-marker {
+  display: none;
+}
+.display-mode {
+  color: var(--accent);
+  font-size: 10px;
+}
+.display-options {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--glass-line);
+}
+.display-options label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  color: var(--ink-2);
+}
+.display-options input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+@media (max-width: 1100px) {
+  .strip .status { display: none; }
+  .bottom { width: calc(100vw - 160px); }
+  .dock { grid-template-columns: auto 1fr; gap: 12px; }
+  .dock-metrics { grid-column: 1 / -1; justify-content: space-between; }
+  .drawer { bottom: 205px; }
+}
+@media (max-width: 700px) {
+  .strip { gap: 4px; padding: 8px 10px; height: auto; flex-wrap: wrap; }
+  .brand .city { display: none; }
+  .strip .scenario-name { order: 3; flex-basis: 100%; }
+  .strip-actions { margin-left: auto; border: 0; }
+  .ghostbtn { padding: 6px 7px; font-size: 11px; }
+  .wordmark { font-size: 13px; letter-spacing: -0.04em; }
+  .bottom { width: calc(100vw - 28px); bottom: 10px; }
+  .dock { padding: 10px; grid-template-columns: 1fr; gap: 6px; }
+  .dock-controls { justify-content: space-between; }
+  .dock-timeline { width: 100%; min-width: 0; padding: 4px 0 14px; }
+  .dock-timeline .bands { top: 12px; }
+  .metric { min-width: 0; padding-left: 6px; }
+  .metric .lbl { font-size: 9px; }
+  .rail { left: 10px; padding: 3px; }
+  .railbtn { width: 32px; height: 32px; }
+  .cams { right: 10px; padding: 3px; }
+  .cams button { padding: 6px; }
+  .display-panel { width: 180px; top: 128px; }
+  .drawer { top: 128px; }
+  .hint { top: 128px; width: calc(100vw - 32px); border-radius: var(--r); }
+  .drawer, .toolpanel { left: 56px; right: 56px; width: auto; }
+  .toolpanel { max-height: calc(100vh - 270px); }
+  .bubble.docked { right: 56px; bottom: 200px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }

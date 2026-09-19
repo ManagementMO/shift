@@ -8,7 +8,7 @@ import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import '@babylonjs/core/Meshes/thinInstanceMesh'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
-import type { CascadedShadowGenerator } from '@babylonjs/core/Lights/Shadows/cascadedShadowGenerator'
+import type { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator'
 import type { Scene } from '@babylonjs/core/scene'
 
 import { personStateAt, STATE_COLORS, type PersonState, type ReplayIndex, type TrackIndex } from '../replay'
@@ -90,14 +90,14 @@ class InstanceSet {
     name: string,
     build: (b: Batch) => void,
     trim: ((b: Batch) => void) | null,
-    shadows: CascadedShadowGenerator | null,
+    shadows: ShadowGenerator | null,
   ) {
     this.scene = scene
     this.parts.push({ mesh: this.make(`${name}-body`, build, true, shadows), perInstanceColor: true })
     if (trim) this.parts.push({ mesh: this.make(`${name}-trim`, trim, false, null), perInstanceColor: false })
   }
 
-  private make(name: string, build: (b: Batch) => void, perInstanceColor: boolean, shadows: CascadedShadowGenerator | null): Mesh {
+  private make(name: string, build: (b: Batch) => void, perInstanceColor: boolean, shadows: ShadowGenerator | null): Mesh {
     const b = new Batch()
     build(b)
     const mesh = new Mesh(name, this.scene)
@@ -228,7 +228,10 @@ export class Traffic {
   selectedId: string | null = null
   dimOthers = false
 
-  constructor(scene: Scene, frame: WorldFrame, shadows: CascadedShadowGenerator | null) {
+  private readonly pathY: number
+
+  constructor(scene: Scene, frame: WorldFrame, shadows: ShadowGenerator | null, pathY = Y.path) {
+    this.pathY = pathY
     this.scene = scene
     this.frame = frame
     this.sets = {
@@ -343,7 +346,7 @@ export class Traffic {
           continue
         }
         color = stateColor(state)
-        y = Y.path
+        y = this.pathY
       }
       const [x, z] = this.frame.lonLatToWorld(r.lon, r.lat)
       if (e.kind === 'person') {

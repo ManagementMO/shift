@@ -55,15 +55,18 @@ export class Overlay {
     this.mesh = null
     if (!closed.length && !ghost.length && !focus.length && !m.ghostStops.length) return
     const b = new Batch()
-    const edges = (ids: string[], c: RGB, extra: number): void => {
+    const drawn = new Set<string>()
+    const edges = (ids: string[], c: RGB, extra: number, lift: number): void => {
       for (const id of ids) {
+        if (drawn.has(id)) continue
+        drawn.add(id)
         const r = this.roads.byId.get(id)
-        if (r) b.ribbon(r.shape, r.w + extra, Y_MARK, c)
+        if (r) b.ribbon(r.shape, r.w + extra, Y_MARK + lift, c)
       }
     }
-    edges(focus, MARK.focus, 1.5)
-    edges(ghost, MARK.ghost, 2.5)
-    edges(closed, MARK.closed, 2.5)
+    edges(focus, MARK.focus, 1.5, 0.08)
+    edges(ghost, MARK.ghost, 2.5, 0.04)
+    edges(closed, MARK.closed, 2.5, 0)
     for (const s of m.ghostStops) {
       const [x, z] = this.frame.lonLatToWorld(s.lon, s.lat)
       b.disc(x, z, 5, Y.stop + 0.05, MARK.ghostStop, 16)

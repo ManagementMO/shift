@@ -18,7 +18,7 @@ from cityshift.domain.network import pack_dir
 from cityshift.domain.runs import RUN_ROOT
 from cityshift.transport.sumo_env import sumo_version
 
-app = FastAPI(title="CITY//SHIFT", version="0.1.0")
+app = FastAPI(title="Concrete Consequences", version="0.1.0")
 app.add_middleware(GZipMiddleware, minimum_size=2048)
 app.add_middleware(
     CORSMiddleware,

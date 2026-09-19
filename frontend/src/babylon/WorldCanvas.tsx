@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { WorldScene } from './scene'
+import { useDisplay } from './display'
 import { loadWorld, type WorldData } from './worldData'
 
 export interface WorldCanvasProps {
   packId: string
   onReady?: (scene: WorldScene) => void
+  onError?: (message: string) => void
   className?: string
 }
 
@@ -13,7 +15,7 @@ export interface WorldCanvasProps {
  * Mounts one Babylon engine on one canvas.  React owns nothing inside the scene; it only reports lifecycle
  * (loading / ready / error) and hands the imperative `WorldScene` to the parent through `onReady`.
  */
-export default function WorldCanvas({ packId, onReady, className }: WorldCanvasProps) {
+export default function WorldCanvas({ packId, onReady, onError, className }: WorldCanvasProps) {
   const ref = useRef<HTMLCanvasElement>(null)
   const [state, setState] = useState<{ phase: 'loading' | 'building' | 'ready' | 'error'; detail?: string }>({ phase: 'loading' })
 
@@ -32,15 +34,24 @@ export default function WorldCanvas({ packId, onReady, className }: WorldCanvasP
           if (cancelled) return
           try {
             ws = new WorldScene(canvas, world)
+            ws.setDisplay(useDisplay.getState())
+            const offDisplay = useDisplay.subscribe((settings) => ws?.setDisplay(settings))
+            ws.scene.onDisposeObservable.addOnce(offDisplay)
             setState({ phase: 'ready' })
             onReady?.(ws)
           } catch (e) {
-            setState({ phase: 'error', detail: e instanceof Error ? e.message : String(e) })
+            const detail = e instanceof Error ? e.message : String(e)
+            setState({ phase: 'error', detail })
+            onError?.(detail)
           }
         })
       })
       .catch((e: unknown) => {
-        if (!cancelled) setState({ phase: 'error', detail: e instanceof Error ? e.message : String(e) })
+        if (!cancelled) {
+          const detail = e instanceof Error ? e.message : String(e)
+          setState({ phase: 'error', detail })
+          onError?.(detail)
+        }
       })
     return () => {
       cancelled = true

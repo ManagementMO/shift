@@ -1,0 +1,68 @@
+.orbital {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 68px minmax(0, 1fr) 34px;
+  background: #060606;
+  color: #efefeb;
+  font: 13px 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+.orbital * { box-sizing: border-box; }
+.orbital button, .orbital a { -webkit-tap-highlight-color: transparent; }
+.orbital button:focus-visible, .orbital a:focus-visible { outline: 1px solid #eee; outline-offset: 3px; }
+.orbital button:disabled { opacity: 0.4; cursor: wait; }
+.orbital-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 30px; border-bottom: 1px solid #202020; z-index: 3; }
+.orbital-brand { display: inline-flex; align-items: center; gap: 12px; color: #efefeb; text-decoration: none; font-size: 18px; font-weight: 500; letter-spacing: -0.045em; white-space: nowrap; }
+.orbital-brand svg { flex-shrink: 0; }
+.orbital-stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; isolation: isolate; }
+.orbital-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; cursor: grab; }
+.orbital-stage canvas:active { cursor: grabbing; }
+.orbital-stage canvas:focus-visible { outline: 1px solid #444; outline-offset: -6px; }
+.orbital-pin-layer { position: absolute; inset: 0; pointer-events: none; }
+.orbital-pin { position: absolute; top: 0; left: 0; width: 28px; height: 28px; margin: -14px; pointer-events: auto; visibility: hidden; text-align: left; color: #ddd; z-index: 2; }
+.orbital-pin > i { position: absolute; top: 11px; left: 11px; width: 6px; height: 6px; background: #e0e0dd; border: 1px solid #151515; border-radius: 50%; }
+.orbital-pin.home > i { top: 10px; left: 10px; width: 8px; height: 8px; background: #fff; }
+.orbital-pin > span { position: absolute; top: 19px; left: 19px; padding: 4px 6px; background: rgba(6, 6, 6, 0.82); font-size: 11px; white-space: nowrap; }
+.orbital-pin.home > span { top: -20px; }
+.orbital-pin:hover > span, .orbital-pin:focus-visible > span { color: #fff; background: #171717; }
+.orbital-stage-bottom { position: absolute; bottom: 23px; left: 20px; right: 20px; display: flex; justify-content: center; gap: 16px; color: #70706c; font-size: 11px; pointer-events: none; }
+.orbital-stage-bottom > span:last-child { color: #444; }
+.orbital-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 0 30px; border-top: 1px solid #1c1c1c; color: #595956; font-size: 9px; z-index: 3; }
+.orbital-footer > span:last-child { display: flex; align-items: center; gap: 10px; }
+.orbital-footer i { width: 2px; height: 2px; background: #555; border-radius: 50%; }
+.orbital-footer a { color: inherit; text-decoration: none; }
+.orbital-footer a:hover { color: #ccc; }
+.orbital-flight-status { position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%); width: min(380px, calc(100vw - 36px)); z-index: 8; padding: 18px 20px; background: #101010; border: 1px solid #393939; border-radius: 4px; }
+.orbital-flight-status > div { display: flex; justify-content: space-between; align-items: center; gap: 16px; color: #eee; font-size: 13px; }
+.orbital-flight-status button { color: #888; font-size: 11px; }
+.orbital-flight-status button:hover { color: #eee; }
+.orbital-flight-status small { display: block; margin-top: 10px; color: #868680; font-size: 11px; line-height: 1.5; }
+.orbital-flight-status progress { display: block; width: 100%; height: 2px; margin-top: 18px; border: 0; accent-color: #eee; background: #333; }
+.orbital-flight-status progress::-webkit-progress-bar { background: #333; }
+.orbital-flight-status progress::-webkit-progress-value { background: #e7e7e3; }
+.orbital-flight-status progress::-moz-progress-bar { background: #e7e7e3; }
+.orbital-haze { position: absolute; inset: 0; background: #d3d3d0; opacity: var(--entry-haze, 0); pointer-events: none; z-index: 4; }
+.orbital[data-busy='true'] .orbital-stage canvas { pointer-events: none; }
+.orbital-render-error { position: absolute; top: 50%; left: 50%; width: min(320px, 90%); transform: translate(-50%, -50%); display: grid; gap: 12px; padding: 20px; background: #111; border: 1px solid #333; color: #aaa; text-align: center; font-size: 12px; line-height: 1.6; }
+.orbital-render-error a { color: #ddd; }
+.orbital-imagery-note { position: absolute; bottom: 48px; left: 28px; color: #aaa; font-size: 10px; }
+.city-experience { position: absolute; inset: 0; }
+.city-experience[aria-hidden='true'] { pointer-events: none; }
+.globe-return { display: inline-flex; align-items: center; gap: 7px; border-right: 1px solid var(--glass-line); border-radius: 0; padding-right: 15px; }
+.orbital-boot { position: fixed; inset: 0; z-index: 100; background: #060606; color: #eee; display: flex; gap: 24px; align-items: center; justify-content: center; font: 17px 'Helvetica Neue', sans-serif; letter-spacing: -0.03em; }
+.orbital-boot span { color: #777; font-size: 12px; letter-spacing: 0; }
+@media (max-width: 700px) {
+  .orbital { grid-template-rows: 60px minmax(0, 1fr) 30px; }
+  .orbital-header { padding: 0 18px; gap: 12px; }
+  .orbital-brand { font-size: 16px; gap: 9px; }
+  .orbital-brand svg { width: 21px; height: 21px; }
+  .orbital-header .settings-trigger > span { display: none; }
+  .orbital-stage-bottom { bottom: 16px; gap: 10px; font-size: 10px; }
+  .orbital-footer { padding: 0 18px; font-size: 8px; }
+  .orbital-footer > span:last-child { gap: 6px; }
+  .orbital-footer > span:last-child a:first-child, .orbital-footer i { display: none; }
+}

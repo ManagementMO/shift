@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { useStore } from './store'
 import type { Renderer } from './types'
+import type { WorldScene } from './babylon/scene'
 import TopStrip from './shell/TopStrip'
 import SimDock from './shell/SimDock'
 import ToolRail from './shell/ToolRail'
@@ -16,8 +17,7 @@ import './App.css'
 const WorldBabylon = lazy(() => import('./babylon/WorldBabylon'))
 const WorldMap = lazy(() => import('./world/WorldMap'))
 
-export default function App({ renderer = 'babylon' }: { renderer?: Renderer }) {
-  const World = renderer === 'mapbox' ? WorldMap : WorldBabylon
+export default function App({ renderer = 'babylon', active = true, onGlobe, onWorldReady, onWorldError }: { renderer?: Renderer; active?: boolean; onGlobe?: () => void; onWorldReady?: (scene: WorldScene) => void; onWorldError?: (message: string) => void }) {
   const boot = useStore((s) => s.boot)
   const error = useStore((s) => s.error)
   const setError = useStore((s) => s.setError)
@@ -56,24 +56,26 @@ export default function App({ renderer = 'babylon' }: { renderer?: Renderer }) {
         <Suspense fallback={null}>
           {compareMode ? (
             <CompareSplit renderer={renderer} />
+          ) : renderer === 'mapbox' ? (
+            <WorldMap runId={primaryRunId} side="solo" />
           ) : (
-            <World runId={primaryRunId} side="solo" />
+            <WorldBabylon runId={primaryRunId} side="solo" onWorldReady={onWorldReady} onWorldError={onWorldError} />
           )}
         </Suspense>
       </div>
 
-      <TopStrip onOpenScenarios={() => setDrawer((d) => !d)} />
+      <TopStrip onOpenScenarios={() => setDrawer((d) => !d)} onGlobe={onGlobe} active={active} renderer={renderer} />
       {drawer && <ScenarioDrawer onClose={() => setDrawer(false)} />}
 
       <ToolRail />
       <ToolPanel />
-      <CameraModes />
+      <CameraModes active={active} />
       <SwarmLens renderer={renderer} />
       <AgentBubble />
 
       <div className="bottom">
         <CommandBar />
-        <SimDock />
+        <SimDock active={active} />
       </div>
 
       {noRun && (
