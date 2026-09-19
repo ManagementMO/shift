@@ -9,7 +9,8 @@ or synthetic data), **fallback** (a sponsor path replaced by a local equivalent)
 
 ```sh
 # 1. services (both were left running; restart if the machine rebooted)
-ollama serve &                                             # local model provider, qwen2.5:7b
+# model provider: backend/.env holds the OpenRouter key (LLM_API_BASE/KEY/MODEL); without it, Ollama is the fallback:
+# ollama serve &                                           # local model provider, qwen2.5:7b
 ~/tools/elasticsearch-9.1.4/bin/elasticsearch -d           # local evidence index, :9200
 
 # 2. backend (:8000) — packs + store live under var/ and are rebuilt by the commands below
@@ -49,7 +50,7 @@ this from the scenario drawer / tool rail / command bar.
 |---|---|---|---|
 | 1 | Operator enters problem + constraint | tested | Swarm Lens › Agents form → `POST /api/scenarios/{sid}/investigate` |
 | 2 | City evidence retrieved and frozen (`EvidenceBundle`, content hash) | tested, **fallback** | local Elasticsearch 9.1.4, fixture corpus per pack; `inv-1cff0f46bb` bundle `eb-d025d133079f` |
-| 3 | Bounded agents propose plans (openJiuwen ReAct, real tools) | tested, **fallback**, partial | Ollama `qwen2.5:7b` via the OpenAI-compatible adapter (Baseten: set `LLM_API_BASE/KEY/MODEL`). Evidence/demand analysts complete; the planner's JSON step timed out on the 7B model in the Waterloo runs (`inv-cb6578e86d`). A Toronto investigation `inv-f391fb1837` was started at handoff time — check `GET /api/investigations/inv-f391fb1837`. Deterministic `direct`/`split`/`baseline` plans always exist. |
+| 3 | Bounded agents propose plans (openJiuwen ReAct, real tools) | tested | **OpenRouter** `openai/gpt-4o-mini` (key in gitignored `backend/.env`, `LLM_API_BASE=https://openrouter.ai/api/v1`): Toronto `inv-39e55d8705` completed end-to-end in ~90 s — evidence bundle `eb-cb7ea40f34d2`, 4 ranked zones, two agent plans (`agent-direct-5d8705`, `agent-split-5d8705`, both buses, both `VALID`), SUMO run `run-ec76c0406e99` from the direct one. Fallback without a key: Ollama `qwen2.5:7b` (analysts complete, planner's JSON step timed out on 7B: `inv-cb6578e86d`). Backboard adapter (`BACKBOARD_API_KEY`, thread API + `/llm/v1` shim for openJiuwen) is wired and unit-tested but the account's free credit does not cover chat (HTTP 402) — untested live. Deterministic `direct`/`split`/`baseline` plans always exist. |
 | 4 | Deterministic validators reject infeasible plans | tested | `tests/test_evidence_edits_agents.py` (validator cases); `POST /api/scenarios/{sid}/validate`; `run-2f499e256f50` is an `invalid` run kept as a record |
 | 5 | Valid plans execute in real SUMO 1.27.1 (TraCI-sampled) | tested | Toronto `run-95fc14e23d20` (baseline), `run-b50e803f5069` (direct-top2); Waterloo ×3 |
 | 6 | UI renders measured trajectories, passenger states, restrictions, timeline, metrics | tested (replay) | `visual-reviews/02`, `03`; positions come from `tracks.json` samples only; teleports break trails |

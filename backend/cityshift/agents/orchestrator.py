@@ -32,7 +32,7 @@ from cityshift.domain.compiler import make_cycles, venue_stop_candidates
 from cityshift.domain.network import load_corridors
 from cityshift.domain.validators import validate_plan
 from cityshift.evidence import build_bundle
-from cityshift.providers import LLM_API_BASE, LLM_API_KEY, LLM_MODEL, LLMClient
+from cityshift.providers import LLMClient, agent_model_config
 from cityshift.store import Store
 
 log = logging.getLogger(__name__)
@@ -49,8 +49,9 @@ def _react_agent(name: str, description: str, tools, max_iterations: int):
     from openjiuwen.core.single_agent.schema.agent_card import AgentCard
 
     agent = ReActAgent(AgentCard(name=name, description=description, version="1.0"))
+    api_base, api_key, model = agent_model_config()
     cfg = ReActAgentConfig(max_iterations=max_iterations).configure_model_client(
-        provider="OpenAI", model_name=LLM_MODEL, api_key=LLM_API_KEY or "none", api_base=LLM_API_BASE,
+        provider="OpenAI", model_name=model, api_key=api_key, api_base=api_base,
     )
     agent.configure(cfg)
     for t in tools:

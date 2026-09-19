@@ -247,7 +247,7 @@ def get_journey(rid: str, person_id: str) -> JSONResponse:
 
 def _include_optional_routers() -> None:
     for mod in ("cityshift.api.edit_router", "cityshift.api.agents_router", "cityshift.api.evidence_router",
-                "cityshift.api.share_router"):
+                "cityshift.api.share_router", "cityshift.api.llm_router"):
         try:
             module = __import__(mod, fromlist=["router"])
         except ImportError:
