@@ -1,0 +1,139 @@
+/**
+ * Strategic camera on top of ArcRotateCamera: named poses (city / district / corridor / agent / incident) and
+ * eased flights between them.  Poses are in world metres; callers never touch alpha/beta directly.
+ */
+
+import type { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera'
+import { Vector3 } from '@babylonjs/core/Maths/math.vector'
+
+import type { WorldData } from './worldData'
+
+export type CameraMode = 'city' | 'district' | 'corridor' | 'agent' | 'vehicle' | 'incident'
+
+export interface Pose {
+  target: [number, number] // x, z (world metres); target height is always ground
+  radius: number
+  /** heading the camera looks *toward*, degrees clockwise from north (0 = camera south of target looking north) */
+  heading: number
+  /** elevation above the ground plane in degrees (90 = straight down) */
+  elevation: number
+  y?: number
+}
+
+/** Downtown / waterfront hero: lake in the lower third, skyline rising toward the top of the frame. */
+function cityPose(world: WorldData): Pose {
+  const cn = world.landmarks.find((l) => l.kind === 'cn_tower')
+  const union = world.landmarks.find((l) => l.kind === 'union_station')
+  const tx = cn && union ? (cn.x + union.x) / 2 : 400
+  const tz = cn && union ? (cn.z + union.z) / 2 - 40 : -520
+  return { target: [tx, tz], radius: 1650, heading: 22, elevation: 34 }
+}
+
+const ease = (t: number): number => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+
+export class WorldCamera {
+  private flight: { from: Pose; to: Pose; t0: number; ms: number; raf: number } | null = null
+  mode: CameraMode = 'city'
+  readonly cam: ArcRotateCamera
+  readonly world: WorldData
+
+  constructor(cam: ArcRotateCamera, world: WorldData) {
+    this.cam = cam
+    this.world = world
+    this.apply(cityPose(world))
+  }
+
+  get flying(): boolean {
+    return this.flight !== null
+  }
+
+  get pose(): Pose {
+    const c = this.cam
+    return {
+      target: [c.target.x, c.target.z],
+      radius: c.radius,
+      heading: ((-90 - (c.alpha * 180) / Math.PI) % 360 + 360) % 360,
+      elevation: 90 - (c.beta * 180) / Math.PI,
+      y: c.target.y,
+    }
+  }
+
+  apply(p: Pose): void {
+    const c = this.cam
+    c.target = new Vector3(p.target[0], p.y ?? 0, p.target[1])
+    c.radius = p.radius
+    // Babylon: position = target + r * (cos(alpha) sin(beta), cos(beta), sin(alpha) sin(beta)).
+    // heading h (camera looks toward h) puts the camera at direction h+180 from the target.
+    c.alpha = ((-90 - p.heading) * Math.PI) / 180
+    c.beta = ((90 - p.elevation) * Math.PI) / 180
+  }
+
+  flyTo(to: Pose, ms = 1400, mode?: CameraMode): void {
+    if (mode) this.mode = mode
+    this.cancel()
+    const from = this.pose
+    // shortest heading turn
+    let dh = to.heading - from.heading
+    dh = ((dh + 540) % 360) - 180
+    const target: Pose = { ...to, heading: from.heading + dh }
+    const t0 = performance.now()
+    const step = (): void => {
+      const k = Math.min(1, (performance.now() - t0) / ms)
+      const e = ease(k)
+      this.apply({
+        target: [lerp(from.target[0], target.target[0], e), lerp(from.target[1], target.target[1], e)],
+        radius: Math.exp(lerp(Math.log(from.radius), Math.log(target.radius), e)),
+        heading: lerp(from.heading, target.heading, e),
+        elevation: lerp(from.elevation, target.elevation, e),
+        y: lerp(from.y ?? 0, target.y ?? 0, e),
+      })
+      if (k < 1) this.flight = { from, to: target, t0, ms, raf: requestAnimationFrame(step) }
+      else this.flight = null
+    }
+    this.flight = { from, to: target, t0, ms, raf: requestAnimationFrame(step) }
+  }
+
+  cancel(): void {
+    if (this.flight) cancelAnimationFrame(this.flight.raf)
+    this.flight = null
+  }
+
+  city(ms = 1600): void {
+    this.flyTo(cityPose(this.world), ms, 'city')
+  }
+
+  district(x: number, z: number, ms = 1200): void {
+    this.flyTo({ target: [x, z], radius: 620, heading: this.pose.heading, elevation: 42 }, ms, 'district')
+  }
+
+  corridor(path: [number, number][], ms = 1200): void {
+    const a = path[0]
+    const b = path[path.length - 1]
+    const dx = b[0] - a[0]
+    const dz = b[1] - a[1]
+    const along = (Math.atan2(dx, dz) * 180) / Math.PI
+    const span = Math.hypot(dx, dz)
+    let heading = along + 90
+    const cur = this.pose.heading
+    if (Math.abs((((heading - cur) % 360) + 540) % 360 - 180) < 80) heading += 180
+    this.flyTo({ target: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], radius: Math.max(260, Math.min(1400, span * 1.1)), heading, elevation: 38 }, ms, 'corridor')
+  }
+
+  agent(x: number, z: number, heading: number | null, ms = 900): void {
+    this.flyTo({ target: [x, z], radius: 95, heading: heading ?? this.pose.heading, elevation: 28, y: 2 }, ms, 'agent')
+  }
+
+  incident(x: number, z: number, radiusM: number, ms = 1200): void {
+    this.flyTo({ target: [x, z], radius: Math.max(220, radiusM * 3.2), heading: this.pose.heading + 25, elevation: 44 }, ms, 'incident')
+  }
+
+  /** Track a moving point (follow modes) without fighting the user's orbit: only the target moves. */
+  follow(x: number, z: number, y = 0): void {
+    if (this.flight) return
+    this.cam.target.set(x, y, z)
+  }
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t
+}

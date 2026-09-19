@@ -24,3 +24,6 @@ backend/tests/_out/
 !.env.example
 
 .DS_Store
+
+# screenshot loop output (large PNGs; key frames are embedded in the PR)
+/visual-reviews/
