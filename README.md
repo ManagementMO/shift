@@ -9,7 +9,8 @@ measured on the same cohort of travelers.  Agents propose; deterministic validat
 infeasible plans; SUMO decides what actually happens; the UI replays the recorded truth.
 
 ```
-frontend/   React + TypeScript + Vite, MapLibre/Mapbox + deck.gl scene, Zustand state
+frontend/   React + TypeScript + Vite; full-screen Mapbox GL v3 Standard world with interleaved
+            deck.gl simulation layers; Zustand state; scripts/ for the visual-review loop
 backend/    FastAPI + Pydantic, SUMO/TraCI runner, plan compiler + validators,
             openJiuwen agents, Elasticsearch evidence, replay export
 docs/       ledger: decisions, progress, blockers, capability manifest
@@ -25,6 +26,7 @@ credentials are absent.
 # backend (Python 3.12; SUMO ships inside the eclipse-sumo wheel)
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e "backend[dev]"
+python -m cityshift.citypack.make_pack toronto     # OSM -> netconvert -> var/citypacks/toronto (and: waterloo)
 cd backend && pytest -q && uvicorn cityshift.api.app:app --reload --port 8000
 
 # frontend

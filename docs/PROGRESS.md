@@ -11,3 +11,12 @@ Append-only.  Times are UTC.
                     capacity overflow leaves 3 waiting, persistent bus return cycle carries 6, missing
                     line keeps traveler accounted as waiting).
 - 2026-09-19 04:30  Initial commit on `main`; feature branch created.
+- 2026-09-19 05:10  Waterloo OSM pack via netconvert; two-bus compiler + validators; run orchestration; HTTP API.
+- 2026-09-19 05:40  First frontend (MapLibre/deck.gl replay, inspector, comparison, typed edit preview).
+- 2026-09-19 06:00  Agents (openJiuwen ReAct over Ollama), frozen evidence bundles (local ES), NL edits.
+- 2026-09-19 07:00  Visual reset brief received; Mapbox token provided (stored in frontend/.env.local only).
+- 2026-09-19 08:00  Toronto OSM pack (downtown/waterfront, ~89k edges, 188 stops), flagship egress scenario, base runs.
+- 2026-09-19 09:30  Full-screen world shell: Mapbox Standard + interleaved deck.gl, dock, tool rail, Swarm Lens, compare.
+- 2026-09-19 10:30  Storm branch from a prompt; hazard footprint/column; closure audit with exit-times.
+- 2026-09-19 11:00  Replay JSON hardened (non-finite TraCI positions dropped, trails broken); storm run rerun.
+- 2026-09-19 11:15  Seven visual reviews regenerated; agent bubble anchored while paused; handoff written.

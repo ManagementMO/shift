@@ -45,3 +45,25 @@ Real road geometry, sidewalks, and GRT bus stop nodes, converted with `netconver
 The pack is labelled `real_data=true` for geometry and the demand set is labelled `synthetic=true`.
 If OSM download is impossible on the network, the fallback pack is the synthetic tiny corridor,
 labelled as such in the UI.
+
+## D-009 The city is the interface: Mapbox owns geography, deck.gl owns measured entities
+The three-column dashboard was removed.  Mapbox GL v3 Standard renders terrain, buildings, roads and
+labels; simulation entities (buses, cars, people, stops, restrictions, hazard) are interleaved deck.gl
+layers placed at three invisible anchor slots (`bottom`/`middle`/`top`) so layer order never changes
+between frames.  Moving Mapbox layers per frame caused a repaint loop; fixed anchors removed it.
+
+## D-010 A hazard is a declared moving region, not weather physics
+`HazardTrack` (path, radius, start/end) is compiled deterministically into timed edge restrictions.  The
+tornado-like column, debris and pulses are visual decoration of that footprint.  The UI copy says
+"modeled hazard region"; nothing forecasts or simulates a storm.
+
+## D-011 Non-finite TraCI samples are missing measurements
+Teleporting vehicles report `INVALID_DOUBLE_VALUE` (serialized as Infinity, invalid JSON).  Such
+samples are dropped and a trail break recorded; the renderer never interpolates across a break.
+Angle/speed carry the previous finite value.  Alternative (clamping) was rejected: it invents positions.
+
+## D-012 Closure integrity audited from SUMO's own exit-times
+`vehroute-output.exit-times` gives a per-edge occupancy interval, so a vehicle that left a closed
+edge before the closure is not a violation, one that entered during it is ("entered"), and one already
+on it is reported separately ("caught").  Without exit-times the audit falls back to a conservative
+trip-level overlap.
