@@ -533,6 +533,11 @@ input[type='checkbox'] {
   background: var(--ink);
   color: #fff;
 }
+.cams button.hero {
+  margin-top: 4px;
+  background: var(--accent);
+  color: #fff;
+}
 
 /* ---------- drawers (scenario left, lens right) ---------- */
 .drawer {

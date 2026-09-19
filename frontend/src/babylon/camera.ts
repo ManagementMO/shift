@@ -43,6 +43,10 @@ export class WorldCamera {
     this.apply(cityPose(world))
   }
 
+  get flying(): boolean {
+    return this.flight !== null
+  }
+
   get pose(): Pose {
     const c = this.cam
     return {

@@ -20,7 +20,7 @@ import { interpAt, type Interp } from './interp'
 
 export type Kind = 'bus' | 'car' | 'person'
 /** Prototype sets: entity kinds plus the far-LOD pedestrian marker and the venue release ring. */
-type SetKind = Kind | 'marker' | 'pulse'
+type SetKind = Kind | 'marker' | 'pulse' | 'halo'
 
 const CAR_PALETTE: RGB[] = [
   [0.86, 0.87, 0.89], // white
@@ -35,6 +35,10 @@ const CAR_PALETTE: RGB[] = [
 ]
 const BUS_RED: RGB = [0.8, 0.09, 0.16]
 const PULSE_COLOR: RGB = [1.0, 0.62, 0.2]
+const HALO_COLOR: RGB = [0.18, 0.77, 0.91]
+const HALO_RADIUS: Record<Kind, number> = { bus: 8.5, car: 3.6, person: 1.6 }
+/** Screen-space pick tolerance (CSS px). */
+export const PICK_PX = 22
 
 const GLASS: RGB = [0.16, 0.2, 0.26]
 const TYRE: RGB = [0.08, 0.08, 0.09]
@@ -185,8 +189,14 @@ interface Entity {
   yaw: number
   /** last world position, used for pedestrian heading (SUMO reports angle 0 for persons) */
   px: number
+  py: number
   pz: number
   seen: boolean
+}
+
+export interface Picked {
+  kind: Kind
+  id: string
 }
 
 export interface TrafficStats {
@@ -214,6 +224,9 @@ export class Traffic {
   private rx: ReplayIndex | null = null
   private scratch: Interp = { lon: 0, lat: 0, angle: 0, speed: 0, i: -1, k: 0 }
   stats: TrafficStats = { buses: 0, cars: 0, people: 0, released: 0 }
+  /** Selected entity id: drawn at full detail with a ground halo; with `dimOthers`, everyone else fades. */
+  selectedId: string | null = null
+  dimOthers = false
 
   constructor(scene: Scene, frame: WorldFrame, shadows: CascadedShadowGenerator | null) {
     this.scene = scene
@@ -259,7 +272,9 @@ export class Traffic {
       ),
       marker: new InstanceSet(scene, 'crowd-marker', (b) => b.disc(0, 0, 1.5, 0.06, SKIN, 8), null, null),
       pulse: new InstanceSet(scene, 'release-pulse', (b) => ring(b, 1, 0.12, 0.05, SKIN), null, null),
+      halo: new InstanceSet(scene, 'selection-halo', (b) => ring(b, 1, 0.22, 0.05, SKIN), null, null),
     }
+    this.sets.halo.reserve(1)
   }
 
   setReplay(rx: ReplayIndex | null): void {
@@ -275,7 +290,7 @@ export class Traffic {
       counts[kind]++
       const color: RGB =
         kind === 'bus' ? BUS_RED : kind === 'car' ? CAR_PALETTE[Math.floor(hash01(id) * CAR_PALETTE.length)] : STATE_COLORS.walking.map((v) => v / 255) as RGB
-      this.entities.push({ id, ix, kind, color, yaw: 0, px: 0, pz: 0, seen: false })
+      this.entities.push({ id, ix, kind, color, yaw: 0, px: 0, py: 0, pz: 0, seen: false })
     }
     for (const k of Object.keys(counts) as Kind[]) this.sets[k].reserve(counts[k])
     this.sets.marker.reserve(counts.person)
@@ -307,9 +322,11 @@ export class Traffic {
   update(t: number, view: Viewpoint): void {
     const rx = this.rx
     if (!rx) return
-    const n: Record<SetKind, number> = { bus: 0, car: 0, person: 0, marker: 0, pulse: 0 }
+    const n: Record<SetKind, number> = { bus: 0, car: 0, person: 0, marker: 0, pulse: 0, halo: 0 }
     const modes = rx.bundle.compile?.mode_assignment ?? {}
     const s = this.scratch
+    const sel = this.selectedId
+    const dim = this.dimOthers && sel !== null
     let people = 0
     for (const e of this.entities) {
       const r = interpAt(e.ix, t, s)
@@ -340,14 +357,18 @@ export class Traffic {
         e.yaw = (r.angle * Math.PI) / 180
       }
       e.px = x
+      e.py = y
       e.pz = z
       e.seen = true
+      const isSel = e.id === sel
       let set: SetKind = e.kind
       if (e.kind === 'person') {
         people++
         const d = Math.hypot(x - view.x, view.y, z - view.z)
-        if (lodFor(d, view.radius) === 'marker') set = 'marker'
+        if (!isSel && lodFor(d, view.radius) === 'marker') set = 'marker'
       }
+      if (isSel) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, HALO_RADIUS[e.kind])
+      else if (dim) color = mix(color, PALETTE.pavement, 0.72)
       this.sets[set].set(n[set]++, x, y, z, e.yaw, color)
     }
     const live = activeReleases(this.releases, t)
@@ -370,6 +391,25 @@ export class Traffic {
   poseOf(id: string): { x: number; z: number; yaw: number; kind: Kind } | null {
     const e = this.entities.find((v) => v.id === id)
     return e && e.seen ? { x: e.px, z: e.pz, yaw: e.yaw, kind: e.kind } : null
+  }
+
+  /**
+   * Nearest visible entity to a screen point, using the caller's world→screen projection.  Screen-space
+   * picking keeps pedestrians selectable at any LOD and never depends on thin-instance GPU picking.
+   */
+  pick(sx: number, sy: number, project: (x: number, y: number, z: number) => { x: number; y: number }, tol = PICK_PX): Picked | null {
+    let best: Picked | null = null
+    let bestD = tol * tol
+    for (const e of this.entities) {
+      if (!e.seen) continue
+      const p = project(e.px, e.py + (e.kind === 'bus' ? 1.8 : e.kind === 'car' ? 0.7 : 0.9), e.pz)
+      const d = (p.x - sx) * (p.x - sx) + (p.y - sy) * (p.y - sy)
+      if (d < bestD) {
+        bestD = d
+        best = { kind: e.kind, id: e.id }
+      }
+    }
+    return best
   }
 
   dispose(): void {

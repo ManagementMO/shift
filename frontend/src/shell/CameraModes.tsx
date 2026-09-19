@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { cameraTo, leadMap, watchCameraMode } from '../world/registry'
 import { cityPose, corridorPose, currentPose, districtPose, incidentPose, type CameraMode } from '../world/camera'
@@ -16,12 +16,25 @@ export default function CameraModes() {
   const cameraMode = useStore((s) => s.cameraMode)
   const setCameraMode = useStore((s) => s.setCameraMode)
 
+  const primaryRunId = useStore((s) => s.primaryRunId)
+  const [hero, setHero] = useState(false)
+
   useEffect(() => watchCameraMode(setCameraMode), [setCameraMode])
+
+  // The Babylon world offers the Blue Jays egress framing once a replay with recorded releases is loaded.
+  useEffect(() => {
+    const id = setInterval(() => setHero(Boolean(leadMap()?.egress)), 500)
+    return () => clearInterval(id)
+  }, [primaryRunId])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if (e.key === '6') {
+        egress()
+        return
+      }
       const m = MODES.find((x) => x.key === e.key)
       if (m) go(m.id)
     }
@@ -36,8 +49,18 @@ export default function CameraModes() {
           {m.label}
         </button>
       ))}
+      {hero && (
+        <button className="hero" onClick={egress} title="Egress (6) — rewind to the first travellers leaving the Blue Jays game">
+          Egress
+        </button>
+      )}
     </nav>
   )
+}
+
+function egress() {
+  const lead = leadMap()
+  if (lead?.egress?.()) useStore.getState().setCameraMode('district')
 }
 
 /** Resolve a camera mode against what is actually in the scenario/replay right now. */

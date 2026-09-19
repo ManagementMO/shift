@@ -29,7 +29,7 @@ export const Y = {
   building: 0.3,
 }
 
-const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255]
+export const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255]
 
 export const PALETTE = {
   land: hex('#d8d2c4'),
@@ -80,7 +80,7 @@ export interface CityMeshes {
   dispose(): void
 }
 
-function meshFromBatch(name: string, batch: Batch, scene: Scene, material: StandardMaterial): Mesh {
+export function meshFromBatch(name: string, batch: Batch, scene: Scene, material: StandardMaterial): Mesh {
   const mesh = new Mesh(name, scene)
   const vd = new VertexData()
   vd.positions = new Float32Array(batch.positions)
@@ -95,7 +95,7 @@ function meshFromBatch(name: string, batch: Batch, scene: Scene, material: Stand
   return mesh
 }
 
-function vertexColorMaterial(name: string, scene: Scene, specular = 0.05): StandardMaterial {
+export function vertexColorMaterial(name: string, scene: Scene, specular = 0.05): StandardMaterial {
   const m = new StandardMaterial(name, scene)
   m.diffuseColor = Color3.White()
   m.ambientColor = Color3.White()

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useStore } from './store'
 import WorldMap from './world/WorldMap'
 import TopStrip from './shell/TopStrip'
@@ -13,7 +13,12 @@ import ScenarioDrawer from './shell/ScenarioDrawer'
 import CompareSplit from './shell/CompareSplit'
 import './App.css'
 
-export default function App() {
+// Babylon miniature Toronto (`/world`); loaded only when that renderer is chosen so `/` keeps its Mapbox bundle.
+const WorldBabylon = lazy(() => import('./babylon/WorldBabylon'))
+
+export type Renderer = 'mapbox' | 'babylon'
+
+export default function App({ renderer = 'mapbox' }: { renderer?: Renderer }) {
   const boot = useStore((s) => s.boot)
   const error = useStore((s) => s.error)
   const setError = useStore((s) => s.setError)
@@ -48,7 +53,17 @@ export default function App() {
 
   return (
     <div className="shell">
-      <div className="worlds">{compareMode ? <CompareSplit /> : <WorldMap runId={primaryRunId} side="solo" />}</div>
+      <div className="worlds">
+        {compareMode ? (
+          <CompareSplit />
+        ) : renderer === 'babylon' ? (
+          <Suspense fallback={null}>
+            <WorldBabylon runId={primaryRunId} side="solo" />
+          </Suspense>
+        ) : (
+          <WorldMap runId={primaryRunId} side="solo" />
+        )}
+      </div>
 
       <TopStrip onOpenScenarios={() => setDrawer((d) => !d)} />
       {drawer && <ScenarioDrawer onClose={() => setDrawer(false)} />}
