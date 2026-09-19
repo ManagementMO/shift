@@ -101,6 +101,10 @@
   background: var(--accent-soft);
   color: var(--accent);
 }
+.bworld-cams button.hero {
+  background: var(--accent);
+  color: #fff;
+}
 
 .bworld-transport {
   position: absolute;
@@ -108,10 +112,11 @@
   bottom: 12px;
   transform: translateX(-50%);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 6px 12px 6px 6px;
-  border-radius: 999px;
+  border-radius: 22px;
   background: var(--glass-strong);
   box-shadow: var(--glass-shadow);
   backdrop-filter: blur(10px);
@@ -157,6 +162,30 @@
 }
 .bworld-live {
   white-space: nowrap;
+}
+.bworld-cohort {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0 2px 8px;
+  border-top: 1px solid rgba(20, 24, 32, 0.08);
+  white-space: nowrap;
+}
+.bworld-cohort b {
+  font-weight: 700;
+}
+.bworld-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-2);
+}
+.bworld-state i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c);
 }
 .bworld-err {
   color: #b23a2a;

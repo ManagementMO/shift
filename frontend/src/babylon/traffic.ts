@@ -12,12 +12,15 @@ import type { CascadedShadowGenerator } from '@babylonjs/core/Lights/Shadows/cas
 import type { Scene } from '@babylonjs/core/scene'
 
 import { personStateAt, STATE_COLORS, type PersonState, type ReplayIndex, type TrackIndex } from '../replay'
-import { Y } from './city'
+import { PALETTE, Y } from './city'
 import type { WorldFrame } from './coords'
+import { activeReleases, lodFor, pulse, releasesFrom, type Release } from './crowd'
 import { Batch, hash01, type RGB } from './geometry'
 import { interpAt, type Interp } from './interp'
 
 export type Kind = 'bus' | 'car' | 'person'
+/** Prototype sets: entity kinds plus the far-LOD pedestrian marker and the venue release ring. */
+type SetKind = Kind | 'marker' | 'pulse'
 
 const CAR_PALETTE: RGB[] = [
   [0.86, 0.87, 0.89], // white
@@ -31,9 +34,27 @@ const CAR_PALETTE: RGB[] = [
   [0.16, 0.36, 0.3], // green
 ]
 const BUS_RED: RGB = [0.8, 0.09, 0.16]
+const PULSE_COLOR: RGB = [1.0, 0.62, 0.2]
+
 const GLASS: RGB = [0.16, 0.2, 0.26]
 const TYRE: RGB = [0.08, 0.08, 0.09]
 const SKIN: RGB = [0.87, 0.72, 0.6]
+
+function mix(a: RGB, b: RGB, k: number): RGB {
+  return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k]
+}
+
+/** Flat annulus on the ground, outer radius `r`, band width `w`. */
+function ring(b: Batch, r: number, w: number, y: number, c: RGB, segments = 24): void {
+  const outer: number[] = []
+  const inner: number[] = []
+  for (let i = 0; i < segments; i++) {
+    const a = (i / segments) * Math.PI * 2
+    outer.push(Math.cos(a) * r, Math.sin(a) * r)
+    inner.push(Math.cos(a) * (r - w), Math.sin(a) * (r - w))
+  }
+  b.polygon(outer, [inner], y, c)
+}
 
 /** Local space: +z forward, +y up, origin on the ground at the body centre. */
 function box(b: Batch, cx: number, y0: number, cz: number, sx: number, sy: number, sz: number, c: RGB): void {
@@ -42,9 +63,9 @@ function box(b: Batch, cx: number, y0: number, cz: number, sx: number, sy: numbe
   const z0 = cz - sz / 2
   const z1 = cz + sz / 2
   const y1 = y0 + sy
-  const ring = [x0, z0, x1, z0, x1, z1, x0, z1]
-  b.polygon(ring, undefined, y1, c)
-  b.walls(ring, undefined, y0, y1, c, 1)
+  const quad = [x0, z0, x1, z0, x1, z1, x0, z1]
+  b.polygon(quad, undefined, y1, c)
+  b.walls(quad, undefined, y0, y1, c, 1)
 }
 
 interface Part {
@@ -108,18 +129,18 @@ class InstanceSet {
     }
   }
 
-  /** Write instance `i`: yaw in radians (clockwise from +z when seen from above), position (x, y, z). */
-  set(i: number, x: number, y: number, z: number, yaw: number, c: RGB): void {
+  /** Write instance `i`: yaw in radians (clockwise from +z when seen from above), position (x, y, z), uniform scale. */
+  set(i: number, x: number, y: number, z: number, yaw: number, c: RGB, scale = 1): void {
     const m = this.matrices
     const o = i * 16
-    const cs = Math.cos(yaw)
-    const sn = Math.sin(yaw)
+    const cs = Math.cos(yaw) * scale
+    const sn = Math.sin(yaw) * scale
     m[o] = cs
     m[o + 1] = 0
     m[o + 2] = -sn
     m[o + 3] = 0
     m[o + 4] = 0
-    m[o + 5] = 1
+    m[o + 5] = scale
     m[o + 6] = 0
     m[o + 7] = 0
     m[o + 8] = sn
@@ -172,16 +193,27 @@ export interface TrafficStats {
   buses: number
   cars: number
   people: number
+  /** travellers whose recorded depart time has passed */
+  released: number
+}
+
+/** Where the crowd is being looked at from: drives pedestrian LOD only, never positions. */
+export interface Viewpoint {
+  x: number
+  y: number
+  z: number
+  radius: number
 }
 
 export class Traffic {
   readonly scene: Scene
   readonly frame: WorldFrame
-  private sets: Record<Kind, InstanceSet>
+  private sets: Record<SetKind, InstanceSet>
   private entities: Entity[] = []
+  private releases: Release[] = []
   private rx: ReplayIndex | null = null
   private scratch: Interp = { lon: 0, lat: 0, angle: 0, speed: 0, i: -1, k: 0 }
-  stats: TrafficStats = { buses: 0, cars: 0, people: 0 }
+  stats: TrafficStats = { buses: 0, cars: 0, people: 0, released: 0 }
 
   constructor(scene: Scene, frame: WorldFrame, shadows: CascadedShadowGenerator | null) {
     this.scene = scene
@@ -225,6 +257,8 @@ export class Traffic {
         },
         null,
       ),
+      marker: new InstanceSet(scene, 'crowd-marker', (b) => b.disc(0, 0, 1.5, 0.06, SKIN, 8), null, null),
+      pulse: new InstanceSet(scene, 'release-pulse', (b) => ring(b, 1, 0.12, 0.05, SKIN), null, null),
     }
   }
 
@@ -244,15 +278,39 @@ export class Traffic {
       this.entities.push({ id, ix, kind, color, yaw: 0, px: 0, pz: 0, seen: false })
     }
     for (const k of Object.keys(counts) as Kind[]) this.sets[k].reserve(counts[k])
+    this.sets.marker.reserve(counts.person)
+    this.releases = releasesFrom(rx, this.frame)
+    this.sets.pulse.reserve(64)
   }
 
-  /** Place every entity for sim time `t`. */
-  update(t: number): void {
+  /** Sim time by which fraction `q` (0..1) of recorded departs have happened, or null with no replay. */
+  releaseQuantile(q: number): number | null {
+    const n = this.releases.length
+    if (!n) return null
+    const i = Math.min(n - 1, Math.max(0, Math.floor(q * (n - 1))))
+    return this.releases[i].t
+  }
+
+  /** Mean position of the recorded release points (where SUMO put travellers as they left). */
+  releaseCentroid(): [number, number] | null {
+    if (!this.releases.length) return null
+    let x = 0
+    let z = 0
+    for (const r of this.releases) {
+      x += r.x
+      z += r.z
+    }
+    return [x / this.releases.length, z / this.releases.length]
+  }
+
+  /** Place every entity for sim time `t`, choosing pedestrian detail from the viewpoint. */
+  update(t: number, view: Viewpoint): void {
     const rx = this.rx
     if (!rx) return
-    const n: Record<Kind, number> = { bus: 0, car: 0, person: 0 }
+    const n: Record<SetKind, number> = { bus: 0, car: 0, person: 0, marker: 0, pulse: 0 }
     const modes = rx.bundle.compile?.mode_assignment ?? {}
     const s = this.scratch
+    let people = 0
     for (const e of this.entities) {
       const r = interpAt(e.ix, t, s)
       if (!r) {
@@ -284,11 +342,28 @@ export class Traffic {
       e.px = x
       e.pz = z
       e.seen = true
-      const set = this.sets[e.kind]
-      set.set(n[e.kind]++, x, y, z, e.yaw, color)
+      let set: SetKind = e.kind
+      if (e.kind === 'person') {
+        people++
+        const d = Math.hypot(x - view.x, view.y, z - view.z)
+        if (lodFor(d, view.radius) === 'marker') set = 'marker'
+      }
+      this.sets[set].set(n[set]++, x, y, z, e.yaw, color)
     }
-    for (const k of Object.keys(n) as Kind[]) this.sets[k].commit(n[k])
-    this.stats = { buses: n.bus, cars: n.car, people: n.person }
+    const live = activeReleases(this.releases, t)
+    this.sets.pulse.reserve(live.length)
+    for (const r of live) {
+      const p = pulse(t - r.t)
+      if (!p) continue
+      this.sets.pulse.set(n.pulse++, r.x, Y.junction + 0.1, r.z, 0, mix(PULSE_COLOR, PALETTE.pavement, 1 - p.fade), p.radius)
+    }
+    for (const k of Object.keys(n) as SetKind[]) this.sets[k].commit(n[k])
+    let released = 0
+    for (const r of this.releases) {
+      if (r.t > t) break
+      released++
+    }
+    this.stats = { buses: n.bus, cars: n.car, people, released }
   }
 
   /** Last drawn world pose of an entity (for follow cameras / inspection); null if unknown or not visible. */

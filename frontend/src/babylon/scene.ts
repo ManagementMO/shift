@@ -149,7 +149,10 @@ export class WorldScene {
     // --- replay traffic (created after the static materials are frozen: its own materials stay live)
     this.roads = new RoadIndex(world)
     this.traffic = new Traffic(scene, this.frame, this.shadows)
-    scene.onBeforeRenderObservable.add(() => this.traffic.update(this.simT))
+    scene.onBeforeRenderObservable.add(() => {
+      const p = this.camera.cam.globalPosition
+      this.traffic.update(this.simT, { x: p.x, y: p.y, z: p.z, radius: this.camera.cam.radius })
+    })
 
     scene.autoClear = true
     scene.autoClearDepthAndStencil = true

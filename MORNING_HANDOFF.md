@@ -65,6 +65,7 @@ this from the scenario drawer / tool rail / command bar.
 | 15 | Sentry | **unavailable** | DSN-gated no-op |
 | 16 | Elastic Cloud, Baseten | **unavailable** | same client code, different env; never exercised |
 | 17 | Browser end-to-end by a persistent testing agent | tested once | recording + screenshots on PR #1; found: scenario list collapsed at normal zoom, Share showed a server path, no city switch — all three fixed in the follow-up commit; luma.gl uniform-reflection console messages remain (not exceptions) |
+| 18 | Babylon.js `/world` preview (migration in progress; Mapbox `/` unchanged) | tested (screenshots + unit tests) | W1 world compiler `world.json` (34,804 SUMO edges as `WorldRoad`, 10,461 buildings, landmarks) + coordinate service; W2 replay-driven thin-instanced buses/cars/people aligned to the SUMO net; W3 crowd LOD (figure ≤420 m, ground marker beyond / from city camera), release pulses at each recorded venue depart, state tallies, **Egress** hero camera at Rogers Centre. `docs/visual-reviews/w1..w3-*.jpg`; `frontend/src/babylon/*.test.ts` (24 tests). Not yet: timeline/selection parity, edits, Havok/tornado, compare (W4–W8) |
 
 ## Scenario and run ids worth opening
 

@@ -37,7 +37,7 @@ export default function WorldApp() {
       clock.pause()
     }
   }, [ready, rx])
-  const stats = useCallback(() => sceneRef.current?.traffic.stats ?? { buses: 0, cars: 0, people: 0 }, [])
+  const stats = useCallback(() => sceneRef.current?.traffic.stats ?? { buses: 0, cars: 0, people: 0, released: 0 }, [])
 
   const onReady = useCallback((ws: WorldScene) => {
     sceneRef.current = ws
@@ -63,6 +63,7 @@ export default function WorldApp() {
       if (e.key === '2') flyLandmark(ws, 'cn_tower')
       if (e.key === '3') flyLandmark(ws, 'union_station')
       if (e.key === '4') flyLandmark(ws, 'rogers_centre')
+      if (e.key === '5') egress(ws)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -110,6 +111,11 @@ export default function WorldApp() {
           <button onClick={() => flyLandmark(ready, 'rogers_centre')} title="4">
             Rogers Centre
           </button>
+          {rx && (
+            <button className="hero" onClick={() => egress(ready)} title="5 — rewind to the first traveller leaving the Blue Jays game">
+              Egress
+            </button>
+          )}
         </div>
       )}
 
@@ -127,4 +133,20 @@ function flyLandmark(ws: WorldScene, kind: string): void {
   if (!l) return
   const h = kind === 'cn_tower' ? 200 : 10
   ws.camera.flyTo({ target: [l.x, l.z], radius: kind === 'cn_tower' ? 900 : 640, heading: ws.camera.pose.heading, elevation: kind === 'cn_tower' ? 22 : 38, y: h }, 1300, 'district')
+}
+
+/**
+ * Hero scene: the crowd leaving Rogers Centre.  Camera sits outside the gates looking back at the dome, clock
+ * rewound to when the recorded departs start coming thick (10th percentile), at real time.
+ */
+function egress(ws: WorldScene): void {
+  const l = ws.world.landmarks.find((x) => x.kind === 'rogers_centre')
+  const t0 = ws.traffic.releaseQuantile(0.1)
+  const gate = ws.traffic.releaseCentroid()
+  if (!l || t0 === null || !gate) return
+  const heading = (Math.atan2(l.x - gate[0], l.z - gate[1]) * 180) / Math.PI
+  ws.camera.flyTo({ target: gate, radius: 300, heading, elevation: 46, y: 4 }, 1600, 'district')
+  clock.seek(Math.max(0, t0 - 3))
+  clock.setSpeed(1)
+  if (!clock.playing) clock.toggle()
 }
