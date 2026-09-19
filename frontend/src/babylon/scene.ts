@@ -11,9 +11,6 @@ import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight'
 import { CascadedShadowGenerator } from '@babylonjs/core/Lights/Shadows/cascadedShadowGenerator'
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
-import { Mesh } from '@babylonjs/core/Meshes/mesh'
-import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
-import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import { DefaultRenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/defaultRenderingPipeline'
 import { SSAO2RenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/ssao2RenderingPipeline'
 import '@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent'
@@ -30,6 +27,8 @@ import { buildCity, type CityMeshes } from './city'
 import { WorldCamera } from './camera'
 import { RoadIndex } from './roadIndex'
 import { Traffic } from './traffic'
+import { buildSky } from './sky'
+import { applyWorldAtmosphere } from './atmosphere'
 import type { WorldData } from './worldData'
 import { buildStreetDetails } from './streetDetails'
 import { loadLandmarkModels } from './landmarkModels'
@@ -53,6 +52,7 @@ export class WorldScene {
   readonly roads: RoadIndex
   readonly traffic: Traffic
   readonly fill: HemisphericLight
+  readonly assetsReady: Promise<void>
   private readonly post: DefaultRenderingPipeline
   /** Sim time (s) the traffic is drawn at; set by the playback clock each frame. */
   simT = 0
@@ -75,10 +75,7 @@ export class WorldScene {
     const horizon = new Color3(0.79, 0.84, 0.86)
     scene.clearColor = new Color4(horizon.r, horizon.g, horizon.b, 1)
     scene.ambientColor = new Color3(0.3, 0.32, 0.36)
-    scene.fogMode = Scene.FOGMODE_EXP2
-    scene.fogColor = horizon
-    scene.fogDensity = 0.000045
-    buildSky(scene, horizon)
+    const sky = buildSky(scene, horizon)
     scene.environmentTexture = new HDRCubeTexture('/assets/city/afternoon-sky.hdr', scene, 128, false, true, false, true)
     scene.environmentIntensity = 0.8
 
@@ -122,6 +119,7 @@ export class WorldScene {
       cam.panningSensibility = 45
     })
     this.camera = new WorldCamera(cam, world)
+    applyWorldAtmosphere(scene, world.crs.bounds_world, sky)
 
     // --- shadows (sun) over the buildings; cascaded so the 6 km city and a 50 m block both resolve
     if (opts.shadows ?? true) {
@@ -205,7 +203,7 @@ export class WorldScene {
     })
     this.resize = this.resize.bind(this)
     window.addEventListener('resize', this.resize)
-    void loadLandmarkModels(this)
+    this.assetsReady = loadLandmarkModels(this)
   }
 
   resize(): void {
@@ -242,54 +240,4 @@ export class WorldScene {
     for (const m of this.scene.materials) { m.unfreeze(); m.markDirty() }
     this.invalidateShadows()
   }
-}
-
-/** Gradient sky dome: pale warm horizon rising to a soft blue, unlit and always behind everything. */
-function buildSky(scene: Scene, horizon: Color3): Mesh {
-  const zenith = new Color3(0.47, 0.62, 0.84)
-  const rings = 12
-  const segs = 24
-  const r = 30000
-  const positions: number[] = []
-  const colors: number[] = []
-  const indices: number[] = []
-  for (let j = 0; j <= rings; j++) {
-    const t = j / rings // 0 = horizon (slightly below), 1 = zenith
-    const el = -0.08 + t * (Math.PI / 2 + 0.08)
-    const y = Math.sin(el) * r
-    const rr = Math.cos(el) * r
-    const c = Color3.Lerp(horizon, zenith, Math.pow(Math.max(0, t), 0.7))
-    for (let i = 0; i < segs; i++) {
-      const a = (i / segs) * Math.PI * 2
-      positions.push(Math.cos(a) * rr, y, Math.sin(a) * rr)
-      colors.push(c.r, c.g, c.b, 1)
-    }
-  }
-  for (let j = 0; j < rings; j++) {
-    for (let i = 0; i < segs; i++) {
-      const i2 = (i + 1) % segs
-      const a = j * segs + i
-      const b = j * segs + i2
-      const c = (j + 1) * segs + i
-      const d = (j + 1) * segs + i2
-      indices.push(a, b, c, b, d, c)
-    }
-  }
-  const sky = new Mesh('sky', scene)
-  const vd = new VertexData()
-  vd.positions = new Float32Array(positions)
-  vd.colors = new Float32Array(colors)
-  vd.indices = new Uint16Array(indices)
-  vd.applyToMesh(sky)
-  const m = new StandardMaterial('sky', scene)
-  m.disableLighting = true
-  m.emissiveColor = Color3.White()
-  m.backFaceCulling = false
-  m.fogEnabled = false
-  sky.material = m
-  sky.infiniteDistance = true
-  sky.isPickable = false
-  sky.applyFog = false
-  sky.renderingGroupId = 0
-  return sky
 }

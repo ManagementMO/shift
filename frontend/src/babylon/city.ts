@@ -160,21 +160,17 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
   const w = bx1 - bx0
   const d = bz1 - bz0
 
-  const groundMat = new StandardMaterial('ground', scene)
-  groundMat.diffuseColor = Color3.FromArray(PALETTE.land)
-  groundMat.ambientColor = Color3.FromArray(PALETTE.land).scale(0.35)
-  groundMat.specularColor = Color3.Black()
-  const land = new Batch()
+  const materials = new CityMaterials(scene, facadeResolution)
+  const land = new Batch(TEXTURE_RECIPES.concrete.metres)
   const plate = [bx0 - w * 0.3, bz0 - d * 0.3, bx1 + w * 0.3, bz0 - d * 0.3, bx1 + w * 0.3, bz1 + d * 0.3, bx0 - w * 0.3, bz1 + d * 0.3]
-  land.polygon(plate, world.water.map((p) => p.ring), Y.ground, [1, 1, 1])
+  land.polygon(plate, world.water.map((p) => p.ring), Y.ground, PALETTE.land)
   for (const poly of world.water) {
-    for (const island of poly.holes ?? []) land.polygon(island, undefined, Y.ground, [1, 1, 1])
+    for (const island of poly.holes ?? []) land.polygon(island, undefined, Y.ground, PALETTE.land)
   }
-  const ground = meshFromBatch('ground', land, scene, groundMat)
+  const ground = meshFromBatch('ground', land, scene, materials.get('concrete'))
   ground.receiveShadows = true
   ground.isPickable = true
 
-  const materials = new CityMaterials(scene, facadeResolution)
   const flatMat = vertexColorMaterial('flat', scene, 0.02)
   const foliageMat = vertexColorMaterial('foliage', scene, 0.02)
   const landmarkMat = materials.get('concrete')
@@ -308,7 +304,6 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
       for (const c of chunks) c.dispose()
       landmarks.dispose()
       stops.dispose()
-      groundMat.dispose()
       flatMat.dispose()
       foliageMat.dispose()
       materials.dispose()
