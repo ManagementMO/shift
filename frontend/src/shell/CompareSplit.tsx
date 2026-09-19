@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
-import WorldMap from '../world/WorldMap'
+import type { Renderer } from '../types'
+
+const WorldBabylon = lazy(() => import('../babylon/WorldBabylon'))
+const WorldMap = lazy(() => import('../world/WorldMap'))
 
 /**
- * Two full-viewport worlds, same camera, same clock; the right one is clipped at a draggable divider.
+ * Two full-viewport worlds, same renderer, same camera, same clock; the right one is clipped at a draggable divider.
  * Left = baseline (compare slot), right = candidate (view slot). Identical canvas sizes keep projections aligned.
  */
-export default function CompareSplit() {
+export default function CompareSplit({ renderer = 'babylon' }: { renderer?: Renderer }) {
+  const World = renderer === 'mapbox' ? WorldMap : WorldBabylon
   const primaryRunId = useStore((s) => s.primaryRunId)
   const compareRunId = useStore((s) => s.compareRunId)
   const runs = useStore((s) => s.runs)
@@ -41,10 +45,14 @@ export default function CompareSplit() {
   return (
     <div className="split" style={{ ['--split' as string]: `${split * 100}%` }}>
       <div className="split-pane left">
-        <WorldMap runId={compareRunId} side="left" />
+        <Suspense fallback={null}>
+          <World runId={compareRunId} side="left" />
+        </Suspense>
       </div>
       <div className="split-pane right">
-        <WorldMap runId={primaryRunId} side="right" />
+        <Suspense fallback={null}>
+          <World runId={primaryRunId} side="right" />
+        </Suspense>
       </div>
       <div className="split-divider" onPointerDown={() => (dragging.current = true)}>
         <i />

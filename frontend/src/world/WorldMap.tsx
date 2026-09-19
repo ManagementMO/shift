@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react'
-import * as maplibregl from 'maplibre-gl'
-import 'maplibre-gl/dist/maplibre-gl.css'
+import type { IControl } from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { AmbientLight, DirectionalLight, LightingEffect } from '@deck.gl/core'
@@ -11,7 +10,7 @@ import { cityPose, TORONTO_CITY, type CameraPose } from './camera'
 import { registerMap, renderStats } from './registry'
 
 type MapLike = {
-  addControl: (c: maplibregl.IControl, pos?: string) => unknown
+  addControl: (c: IControl, pos?: string) => unknown
   remove: () => void
   getZoom: () => number
   on: (ev: string, cb: (e: never) => void) => unknown
@@ -25,8 +24,7 @@ type MapLike = {
   jumpTo: (o: Partial<CameraPose>) => unknown
 } & Parameters<typeof registerMap>[1]
 
-const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/positron'
-export const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined
+const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN as string | undefined)?.trim()
 
 // Mapbox Standard, art-directed: no POI/transit/road-label clutter, faded palette, warm daylight.
 const STANDARD_CONFIG: Record<string, unknown> = {
@@ -80,7 +78,6 @@ const LIGHTING = new LightingEffect({
 export default function WorldMap({ runId, side }: { runId: string | null; side: 'solo' | 'left' | 'right' }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLike | null>(null)
-  const overlayRef = useRef<MapboxOverlay | null>(null)
   const runIdRef = useRef(runId)
   const redrawRef = useRef<() => void>(() => {})
   useEffect(() => {
@@ -89,77 +86,58 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
   }, [runId])
 
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return
+    if (!MAPBOX_TOKEN || !containerRef.current || mapRef.current) return
     const container = containerRef.current
     let disposed = false
     let unregister = () => {}
     let stopFrame = () => {}
     let unsub = () => {}
 
-    patchTexImage3D()
-    const overlay = new MapboxOverlay({
-      interleaved: true,
-      layers: [],
-      effects: [LIGHTING],
-      useDevicePixels: true,
-    })
-    overlayRef.current = overlay
-
     const init = async () => {
+      const mapboxgl = (await import('mapbox-gl')).default
+      // React StrictMode and route changes can dispose this effect while the module loads.
+      if (disposed) return
+      patchTexImage3D()
+      const overlay = new MapboxOverlay({
+        interleaved: true,
+        layers: [],
+        effects: [LIGHTING],
+        useDevicePixels: true,
+      })
       const pack = useStore.getState().pack
       const pose = pack ? cityPose(pack.pack_id, pack.center) : TORONTO_CITY
-      let map: MapLike
-      if (MAPBOX_TOKEN) {
-        const mapboxgl = (await import('mapbox-gl')).default
-        mapboxgl.accessToken = MAPBOX_TOKEN
-        const m = new mapboxgl.Map({
-          container,
-          style: 'mapbox://styles/mapbox/standard',
-          center: pose.center,
-          zoom: pose.zoom,
-          pitch: pose.pitch,
-          bearing: pose.bearing,
-          antialias: true,
-          attributionControl: false,
-          logoPosition: 'bottom-right',
-          maxPitch: 75,
-          minZoom: 11,
-          config: { basemap: STANDARD_CONFIG },
-        } as ConstructorParameters<typeof mapboxgl.Map>[0])
-        m.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right')
-        map = m as unknown as MapLike
-      } else {
-        const m = new maplibregl.Map({
-          container,
-          style: OPENFREEMAP_STYLE,
-          center: pose.center,
-          zoom: pose.zoom,
-          pitch: pose.pitch,
-          bearing: pose.bearing,
-          maxPitch: 75,
-          attributionControl: { compact: true },
-        })
-        map = m as unknown as MapLike
-      }
-      if (disposed) {
-        map.remove()
-        return
-      }
+      const m = new mapboxgl.Map({
+        container,
+        accessToken: MAPBOX_TOKEN,
+        style: 'mapbox://styles/mapbox/standard',
+        center: pose.center,
+        zoom: pose.zoom,
+        pitch: pose.pitch,
+        bearing: pose.bearing,
+        antialias: true,
+        attributionControl: false,
+        logoPosition: 'bottom-right',
+        maxPitch: 75,
+        minZoom: 11,
+        config: { basemap: STANDARD_CONFIG },
+      } as ConstructorParameters<typeof mapboxgl.Map>[0])
+      mapRef.current = m as unknown as MapLike
+      m.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right')
+      const map = mapRef.current
       // Invisible per-slot anchor layers that deck layer groups are inserted before (see SLOT in layers.ts).
       let anchorsReady = false
       const ensureAnchors = () => {
         for (const slot of SLOT_NAMES) {
           const id = slotAnchorId(slot)
           if (map.getLayer(id)) continue
-          map.addLayer({ id, type: 'background', ...(MAPBOX_TOKEN ? { slot } : {}), paint: { 'background-opacity': 0 } })
+          map.addLayer({ id, type: 'background', slot, paint: { 'background-opacity': 0 } })
         }
         anchorsReady = true
       }
       map.on('style.load', ensureAnchors as (e: never) => void)
       if (map.isStyleLoaded()) ensureAnchors()
 
-      map.addControl(overlay as unknown as maplibregl.IControl)
-      mapRef.current = map
+      map.addControl(overlay as unknown as IControl)
       unregister = registerMap(side, map)
 
       let dirty = true
@@ -210,7 +188,9 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
       map.on('style.load', redraw as (e: never) => void)
       map.getCanvas().style.cursor = 'default'
     }
-    void init()
+    void init().catch(() => {
+      if (!disposed) useStore.getState().setError('Mapbox could not load. Check the map token and network connection, then reload.')
+    })
     return () => {
       disposed = true
       stopFrame()
@@ -218,8 +198,18 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
       unregister()
       mapRef.current?.remove()
       mapRef.current = null
+      redrawRef.current = () => {}
     }
   }, [side])
 
-  return <div ref={containerRef} className={`world world-${side}`} />
+  return (
+    <div ref={containerRef} className={`world world-${side}`}>
+      {!MAPBOX_TOKEN && (
+        <div className="map-notice glass" role="status">
+          <b>Connect Mapbox to load the 3D city</b>
+          <p>Add the Mapbox token to the frontend environment, then restart the app.</p>
+        </div>
+      )}
+    </div>
+  )
 }

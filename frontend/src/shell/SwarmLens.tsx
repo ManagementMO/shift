@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useStore, type LensTab } from '../store'
 import { cohortSummaryAt, seriesAt, STATE_COLORS, type PersonState } from '../replay'
-import type { Investigation } from '../types'
+import type { Investigation, Renderer } from '../types'
 import { fmt } from '../util'
 import Inspector from '../components/Inspector'
 import ComparePanel from '../components/ComparePanel'
@@ -26,7 +26,7 @@ const LABEL: Record<PersonState, string> = {
 }
 
 /** Swarm Lens: on-demand depth. The main view keeps only the handful of numbers in the dock. */
-export default function SwarmLens() {
+export default function SwarmLens({ renderer }: { renderer: Renderer }) {
   const lens = useStore((s) => s.lens)
   const setLens = useStore((s) => s.setLens)
   if (!lens) return null
@@ -46,7 +46,7 @@ export default function SwarmLens() {
         {lens === 'people' && <PeopleLens />}
         {lens === 'agents' && <AgentsLens />}
         {lens === 'transport' && <TransportLens />}
-        {lens === 'diagnostics' && <DiagnosticsLens />}
+        {lens === 'diagnostics' && <DiagnosticsLens renderer={renderer} />}
       </div>
     </aside>
   )
@@ -212,7 +212,7 @@ function TransportLens() {
   )
 }
 
-function DiagnosticsLens() {
+function DiagnosticsLens({ renderer }: { renderer: Renderer }) {
   const health = useStore((s) => s.health)
   const rx = useStore((s) => (s.primaryRunId ? s.replays[s.primaryRunId] : null))
   const compare = useStore((s) => (s.compareRunId ? s.replays[s.compareRunId] : null))
@@ -258,8 +258,8 @@ function DiagnosticsLens() {
         <b>{health?.providers.sentry.enabled ? 'enabled' : 'disabled (no DSN)'}</b>
         <span>share</span>
         <b>{health ? `${health.providers.share.mode}${health.providers.share.r2_configured ? ' (R2)' : ' (local export)'}` : '—'}</b>
-        <span>basemap</span>
-        <b>{mapbox ? 'Mapbox Standard (3D)' : 'MapLibre + OpenFreeMap (fallback)'}</b>
+        <span>renderer</span>
+        <b>{renderer === 'babylon' ? 'Babylon.js (3D city)' : mapbox ? 'Mapbox Standard (3D)' : 'Mapbox token required'}</b>
         <span>network</span>
         <b>{pack ? `${pack.pack_id} · ${pack.network_fingerprint}` : '—'}</b>
         <span>scenario</span>
@@ -267,6 +267,9 @@ function DiagnosticsLens() {
         <span>evidence bundle</span>
         <b>{scenario ? `${scenario.evidence_bundle_id ?? 'none'} ${scenario.evidence_hash ? scenario.evidence_hash.slice(0, 12) : ''}` : '—'}</b>
       </div>
+      <a className="linkish" href={renderer === 'babylon' ? '/mapbox' : '/'}>
+        {renderer === 'babylon' ? 'Open Mapbox alternative' : 'Return to Babylon'}
+      </a>
       {rx && runRow(rx, 'view run')}
       {compare && runRow(compare, 'compare run')}
       {rx && (
