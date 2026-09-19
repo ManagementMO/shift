@@ -18,6 +18,8 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
   const scenarioId = useStore((s) => s.scenarioId)
   const scenario = scenarios.find((x) => x.scenario_id === scenarioId) ?? null
   const pack = useStore((s) => s.pack)
+  const packs = useStore((s) => s.packs)
+  const selectPack = useStore((s) => s.selectPack)
   const plans = useStore((s) => s.plans)
   const runs = useStore((s) => s.runs)
   const primaryRunId = useStore((s) => s.primaryRunId)
@@ -41,10 +43,20 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
           ✕
         </button>
       </div>
+      {packs.length > 1 && (
+        <div className="seg">
+          {packs.map((p) => (
+            <button key={p.pack_id} className={p.pack_id === pack?.pack_id ? 'on' : ''} onClick={() => void selectPack(p.pack_id)}>
+              {p.name.split(',')[0]}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="list">
+        {samePack.length === 0 && <div className="dim small">No scenarios for this city yet.</div>}
         {samePack.map((s) => (
           <button key={s.scenario_id} className={`listitem ${s.scenario_id === scenarioId ? 'on' : ''}`} onClick={() => void selectScenario(s.scenario_id)}>
-            <span>{s.parent_scenario_id ? `↳ branch · ${s.change_set[s.change_set.length - 1] ?? s.scenario_id}` : s.label.split(' during ')[0]}</span>
+            <span>{s.parent_scenario_id ? `↳ branch · ${s.change_set[s.change_set.length - 1] ?? s.scenario_id}` : s.label.split(' during ')[0].replace(/\s*\(.*\)\)?\s*$/, '')}</span>
             <span className="dim">{s.scenario_id}</span>
           </button>
         ))}

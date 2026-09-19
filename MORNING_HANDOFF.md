@@ -41,6 +41,7 @@ this from the scenario drawer / tool rail / command bar.
 | frontend lint | `npm run lint` | passed (warnings only) |
 | frontend build | `npm run build` | passed (chunk-size warning) |
 | visual loop | `frontend/scripts/shoot-all.sh` | 7/7 screenshots written |
+| browser E2E | persistent testing agent, real SUMO runs, Mapbox Standard (recording on PR #1) | 7 pass, 3 fixed after the run (scenario list collapse, Share link, Waterloo switch) |
 
 ## Capability matrix
 
@@ -55,14 +56,14 @@ this from the scenario drawer / tool rail / command bar.
 | 7 | Journey inspection (select a person/bus, bubble, Why? → Swarm Lens trace) | tested | `visual-reviews/04`; bubble anchored to recorded position, Agent camera follows |
 | 8 | Typed scenario edits with ghost preview → branch → rerun | tested | `visual-reviews/05` (closure preview), storm branch `…-v941c7c` created from a prompt via `/edit/preview` + `/edit/apply` |
 | 9 | Counterfactual branches, parents immutable | tested | branch scenario has its own id/runs; parent runs unchanged |
-| 10 | Compare mode (baseline left / candidate right, synced camera + clock) | tested (screenshot); live drag **untested by a human** | `visual-reviews/07` |
+| 10 | Compare mode (baseline left / candidate right, synced camera + clock) | tested (browser E2E: held drags on both sides stayed aligned, one scrub moved both) | `visual-reviews/07`; PR #1 recording |
 | 11 | Modeled moving hazard (footprint, timed edge restrictions, column/debris visual) | tested (replay) | `visual-reviews/06`; `run-c11bd36b44c5`; declared hazard region, **not** tornado physics |
 | 12 | Closure integrity audit (vehroute exit-times, entered vs caught) | tested | `tests/test_closure_audit.py`; run warnings list counts |
 | 13 | Mapbox GL v3 Standard 3D basemap | tested | token in `frontend/.env.local` only; falls back to MapLibre + OpenFreeMap without it |
 | 14 | Share / replay export | **fallback** | local zip export (`POST /api/runs/{rid}/export`); Cloudflare R2 path is credential-gated and unexercised |
 | 15 | Sentry | **unavailable** | DSN-gated no-op |
 | 16 | Elastic Cloud, Baseten | **unavailable** | same client code, different env; never exercised |
-| 17 | Browser end-to-end by a persistent testing agent | **untested** | not run: requires your explicit approval; screenshots are visual inspection only |
+| 17 | Browser end-to-end by a persistent testing agent | tested once | recording + screenshots on PR #1; found: scenario list collapsed at normal zoom, Share showed a server path, no city switch — all three fixed in the follow-up commit; luma.gl uniform-reflection console messages remain (not exceptions) |
 
 ## Scenario and run ids worth opening
 
@@ -96,7 +97,8 @@ than hand-edited.
 
 ## Next steps that need you
 
-1. Review the PR diff; say "test it in the browser" if you want the persistent testing agent to run E2E.
+1. Review the PR diff. Browser E2E ran once (see the PR comment); the three UI failures it found were fixed
+   afterwards and verified by screenshot, not re-run end-to-end.
 2. Optional sponsor credentials: `BASETEN_API_KEY` (+`LLM_API_BASE`, `LLM_MODEL`), `ELASTIC_CLOUD_URL` +
    `ELASTIC_API_KEY`, `SENTRY_DSN`, `R2_ACCOUNT_ID`/`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY`/`R2_BUCKET` (+`R2_PUBLIC_BASE_URL`).
 3. Decide whether the hazard visual should move to a Three.js custom layer.

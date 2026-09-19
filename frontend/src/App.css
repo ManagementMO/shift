@@ -247,6 +247,10 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.toast a {
+  color: var(--accent);
+  font-weight: 600;
+}
 
 /* ---------- left tool rail ---------- */
 .rail {
@@ -377,8 +381,8 @@ button:disabled {
 }
 .listitem {
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
   text-align: left;
   padding: 7px 10px;
   border-radius: 10px;
@@ -394,6 +398,9 @@ button:disabled {
 .listitem .dim {
   font-size: 11px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 .listitem.on .dim {
   color: var(--accent);
@@ -546,11 +553,14 @@ input[type='checkbox'] {
   flex-direction: column;
   gap: 10px;
 }
+.drawer > * {
+  flex-shrink: 0;
+}
 .scenario-drawer {
   left: 14px;
 }
 .lens {
-  right: 72px;
+  right: 100px;
   width: 400px;
   padding: 0;
 }

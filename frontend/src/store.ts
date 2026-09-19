@@ -2,7 +2,8 @@ import { create } from 'zustand'
 import { api } from './api'
 import { buildIndex, type ReplayIndex } from './replay'
 import { clock } from './world/playback'
-import type { CameraMode } from './world/camera'
+import { cityPose, type CameraMode } from './world/camera'
+import { cameraTo } from './world/registry'
 import type {
   CityPack,
   HazardTrack,
@@ -38,6 +39,7 @@ export type Ghost = {
 
 type State = {
   health: Health | null
+  packs: { pack_id: string; name: string }[]
   pack: CityPack | null
   roads: GeoJSON.FeatureCollection | null
   scenarios: ScenarioSpec[]
@@ -66,6 +68,7 @@ type State = {
   building: string | null // "freeze → build → reload" banner text while a branch is compiled
 
   boot: () => Promise<void>
+  selectPack: (packId: string) => Promise<void>
   selectScenario: (sid: string) => Promise<void>
   createFlagship: (cohort: number, seed: number) => Promise<void>
   refreshRuns: () => Promise<void>
@@ -86,6 +89,7 @@ type State = {
 
 export const useStore = create<State>((set, get) => ({
   health: null,
+  packs: [],
   pack: null,
   roads: null,
   scenarios: [],
@@ -114,7 +118,7 @@ export const useStore = create<State>((set, get) => ({
   async boot() {
     try {
       const [health, scenarios, packs] = await Promise.all([api.health(), api.scenarios(), api.packs()])
-      set({ health, scenarios })
+      set({ health, scenarios, packs })
       const preferred = scenarios.find((s) => s.pack_id === 'toronto') ?? scenarios[scenarios.length - 1]
       const packId = preferred?.pack_id ?? packs.find((p) => p.pack_id === 'toronto')?.pack_id ?? packs[0]?.pack_id ?? 'toronto'
       const [pack, roads] = await Promise.all([api.pack(packId), api.roads(packId)])
@@ -125,11 +129,29 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
+  async selectPack(packId) {
+    if (packId === get().pack?.pack_id) return
+    try {
+      const [pack, roads] = await Promise.all([api.pack(packId), api.roads(packId)])
+      set({ pack, roads })
+      cameraTo(cityPose(pack.pack_id, pack.center), 'city')
+      const own = get().scenarios.filter((s) => s.pack_id === packId)
+      if (own.length) await get().selectScenario(own[own.length - 1].scenario_id)
+      else {
+        clock.pause()
+        set({ scenarioId: null, plans: [], runs: [], primaryRunId: null, compareRunId: null, selection: null, ghost: null })
+      }
+    } catch (e) {
+      set({ error: String(e) })
+    }
+  },
+
   async selectScenario(sid) {
     const sc = get().scenarios.find((s) => s.scenario_id === sid)
     if (sc && sc.pack_id !== get().pack?.pack_id) {
       const [pack, roads] = await Promise.all([api.pack(sc.pack_id), api.roads(sc.pack_id)])
       set({ pack, roads })
+      cameraTo(cityPose(pack.pack_id, pack.center), 'city')
     }
     clock.pause()
     clock.seek(0)

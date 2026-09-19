@@ -24,7 +24,7 @@ export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => v
   const setLens = useStore((s) => s.setLens)
   const primaryRunId = useStore((s) => s.primaryRunId)
   const setError = useStore((s) => s.setError)
-  const [shared, setShared] = useState<string | null>(null)
+  const [shared, setShared] = useState<{ href: string; label: string } | null>(null)
 
   const st = runStatus(run?.status, run?.progress, loading)
   const title = scenario ? shortLabel(scenario.label) : 'No scenario'
@@ -33,8 +33,9 @@ export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => v
     if (!primaryRunId) return
     try {
       const r = await api.exportReplay(primaryRunId)
-      setShared(r.url ?? `${r.mode}: ${r.path}`)
-      setTimeout(() => setShared(null), 6000)
+      const href = r.url ?? `/api/exports/${primaryRunId}.zip`
+      setShared({ href, label: r.url ? 'Uploaded to R2 — open link' : `Replay bundle ready (${(r.bytes / 1e6).toFixed(1)} MB) — download` })
+      setTimeout(() => setShared(null), 12000)
     } catch (e) {
       setError(String(e))
     }
@@ -68,7 +69,13 @@ export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => v
           Developer
         </button>
       </div>
-      {shared && <div className="toast">{shared}</div>}
+      {shared && (
+        <div className="toast">
+          <a href={shared.href} target="_blank" rel="noreferrer">
+            {shared.label}
+          </a>
+        </div>
+      )}
     </header>
   )
 }

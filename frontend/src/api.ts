@@ -77,5 +77,5 @@ export const api = {
   // evidence
   evidence: (bid: string) => get<EvidenceBundle>(`/api/evidence/${bid}`),
   // share
-  exportReplay: (rid: string) => post<{ path: string; mode: string; url: string | null }>(`/api/runs/${rid}/export`, {}),
+  exportReplay: (rid: string) => post<{ path: string; mode: string; url: string | null; bytes: number }>(`/api/runs/${rid}/export`, {}),
 }
