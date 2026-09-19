@@ -23,13 +23,11 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
   const plans = useStore((s) => s.plans)
   const runs = useStore((s) => s.runs)
   const primaryRunId = useStore((s) => s.primaryRunId)
-  const compareRunId = useStore((s) => s.compareRunId)
   const loadingReplay = useStore((s) => s.loadingReplay)
   const selectScenario = useStore((s) => s.selectScenario)
   const submitRun = useStore((s) => s.submitRun)
   const cancelRun = useStore((s) => s.cancelRun)
   const openRun = useStore((s) => s.openRun)
-  const setCompareMode = useStore((s) => s.setCompareMode)
   const select = useStore((s) => s.select)
 
   const samePack = scenarios.filter((s) => s.pack_id === (pack?.pack_id ?? s.pack_id))
@@ -106,20 +104,9 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
               <span key={r.run_id} className="runrow">
                 <StatusPill run={r} />
                 {r.status === 'completed' && (
-                  <>
-                    <button className={`ghostbtn ${primaryRunId === r.run_id ? 'on' : ''}`} onClick={() => void openRun(r.run_id, 'primary')}>
-                      {loadingReplay === r.run_id ? '…' : 'View'}
-                    </button>
-                    <button
-                      className={`ghostbtn ${compareRunId === r.run_id ? 'on' : ''}`}
-                      onClick={() => {
-                        void openRun(r.run_id, 'compare')
-                        setCompareMode(true)
-                      }}
-                    >
-                      Compare
-                    </button>
-                  </>
+                  <button className={`ghostbtn ${primaryRunId === r.run_id ? 'on' : ''}`} onClick={() => void openRun(r.run_id)} disabled={loadingReplay !== null}>
+                    {loadingReplay === r.run_id ? '…' : 'View'}
+                  </button>
                 )}
                 {(r.status === 'running' || r.status === 'queued') && (
                   <button className="ghostbtn" onClick={() => void cancelRun(r.run_id)}>

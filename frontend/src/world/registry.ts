@@ -2,6 +2,7 @@
 import { moveTo, type CameraMode, type CameraPose, type MapCamera } from './camera'
 
 export type SyncMap = MapCamera & {
+  cameraLocked?: boolean
   jumpTo: (o: CameraPose) => unknown
   isMoving: () => boolean
   on: (ev: string, cb: (e: { originalEvent?: unknown }) => void) => unknown
@@ -49,6 +50,7 @@ export function watchCameraMode(cb: (m: CameraMode) => void): () => void {
 
 export function cameraTo(pose: CameraPose, mode: CameraMode) {
   const lead = leadMap()
+  if (lead?.cameraLocked) return
   if (lead && mode === 'city' && lead.cityHero) lead.cityHero()
   else if (lead) moveTo(lead, pose, mode) // followers sync through the 'move' handler
   onMode?.(mode)

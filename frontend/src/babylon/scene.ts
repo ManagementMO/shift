@@ -31,6 +31,7 @@ import type { WorldData } from './worldData'
 export interface WorldSceneOptions {
   shadows?: boolean
   ssao?: boolean
+  fixedCamera?: boolean
 }
 
 export class WorldScene {
@@ -98,11 +99,11 @@ export class WorldScene {
     cam.panningInertia = 0.82
     cam.inertia = 0.84
     cam.useNaturalPinchZoom = true
-    cam.attachControl(canvas, true)
+    if (opts.fixedCamera === false) cam.attachControl(canvas, true)
     scene.onBeforeRenderObservable.add(() => {
       cam.panningSensibility = Math.max(4, 3200 / cam.radius) * 1.0
     })
-    this.camera = new WorldCamera(cam, world)
+    this.camera = new WorldCamera(cam, world, opts.fixedCamera ?? true)
 
     // --- shadows (sun) over the buildings; cascaded so the 6 km city and a 50 m block both resolve
     if (opts.shadows ?? true) {
@@ -167,6 +168,7 @@ export class WorldScene {
 
   resize(): void {
     this.engine.resize()
+    this.camera.resize(this.engine.getAspectRatio(this.camera.cam))
   }
 
   get fps(): number {

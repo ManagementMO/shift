@@ -29,6 +29,30 @@ function cityPose(world: WorldData): Pose {
   return { target: [tx, tz], radius: 1650, heading: 22, elevation: 34 }
 }
 
+function fixedCityPose(world: WorldData, aspect: number, fov: number): Pose {
+  const p = { ...cityPose(world), radius: 1450, elevation: 52 }
+  const [x0, z0, x1, z1] = world.crs.bounds_world
+  const margin = Math.min(x1 - x0, z1 - z0) * 0.12
+  const bounds = [x0 + margin, z0 + margin, x1 - margin, z1 - margin]
+  p.target = [Math.max(bounds[0], Math.min(bounds[2], p.target[0])), Math.max(bounds[1], Math.min(bounds[3], p.target[1]))]
+  const heading = p.heading * Math.PI / 180
+  const elevation = p.elevation * Math.PI / 180
+  const sin = Math.sin(elevation)
+  const cos = Math.cos(elevation)
+  const halfHeight = Math.tan(fov / 2)
+  const halfWidth = halfHeight * aspect
+  for (const v of [-halfHeight, halfHeight]) {
+    for (const u of [-halfWidth, halfWidth]) {
+      const denominator = sin - v * cos
+      const dx = (Math.sin(heading) * v + Math.cos(heading) * sin * u) / denominator
+      const dz = (Math.cos(heading) * v - Math.sin(heading) * sin * u) / denominator
+      if (dx) p.radius = Math.min(p.radius, ((dx < 0 ? bounds[0] : bounds[2]) - p.target[0]) / dx)
+      if (dz) p.radius = Math.min(p.radius, ((dz < 0 ? bounds[1] : bounds[3]) - p.target[1]) / dz)
+    }
+  }
+  return p
+}
+
 const ease = (t: number): number => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
 
 export class WorldCamera {
@@ -36,11 +60,30 @@ export class WorldCamera {
   mode: CameraMode = 'city'
   readonly cam: ArcRotateCamera
   readonly world: WorldData
+  readonly fixed: boolean
+  private fixedPose: Pose | null = null
 
-  constructor(cam: ArcRotateCamera, world: WorldData) {
+  constructor(cam: ArcRotateCamera, world: WorldData, fixed = false) {
     this.cam = cam
     this.world = world
-    this.apply(cityPose(world))
+    this.fixed = fixed
+    if (fixed) {
+      cam.detachControl()
+      cam.inputs.clear()
+      this.resize(cam.getEngine().getAspectRatio(cam))
+    } else this.apply(cityPose(world))
+  }
+
+  resize(aspect: number): void {
+    if (!this.fixed) return
+    this.fixedPose = fixedCityPose(this.world, aspect, this.cam.fov)
+    this.apply(this.fixedPose)
+    const c = this.cam
+    c.lowerRadiusLimit = c.upperRadiusLimit = c.radius
+    c.lowerAlphaLimit = c.upperAlphaLimit = c.alpha
+    c.lowerBetaLimit = c.upperBetaLimit = c.beta
+    c.inertialAlphaOffset = c.inertialBetaOffset = c.inertialRadiusOffset = 0
+    c.inertialPanningX = c.inertialPanningY = 0
   }
 
   get flying(): boolean {
@@ -59,6 +102,7 @@ export class WorldCamera {
   }
 
   apply(p: Pose): void {
+    p = this.fixedPose ?? p
     const c = this.cam
     c.target = new Vector3(p.target[0], p.y ?? 0, p.target[1])
     c.radius = p.radius
@@ -69,6 +113,7 @@ export class WorldCamera {
   }
 
   flyTo(to: Pose, ms = 1400, mode?: CameraMode): void {
+    if (this.fixed) return
     if (mode) this.mode = mode
     this.cancel()
     const from = this.pose
@@ -129,7 +174,7 @@ export class WorldCamera {
 
   /** Track a moving point (follow modes) without fighting the user's orbit: only the target moves. */
   follow(x: number, z: number, y = 0): void {
-    if (this.flight) return
+    if (this.fixed || this.flight) return
     this.cam.target.set(x, y, z)
   }
 }

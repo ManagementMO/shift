@@ -18,8 +18,6 @@ export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => v
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
   const run = useStore((s) => s.runs.find((r) => r.run_id === s.primaryRunId) ?? s.runs.find((r) => r.status === 'running' || r.status === 'queued'))
   const loading = useStore((s) => s.loadingReplay !== null)
-  const compareMode = useStore((s) => s.compareMode)
-  const setCompareMode = useStore((s) => s.setCompareMode)
   const lens = useStore((s) => s.lens)
   const setLens = useStore((s) => s.setLens)
   const primaryRunId = useStore((s) => s.primaryRunId)
@@ -56,9 +54,6 @@ export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => v
         {st.label}
       </div>
       <div className="strip-actions">
-        <button className={`ghostbtn ${compareMode ? 'on' : ''}`} onClick={() => setCompareMode(!compareMode)}>
-          Compare
-        </button>
         <button className="ghostbtn" onClick={() => void share()} disabled={!primaryRunId}>
           {shared ? 'Exported' : 'Share'}
         </button>

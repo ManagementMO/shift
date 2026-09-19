@@ -7,13 +7,16 @@ import { AmbientLight, DirectionalLight, LightingEffect } from '@deck.gl/core'
 import { useStore } from '../store'
 import { clock } from './playback'
 import { buildWorldLayers, SLOT_NAMES, slotAnchorId } from './layers'
-import { cityPose, TORONTO_CITY, type CameraPose } from './camera'
+import { cityPose, type CameraPose } from './camera'
 import { registerMap, renderStats } from './registry'
 
 type MapLike = {
   addControl: (c: maplibregl.IControl, pos?: string) => unknown
   remove: () => void
   getZoom: () => number
+  setMinZoom: (zoom: number) => unknown
+  setMaxZoom: (zoom: number) => unknown
+  unproject: (point: [number, number]) => { lng: number; lat: number }
   on: (ev: string, cb: (e: never) => void) => unknown
   off: (ev: string, cb: (e: never) => void) => unknown
   once: (ev: string, cb: () => void) => unknown
@@ -27,6 +30,16 @@ type MapLike = {
 
 const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/positron'
 export const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined
+const FIXED_CONTROLS = {
+  scrollZoom: false,
+  boxZoom: false,
+  dragRotate: false,
+  dragPan: false,
+  keyboard: false,
+  doubleClickZoom: false,
+  touchZoomRotate: false,
+  touchPitch: false,
+}
 
 // Mapbox Standard, art-directed: no POI/transit/road-label clutter, faded palette, warm daylight.
 const STANDARD_CONFIG: Record<string, unknown> = {
@@ -78,6 +91,7 @@ const LIGHTING = new LightingEffect({
 })
 
 export default function WorldMap({ runId, side }: { runId: string | null; side: 'solo' | 'left' | 'right' }) {
+  const pack = useStore((s) => s.pack)
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLike | null>(null)
   const overlayRef = useRef<MapboxOverlay | null>(null)
@@ -89,7 +103,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
   }, [runId])
 
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return
+    if (!pack || !containerRef.current || mapRef.current) return
     const container = containerRef.current
     let disposed = false
     let unregister = () => {}
@@ -98,7 +112,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
 
     patchTexImage3D()
     const overlay = new MapboxOverlay({
-      interleaved: true,
+      interleaved: Boolean(MAPBOX_TOKEN),
       layers: [],
       effects: [LIGHTING],
       useDevicePixels: true,
@@ -106,8 +120,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
     overlayRef.current = overlay
 
     const init = async () => {
-      const pack = useStore.getState().pack
-      const pose = pack ? cityPose(pack.pack_id, pack.center) : TORONTO_CITY
+      const pose = { ...cityPose(pack.pack_id, pack.center), pitch: 38 }
       let map: MapLike
       if (MAPBOX_TOKEN) {
         const mapboxgl = (await import('mapbox-gl')).default
@@ -119,10 +132,12 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
           zoom: pose.zoom,
           pitch: pose.pitch,
           bearing: pose.bearing,
+          ...FIXED_CONTROLS,
+          minPitch: pose.pitch,
+          maxPitch: pose.pitch,
           antialias: true,
           attributionControl: false,
           logoPosition: 'bottom-right',
-          maxPitch: 75,
           minZoom: 11,
           config: { basemap: STANDARD_CONFIG },
         } as ConstructorParameters<typeof mapboxgl.Map>[0])
@@ -136,7 +151,9 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
           zoom: pose.zoom,
           pitch: pose.pitch,
           bearing: pose.bearing,
-          maxPitch: 75,
+          ...FIXED_CONTROLS,
+          minPitch: pose.pitch,
+          maxPitch: pose.pitch,
           attributionControl: { compact: true },
         })
         map = m as unknown as MapLike
@@ -145,6 +162,29 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
         map.remove()
         return
       }
+      map.cameraLocked = true
+      const lockView = () => {
+        const width = container.clientWidth
+        const height = container.clientHeight
+        const [west, south, east, north] = pack.bbox
+        const dx = (east - west) * 0.1
+        const dy = (north - south) * 0.1
+        const corners: [number, number][] = [[0, 0], [width, 0], [0, height], [width, height]]
+        map.setMinZoom(0)
+        map.setMaxZoom(24)
+        let zoom = pose.zoom
+        for (; zoom < 24; zoom += 0.25) {
+          map.jumpTo({ ...pose, zoom })
+          if (corners.every((corner) => {
+            const p = map.unproject(corner)
+            return p.lng >= west + dx && p.lng <= east - dx && p.lat >= south + dy && p.lat <= north - dy
+          })) break
+        }
+        map.setMinZoom(map.getZoom())
+        map.setMaxZoom(map.getZoom())
+      }
+      lockView()
+      map.on('resize', lockView)
       // Invisible per-slot anchor layers that deck layer groups are inserted before (see SLOT in layers.ts).
       let anchorsReady = false
       const ensureAnchors = () => {
@@ -219,7 +259,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
       mapRef.current?.remove()
       mapRef.current = null
     }
-  }, [side])
+  }, [side, pack])
 
   return <div ref={containerRef} className={`world world-${side}`} />
 }

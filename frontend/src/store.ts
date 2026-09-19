@@ -25,7 +25,7 @@ export type Selection =
   | { kind: 'restriction'; id: string }
   | null
 
-export type ToolId = 'road' | 'intersection' | 'stop' | 'route' | 'population' | 'event' | 'closure' | 'weather' | 'custom'
+export type ToolId = 'road' | 'intersection' | 'stop' | 'route' | 'population' | 'event' | 'closure' | 'weather'
 
 export type LensTab = 'people' | 'agents' | 'transport' | 'diagnostics'
 
@@ -48,7 +48,6 @@ type State = {
   plans: PlanWithValidation[]
   runs: SimulationRun[]
   primaryRunId: string | null
-  compareRunId: string | null
   replays: Record<string, ReplayIndex>
   loadingReplay: string | null
   /** UI-rate copy of the playback clock (≈10 Hz); the renderer reads `clock.t` directly. */
@@ -63,7 +62,6 @@ type State = {
   ghost: Ghost | null
   lens: LensTab | null
   developer: boolean
-  compareMode: boolean
   cameraMode: CameraMode
   building: string | null // "freeze → build → reload" banner text while a branch is compiled
 
@@ -74,7 +72,7 @@ type State = {
   refreshRuns: () => Promise<void>
   submitRun: (planId: string, seed?: number) => Promise<void>
   cancelRun: (rid: string) => Promise<void>
-  openRun: (rid: string, slot: 'primary' | 'compare') => Promise<void>
+  openRun: (rid: string) => Promise<void>
   select: (s: Selection) => void
   setInvestigation: (i: Investigation | null) => void
   setError: (e: string | null) => void
@@ -82,7 +80,6 @@ type State = {
   setGhost: (g: Ghost | null) => void
   setLens: (l: LensTab | null) => void
   setDeveloper: (d: boolean) => void
-  setCompareMode: (c: boolean) => void
   setCameraMode: (m: CameraMode) => void
   applyGhost: () => Promise<void>
 }
@@ -98,11 +95,10 @@ export const useStore = create<State>((set, get) => ({
   plans: [],
   runs: [],
   primaryRunId: null,
-  compareRunId: null,
   replays: {},
   loadingReplay: null,
-  t: 0,
-  playing: false,
+  t: clock.t,
+  playing: clock.playing,
   speed: clock.speed,
   selection: null,
   investigation: null,
@@ -111,7 +107,6 @@ export const useStore = create<State>((set, get) => ({
   ghost: null,
   lens: null,
   developer: false,
-  compareMode: false,
   cameraMode: 'city',
   building: null,
 
@@ -124,6 +119,7 @@ export const useStore = create<State>((set, get) => ({
       const [pack, roads] = await Promise.all([api.pack(packId), api.roads(packId)])
       set({ pack, roads })
       if (preferred) await get().selectScenario(preferred.scenario_id)
+      else await get().createFlagship(240, 7)
     } catch (e) {
       set({ error: String(e) })
     }
@@ -139,7 +135,8 @@ export const useStore = create<State>((set, get) => ({
       if (own.length) await get().selectScenario(own[own.length - 1].scenario_id)
       else {
         clock.pause()
-        set({ scenarioId: null, plans: [], runs: [], primaryRunId: null, compareRunId: null, selection: null, ghost: null })
+        set({ scenarioId: null, plans: [], runs: [], primaryRunId: null, loadingReplay: null, selection: null, ghost: null })
+        await get().createFlagship(240, 7)
       }
     } catch (e) {
       set({ error: String(e) })
@@ -156,11 +153,17 @@ export const useStore = create<State>((set, get) => ({
     clock.pause()
     clock.seek(0)
     if (sc) clock.setHorizon(sc.constraints.horizon_s)
-    set({ scenarioId: sid, primaryRunId: null, compareRunId: null, selection: null, ghost: null })
+    set({ scenarioId: sid, plans: [], runs: [], travelers: {}, primaryRunId: null, loadingReplay: null, selection: null, ghost: null })
     const [plans, runs, demand] = await Promise.all([api.plans(sid), api.runs(sid), api.demand(sid).catch(() => null)])
+    if (get().scenarioId !== sid) return
     set({ plans, runs, travelers: Object.fromEntries((demand?.travelers ?? []).map((t) => [t.person_id, t])) })
     const done = runs.filter((r) => r.status === 'completed')
-    if (done.length) await get().openRun(done[done.length - 1].run_id, 'primary')
+    if (done.length) await get().openRun(done[done.length - 1].run_id)
+    else if (!runs.length) {
+      const valid = plans.filter((p) => p.validation?.valid)
+      const initial = valid.find((p) => p.plan.family === 'none') ?? valid[0]
+      if (initial) await get().submitRun(initial.plan.plan_id)
+    }
   },
 
   async createFlagship(cohort, seed) {
@@ -178,7 +181,11 @@ export const useStore = create<State>((set, get) => ({
     const sid = get().scenarioId
     if (!sid) return
     const runs = await api.runs(sid)
+    if (get().scenarioId !== sid) return
     set({ runs })
+    if (get().primaryRunId || get().loadingReplay) return
+    const done = runs.filter((r) => r.status === 'completed' && r.scenario_id === sid)
+    if (done.length) await get().openRun(done[done.length - 1].run_id)
   },
 
   async submitRun(planId, seed = 1) {
@@ -197,24 +204,29 @@ export const useStore = create<State>((set, get) => ({
     await get().refreshRuns()
   },
 
-  async openRun(rid, slot) {
-    const { replays, runs } = get()
-    if (!replays[rid]) {
-      const run = runs.find((r) => r.run_id === rid) ?? (await api.run(rid))
-      set({ loadingReplay: rid })
-      try {
-        const bundle = await api.bundle(run)
-        const rx = buildIndex(bundle)
+  async openRun(rid) {
+    const { replays, runs, scenarioId, primaryRunId, loadingReplay } = get()
+    if (rid === primaryRunId || rid === loadingReplay) return
+    clock.pause()
+    set({ loadingReplay: rid })
+    try {
+      let rx = replays[rid]
+      if (!rx) {
+        const run = runs.find((r) => r.run_id === rid) ?? (await api.run(rid))
+        rx = buildIndex(await api.bundle(run))
         set({ replays: { ...get().replays, [rid]: rx } })
-        clock.setHorizon(Math.max(clock.horizon, rx.tMax))
-      } catch (e) {
-        set({ error: String(e), loadingReplay: null })
-        return
       }
-      set({ loadingReplay: null })
+      if (get().scenarioId !== scenarioId || get().loadingReplay !== rid) return
+      const scenario = get().scenarios.find((s) => s.scenario_id === scenarioId)
+      clock.setHorizon(Math.max(scenario?.constraints.horizon_s ?? 0, rx.tMax))
+      clock.seek(0)
+      set({ primaryRunId: rid, selection: null })
+      clock.play()
+    } catch (e) {
+      if (get().scenarioId === scenarioId && get().loadingReplay === rid) set({ error: String(e) })
+    } finally {
+      if (get().loadingReplay === rid) set({ loadingReplay: null })
     }
-    if (slot === 'primary') set({ primaryRunId: rid })
-    else set({ compareRunId: rid === get().compareRunId ? null : rid })
   },
 
   select: (selection) => set({ selection }),
@@ -224,7 +236,6 @@ export const useStore = create<State>((set, get) => ({
   setGhost: (ghost) => set({ ghost }),
   setLens: (lens) => set({ lens }),
   setDeveloper: (developer) => set({ developer }),
-  setCompareMode: (compareMode) => set({ compareMode }),
   setCameraMode: (cameraMode) => set({ cameraMode }),
 
   /** Confirm a ghost: the backend applies the typed proposal to a NEW scenario id (parent stays immutable). */
