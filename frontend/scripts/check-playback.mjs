@@ -21,7 +21,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
     const errors = []
     page.on('pageerror', (error) => {
-      const detail = error.stack ?? error.message
+      const detail = error.stack || error.message || String(error)
       if (!errors.includes(detail)) errors.push(detail)
     })
     let submitted = false

@@ -8,13 +8,14 @@ export interface WorldCanvasProps {
   onReady?: (scene: WorldScene) => void
   className?: string
   fixedCamera?: boolean
+  quality?: 'high' | 'balanced'
 }
 
 /**
  * Mounts one Babylon engine on one canvas.  React owns nothing inside the scene; it only reports lifecycle
  * (loading / ready / error) and hands the imperative `WorldScene` to the parent through `onReady`.
  */
-export default function WorldCanvas({ packId, onReady, className, fixedCamera = false }: WorldCanvasProps) {
+export default function WorldCanvas({ packId, onReady, className, fixedCamera = false, quality = 'high' }: WorldCanvasProps) {
   const ref = useRef<HTMLCanvasElement>(null)
   const [state, setState] = useState<{ phase: 'loading' | 'building' | 'ready' | 'error'; detail?: string }>({ phase: 'loading' })
 
@@ -29,14 +30,21 @@ export default function WorldCanvas({ packId, onReady, className, fixedCamera = 
         if (cancelled) return
         setState({ phase: 'building' })
         // let the "building" frame paint before the (synchronous) geometry pass
-        requestAnimationFrame(() => {
+        requestAnimationFrame(async () => {
           if (cancelled) return
           try {
-            ws = new WorldScene(canvas, world, { fixedCamera })
+            const worldScene = new WorldScene(canvas, world, { fixedCamera, quality })
+            ws = worldScene
+            await worldScene.assetsReady
+            if (cancelled) return
+            await worldScene.scene.whenReadyAsync(true)
+            if (cancelled) return
+            await new Promise<void>((resolve) => worldScene.scene.onAfterRenderObservable.addOnce(() => resolve()))
+            if (cancelled) return
             setState({ phase: 'ready' })
-            onReady?.(ws)
+            onReady?.(worldScene)
           } catch (e) {
-            setState({ phase: 'error', detail: e instanceof Error ? e.message : String(e) })
+            if (!cancelled) setState({ phase: 'error', detail: e instanceof Error ? e.message : String(e) })
           }
         })
       })
@@ -49,7 +57,7 @@ export default function WorldCanvas({ packId, onReady, className, fixedCamera = 
     }
     // onReady is intentionally not a dependency: remounting the engine on every parent render is the one thing to avoid.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [packId, fixedCamera])
+  }, [packId, fixedCamera, quality])
 
   return (
     <div className={className ?? 'bworld'}>

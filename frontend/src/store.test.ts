@@ -3,12 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from './api'
 import { buildIndex } from './replay'
 import { useStore } from './store'
-import type { CityPack, PlanWithValidation, RunBundle, ScenarioSpec, SimulationRun } from './types'
+import type { CityPack, DemandSet, Health, PlanWithValidation, RunBundle, ScenarioSpec, SimulationRun, Traveler } from './types'
 import { clock } from './world/playback'
-
-vi.mock('./api', () => ({ api: {
-  plans: vi.fn(), runs: vi.fn(), demand: vi.fn(), run: vi.fn(), bundle: vi.fn(), submitRun: vi.fn(),
-} }))
 
 const pack: CityPack = {
   pack_id: 'toronto', name: 'Toronto', version: '1', bbox: [0, 0, 1, 1], center: [0, 0],
@@ -37,31 +33,39 @@ const bundle: RunBundle = {
   events: [], occupancy: {}, stopQueue: {}, compile: null,
 }
 
-beforeEach(() => {
-  vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
-  vi.stubGlobal('cancelAnimationFrame', vi.fn())
-  clock.pause()
-  clock.seek(0)
-  clock.setSpeed(1)
-  useStore.setState({
-    ...useStore.getInitialState(), pack, scenarios: [scenario], scenarioId: scenario.scenario_id,
-    runs: [run], replays: {}, playing: false, t: 0,
-  })
-  vi.mocked(api.plans).mockResolvedValue([])
-  vi.mocked(api.runs).mockResolvedValue([run])
-  vi.mocked(api.demand).mockResolvedValue({ demand_id: 'demand', seed: 1, travelers: [], synthetic: true, generation_method: 'test' })
-  vi.mocked(api.run).mockResolvedValue(run)
-  vi.mocked(api.bundle).mockResolvedValue(bundle)
-  vi.mocked(api.submitRun).mockResolvedValue({ ...run, status: 'queued' })
-})
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
 
 afterEach(() => {
   clock.pause()
-  vi.clearAllMocks()
+  clock.seek(0)
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
 describe('opening a city replay', () => {
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    clock.pause()
+    clock.seek(0)
+    clock.setSpeed(1)
+    useStore.setState({
+      ...useStore.getInitialState(), pack, scenarios: [scenario], scenarioId: scenario.scenario_id,
+      runs: [run], replays: {}, playing: false, t: 0,
+    }, true)
+    vi.spyOn(api, 'plans').mockResolvedValue([])
+    vi.spyOn(api, 'runs').mockResolvedValue([run])
+    vi.spyOn(api, 'demand').mockResolvedValue({ demand_id: 'demand', seed: 1, travelers: [], synthetic: true, generation_method: 'test' })
+    vi.spyOn(api, 'run').mockResolvedValue(run)
+    vi.spyOn(api, 'bundle').mockResolvedValue(bundle)
+    vi.spyOn(api, 'submitRun').mockResolvedValue({ ...run, status: 'queued' })
+  })
+
   it('starts the completed replay when selecting a scenario', async () => {
     await useStore.getState().selectScenario(scenario.scenario_id)
     expect(useStore.getState().primaryRunId).toBe(run.run_id)
@@ -165,6 +169,20 @@ describe('opening a city replay', () => {
     expect(clock.playing).toBe(false)
   })
 
+  it('does not restart the old replay after switching to a fresh district', async () => {
+    const loading = deferred<RunBundle>()
+    vi.mocked(api.bundle).mockReturnValueOnce(loading.promise)
+    vi.spyOn(api, 'pack').mockResolvedValue({ ...pack, pack_id: 'waterloo_e7' })
+    vi.spyOn(api, 'roads').mockResolvedValue({ type: 'FeatureCollection', features: [] })
+    const opening = useStore.getState().openRun(run.run_id)
+    await useStore.getState().selectPack('waterloo_e7')
+    loading.resolve(bundle)
+    await opening
+    expect(useStore.getState().pack?.pack_id).toBe('waterloo_e7')
+    expect(useStore.getState().primaryRunId).toBeNull()
+    expect(clock.playing).toBe(false)
+  })
+
   it('automatically opens the first completed run discovered by polling', async () => {
     await useStore.getState().refreshRuns()
     expect(useStore.getState().primaryRunId).toBe(run.run_id)
@@ -176,5 +194,121 @@ describe('opening a city replay', () => {
     clock.pause()
     await useStore.getState().refreshRuns()
     expect(clock.playing).toBe(false)
+  })
+})
+
+describe('District selection', () => {
+  const scenario = (pack_id: string, scenario_id: string): ScenarioSpec => ({
+    pack_id, scenario_id, constraints: { horizon_s: 2700 },
+  }) as ScenarioSpec
+
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    useStore.setState(useStore.getInitialState(), true)
+    vi.spyOn(api, 'health').mockResolvedValue({ ok: true } as Health)
+    vi.spyOn(api, 'packs').mockResolvedValue([
+      { pack_id: 'toronto', name: 'Toronto' },
+      { pack_id: 'waterloo_e7', name: 'Waterloo · E7' },
+    ])
+    vi.spyOn(api, 'scenarios').mockResolvedValue([scenario('toronto', 'toronto-run')])
+    vi.spyOn(api, 'pack').mockImplementation(async (pack_id) => ({ pack_id, center: [-80.5395046, 43.4729528] }) as CityPack)
+    vi.spyOn(api, 'roads').mockResolvedValue({ type: 'FeatureCollection', features: [] })
+    vi.spyOn(api, 'plans').mockResolvedValue([])
+    vi.spyOn(api, 'runs').mockResolvedValue([])
+    vi.spyOn(api, 'demand').mockResolvedValue({ travelers: [] } as unknown as DemandSet)
+    vi.spyOn(api, 'createFlagship').mockRejectedValue(new Error('Unexpected scenario creation'))
+  })
+
+  it('ignores an earlier district response after a newer selection completes', async () => {
+    const slow = deferred<CityPack>()
+    vi.mocked(api.pack).mockImplementationOnce(() => slow.promise)
+    const first = useStore.getState().selectPack('waterloo_e7')
+    await useStore.getState().selectPack('waterloo')
+    const latest = useStore.getState()
+    slow.resolve({ pack_id: 'waterloo_e7', center: [-80.54, 43.47] } as CityPack)
+    await first
+    expect(useStore.getState().pack).toBe(latest.pack)
+    expect(useStore.getState().roads).toBe(latest.roads)
+    expect(useStore.getState().pack?.pack_id).toBe('waterloo')
+  })
+
+  it('cancels a pending switch when the currently displayed district is selected again', async () => {
+    useStore.setState({ pack: { pack_id: 'toronto' } as CityPack })
+    const slow = deferred<CityPack>()
+    vi.mocked(api.pack).mockImplementationOnce(() => slow.promise)
+    const first = useStore.getState().selectPack('waterloo_e7')
+    await useStore.getState().selectPack('toronto')
+    slow.resolve({ pack_id: 'waterloo_e7', center: [-80.54, 43.47] } as CityPack)
+    await first
+    expect(useStore.getState().pack?.pack_id).toBe('toronto')
+  })
+
+  it('does not surface errors from an obsolete district request', async () => {
+    const slow = deferred<CityPack>()
+    vi.mocked(api.pack).mockImplementationOnce(() => slow.promise)
+    const first = useStore.getState().selectPack('waterloo_e7')
+    await useStore.getState().selectPack('waterloo')
+    slow.reject(new Error('obsolete request failed'))
+    await first
+    expect(useStore.getState().pack?.pack_id).toBe('waterloo')
+    expect(useStore.getState().error).toBeNull()
+  })
+
+  it('does not let an unfinished boot overwrite a manual district selection', async () => {
+    const slow = deferred<CityPack>()
+    vi.mocked(api.pack).mockImplementationOnce(() => slow.promise)
+    const boot = useStore.getState().boot()
+    await vi.waitFor(() => expect(api.pack).toHaveBeenCalledWith('toronto'))
+    await useStore.getState().selectPack('waterloo_e7')
+    slow.resolve({ pack_id: 'toronto', center: [-79.38, 43.64] } as CityPack)
+    await boot
+    expect(useStore.getState().pack?.pack_id).toBe('waterloo_e7')
+    expect(useStore.getState().scenarioId).toBeNull()
+  })
+
+  it('opens a requested E7 pack even when only Toronto has scenarios', async () => {
+    await useStore.getState().boot('waterloo_e7')
+    expect(useStore.getState().pack?.pack_id).toBe('waterloo_e7')
+    expect(useStore.getState().scenarioId).toBeNull()
+    expect(api.plans).not.toHaveBeenCalled()
+    expect(api.createFlagship).not.toHaveBeenCalled()
+  })
+
+  it('opens the latest scenario belonging to the requested district', async () => {
+    vi.mocked(api.scenarios).mockResolvedValue([
+      scenario('waterloo_e7', 'e7-old'), scenario('toronto', 'toronto-run'), scenario('waterloo_e7', 'e7-new'),
+    ])
+    await useStore.getState().boot('waterloo_e7')
+    expect(useStore.getState().scenarioId).toBe('e7-new')
+    expect(api.pack).toHaveBeenCalledWith('waterloo_e7')
+    expect(api.plans).toHaveBeenCalledWith('e7-new')
+  })
+
+  it.each([undefined, 'missing-pack'])('preserves the Toronto default for %s', async (packId) => {
+    await useStore.getState().boot(packId)
+    expect(useStore.getState().pack?.pack_id).toBe('toronto')
+    expect(useStore.getState().scenarioId).toBe('toronto-run')
+  })
+
+  it('clears the previous city replay and selection when switching to a fresh district', async () => {
+    useStore.setState({
+      pack: { pack_id: 'toronto' } as CityPack,
+      scenarioId: 'toronto-run', primaryRunId: 'old-run',
+      travelers: { old: { person_id: 'old' } as Traveler }, selection: { kind: 'person', id: 'old' }, cameraMode: 'agent',
+    })
+    clock.seek(120)
+    await useStore.getState().selectPack('waterloo_e7')
+    const state = useStore.getState()
+    expect(state.pack?.pack_id).toBe('waterloo_e7')
+    expect(state.scenarioId).toBeNull()
+    expect(state.primaryRunId).toBeNull()
+    expect(state).not.toHaveProperty('compareRunId')
+    expect(state).not.toHaveProperty('compareMode')
+    expect(state.cameraMode).toBe('city')
+    expect(state.travelers).toEqual({})
+    expect(state.selection).toBeNull()
+    expect(clock.t).toBe(0)
+    expect(api.createFlagship).not.toHaveBeenCalled()
   })
 })

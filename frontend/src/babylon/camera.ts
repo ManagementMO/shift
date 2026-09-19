@@ -5,6 +5,7 @@
 
 import type { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
+import { Camera } from '@babylonjs/core/Cameras/camera'
 
 import type { WorldData } from './worldData'
 
@@ -22,9 +23,13 @@ export interface Pose {
 
 /** Downtown / waterfront hero: lake in the lower third, skyline rising toward the top of the frame. */
 export function cityPose(world: WorldData): Pose {
+  if (world.pack_id === 'waterloo_e7') {
+    const e7 = world.landmarks.find((l) => l.kind === 'engineering_7') ?? world.venue
+    return { target: [e7.x, e7.z], radius: 1050, heading: -35, elevation: 48 }
+  }
   const cn = world.landmarks.find((l) => l.kind === 'cn_tower')
   const union = world.landmarks.find((l) => l.kind === 'union_station')
-  if (cn && union) return { target: [(cn.x + union.x) / 2, (cn.z + union.z) / 2 - 40], radius: 1650, heading: 22, elevation: 34 }
+  if (cn && union) return { target: [(cn.x + union.x) / 2 + 40, (cn.z + union.z) / 2 + 80], radius: 1250, heading: -28, elevation: 43, y: 75 }
   const [x0, z0, x1, z1] = world.crs.bounds_world
   return { target: [(x0 + x1) / 2, (z0 + z1) / 2], radius: Math.max(450, Math.min(8500, Math.hypot(x1 - x0, z1 - z0) * 0.7)), heading: 22, elevation: 38 }
 }
@@ -63,17 +68,20 @@ export class WorldCamera {
   readonly fixed: boolean
   private fixedPose: Pose | null = null
   private presetPose: Pose | null = null
+  projection: 'isometric' | 'perspective' = 'isometric'
 
   constructor(cam: ArcRotateCamera, world: WorldData, fixed = false) {
     this.cam = cam
     this.world = world
     this.fixed = fixed
+    this.setProjection('isometric')
     if (fixed) {
       cam.detachControl()
       cam.inputs.clear()
       this.presetPose = { ...cityPose(world), radius: 1450, elevation: 52 }
       this.resize(cam.getEngine().getAspectRatio(cam))
     } else this.city(0)
+    cam.getScene().onBeforeRenderObservable.add(() => this.updateProjection())
   }
 
   resize(aspect: number): void {
@@ -91,6 +99,23 @@ export class WorldCamera {
   private renderPose(p: Pose, aspect = this.cam.getEngine().getAspectRatio(this.cam)): void {
     if (this.fixed) this.fixedPose = boundedPose(this.world, p, aspect, this.cam.fov)
     this.apply(p)
+  }
+
+  setProjection(projection: 'isometric' | 'perspective'): void {
+    this.projection = projection
+    this.cam.mode = projection === 'isometric' ? Camera.ORTHOGRAPHIC_CAMERA : Camera.PERSPECTIVE_CAMERA
+    this.updateProjection()
+  }
+
+  private updateProjection(): void {
+    if (this.projection !== 'isometric') return
+    const engine = this.cam.getEngine()
+    const aspect = engine.getRenderWidth() / Math.max(1, engine.getRenderHeight())
+    const half = this.cam.radius * 0.44
+    this.cam.orthoLeft = -half * aspect
+    this.cam.orthoRight = half * aspect
+    this.cam.orthoBottom = -half
+    this.cam.orthoTop = half
   }
 
   get flying(): boolean {
@@ -124,6 +149,7 @@ export class WorldCamera {
       c.inertialAlphaOffset = c.inertialBetaOffset = c.inertialRadiusOffset = 0
       c.inertialPanningX = c.inertialPanningY = 0
     }
+    this.updateProjection()
   }
 
   flyTo(to: Pose, ms = 1400, mode?: CameraMode): void {
@@ -166,8 +192,9 @@ export class WorldCamera {
   }
 
   city(ms = 1600): void {
+    this.setProjection('isometric')
     const pose = cityPose(this.world)
-    this.setPreset({ ...pose, radius: 1450, elevation: 52 }, 'city', ms)
+    this.setPreset(this.fixed ? { ...pose, radius: 1450, elevation: 52 } : pose, 'city', ms)
   }
 
   district(x: number, z: number, ms = 1200): void {
@@ -188,6 +215,7 @@ export class WorldCamera {
   }
 
   agent(x: number, z: number, heading: number | null, ms = 900): void {
+    this.setProjection('perspective')
     this.flyTo({ target: [x, z], radius: 95, heading: heading ?? this.pose.heading, elevation: 28, y: 2 }, ms, 'agent')
   }
 

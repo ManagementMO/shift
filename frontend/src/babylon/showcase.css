@@ -1,0 +1,48 @@
+.cityscape{position:fixed;inset:0;background:#aebbb5;color:#243a35;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+.cityscape-header{position:absolute;left:32px;right:32px;top:24px;display:flex;align-items:center;gap:24px;pointer-events:none}
+.cityscape-header a{pointer-events:auto;text-decoration:none;color:inherit}
+.cityscape-wordmark{font-size:15px;font-weight:850;letter-spacing:.14em;background:#f7f6eeeb;padding:14px 18px;border:1px solid #ffffff80;border-radius:5px;box-shadow:0 3px 20px #24342b10}
+.cityscape-wordmark span{color:#4e7967}
+.cityscape-location{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:650;padding:11px 15px;background:#f7f6eee8;border-radius:4px}
+.cityscape-location i{width:6px;height:6px;border-radius:50%;background:#4d7860}
+.cityscape-location span{font-weight:400;color:#738078;margin-left:8px}
+.cityscape-simulation{margin-left:auto;background:#f7f6eeee;padding:13px 17px;border:1px solid #fff8;border-radius:5px;font-size:12px;font-weight:650;box-shadow:0 3px 20px #24342b10}
+.cityscape-simulation span{padding-left:16px;font-size:17px;color:#4e7967}
+.cityscape-title{position:absolute;left:32px;top:114px;padding:22px 25px 21px;pointer-events:none;background:#f7f6eeeb;border-radius:5px;box-shadow:0 5px 24px #1e322317;width:248px;border:1px solid #fff7}
+.cityscape-eyebrow{font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:#637868;font-weight:650}
+.cityscape-title h1{font-family:Georgia,'Times New Roman',serif;font-weight:400;letter-spacing:-.065em;line-height:1.06;font-size:45px;margin:13px 0 15px}
+.cityscape-title em{font-weight:400;color:#506f5c}
+.cityscape-title p{font-size:12px;line-height:1.65;margin:0;color:#6d786e}
+.cityscape-rule{height:1px;background:#263f321e;margin:19px 0 13px;width:30px}
+.cityscape-coordinate{font-size:9px;letter-spacing:.12em;color:#748073;font-variant-numeric:tabular-nums}
+.cityscape-settings{position:absolute;right:32px;top:98px;display:flex;gap:1px;background:#f7f6eeee;border:1px solid #fff8;border-radius:5px;padding:4px;box-shadow:0 3px 20px #24342b10}
+.cityscape-settings button{font-size:11px;padding:9px 12px;min-width:108px}
+.cityscape-settings button+button{border-left:1px solid #243a3522}
+.cityscape-navigation{position:absolute;right:32px;top:45%;display:grid;border:1px solid #fff8;background:#f7f6eeee;border-radius:5px;box-shadow:0 3px 20px #24342b10}
+.cityscape-navigation button{width:39px;height:38px;font-size:21px}
+.cityscape-navigation button+button{border-top:1px solid #243a3515}
+.cityscape-footer{position:absolute;bottom:48px;left:32px;right:32px;display:flex;align-items:stretch;justify-content:space-between;gap:18px}
+.cityscape-views{display:flex;gap:4px;padding:6px;background:#f7f6eeee;border:1px solid #fff8;border-radius:6px;box-shadow:0 4px 24px #24342b18}
+.cityscape-views button{display:flex;flex-direction:column;align-items:flex-start;padding:10px 17px;gap:5px;border-radius:3px;font-size:11px;font-weight:600;min-width:106px;transition:background .18s,color .18s}
+.cityscape-views button span{font-size:8px;letter-spacing:.09em;opacity:.55;font-variant-numeric:tabular-nums}
+.cityscape-views button.active{background:#304d40;color:#f6f5ed}
+.cityscape-playback{display:flex;align-items:center;gap:13px;background:#f7f6eeee;border:1px solid #fff8;border-radius:6px;padding:12px 16px;box-shadow:0 4px 24px #24342b18}
+.cityscape-playback>button{width:31px;height:31px;background:#304d40;color:#f6f5ed;border-radius:50%;font-size:11px;flex-shrink:0}
+.cityscape-playback>div{display:grid;gap:5px}
+.cityscape-playback b{font-size:10px;font-weight:600}
+.cityscape-playback span{font-size:9px;color:#778174;font-variant-numeric:tabular-nums}
+.cityscape-playback .cityscape-fps{margin-left:12px;font-size:15px;font-variant-numeric:tabular-nums;color:#405b49}
+.cityscape-fps small{font-size:9px}
+.cityscape-credit{position:absolute;bottom:23px;left:32px;display:flex;gap:15px;font-size:9px;letter-spacing:.02em;background:#f7f6eee0;padding:4px 7px;border-radius:3px;color:#5a6a60}
+.cityscape-credit a{color:inherit;text-decoration:none}
+.cityscape-hide{position:absolute;bottom:22px;right:32px;font-size:10px;background:#f7f6eee6;border-radius:4px;padding:5px 8px;color:#425d4c}
+.cityscape-hide kbd{font:inherit;opacity:.5;padding-left:9px}
+.cityscape-labels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.cityscape-labels span{position:absolute;left:0;top:0;display:block;font-size:9px;letter-spacing:.015em;background:#f7f6eedb;padding:5px 8px;border-radius:3px;box-shadow:0 2px 8px #24342b20;white-space:nowrap;will-change:transform}
+.cityscape-labels span:after{content:'';display:block;position:absolute;width:1px;height:13px;left:50%;top:100%;background:#f7f6eec7}
+.cityscape-clean .cityscape-ui,.cityscape-clean .cityscape-labels{display:none}
+.cityscape button:hover:not(:disabled),.cityscape a:hover{filter:brightness(.96)}
+.cityscape button:focus-visible,.cityscape a:focus-visible{outline:2px solid #315741;outline-offset:4px}
+.cityscape button:disabled{opacity:.45}
+@media(max-width:1000px){.cityscape-title{width:205px;padding:19px;top:100px}.cityscape-title h1{font-size:38px}.cityscape-location span{display:none}.cityscape-views button{min-width:88px;padding:9px 12px}.cityscape-playback .cityscape-fps{display:none}}
+@media(max-width:720px){.cityscape-header{left:15px;right:15px;top:15px;gap:8px}.cityscape-location{display:none}.cityscape-wordmark{font-size:12px;padding:12px}.cityscape-simulation{padding:10px;font-size:10px}.cityscape-title{left:15px;top:82px;width:175px;padding:16px}.cityscape-title h1{font-size:33px}.cityscape-title p{font-size:10px}.cityscape-settings{right:15px;top:78px;display:grid}.cityscape-settings button+button{border-left:0;border-top:1px solid #243a3522}.cityscape-settings button{min-width:91px;padding:8px;font-size:10px}.cityscape-navigation{right:15px}.cityscape-footer{left:15px;right:15px;bottom:55px;flex-direction:column;gap:8px}.cityscape-views{justify-content:space-between}.cityscape-views button{min-width:0;padding:8px;flex:1;font-size:10px}.cityscape-playback{align-self:flex-end;padding:8px 12px}.cityscape-credit{left:15px;bottom:15px;max-width:60%;flex-direction:column;gap:3px;font-size:8px}.cityscape-hide{right:15px;bottom:20px}}
