@@ -64,8 +64,8 @@ export default function WorldCanvas({ packId, onReady, className }: WorldCanvasP
             ) : (
               <>
                 <i />
-                <b>{state.phase === 'loading' ? 'Loading Toronto…' : 'Building Toronto…'}</b>
-                <span className="small dim">{state.phase === 'loading' ? 'SUMO network, OSM footprints, shoreline' : 'roads, 10 000 buildings, landmarks'}</span>
+                <b>{state.phase === 'loading' ? 'Loading' : 'Building'} {packId.replace(/[-_]/g, ' ')}…</b>
+                <span className="small dim">{state.phase === 'loading' ? 'SUMO network, OSM footprints, shoreline' : 'textured buildings, streets, parks, landmarks'}</span>
               </>
             )}
           </div>
