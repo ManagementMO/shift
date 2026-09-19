@@ -36,7 +36,7 @@ npm run dev -- --host 127.0.0.1 --port 5174 --strictPort
 ```
 
 Open <http://127.0.0.1:5174/> for the **Babylon.js default interface**. `/world` opens the same
-interface with automatic playback and a fixed city camera. `/world/lab` is the bare Babylon workbench.
+interface with automatic playback, free camera controls, and city camera presets. `/world/lab` is the bare Babylon workbench.
 Generate the city pack before opening the default renderer; its `world.json` is local data.
 
 The **Mapbox Standard 3D alternative** is at <http://127.0.0.1:5174/mapbox>. To use it, set

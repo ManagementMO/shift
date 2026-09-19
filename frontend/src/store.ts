@@ -219,7 +219,7 @@ export const useStore = create<State>((set, get) => ({
       if (get().scenarioId !== scenarioId || get().loadingReplay !== rid) return
       const scenario = get().scenarios.find((s) => s.scenario_id === scenarioId)
       clock.setHorizon(Math.max(scenario?.constraints.horizon_s ?? 0, rx.tMax))
-      clock.seek(0)
+      clock.seek(rx.activityStart ?? 0)
       set({ primaryRunId: rid, selection: null })
       clock.play()
     } catch (e) {

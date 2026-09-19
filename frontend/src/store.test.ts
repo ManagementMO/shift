@@ -113,6 +113,21 @@ describe('opening a city replay', () => {
     expect(clock.horizon).toBe(120)
   })
 
+  it('opens a replay at recorded activity instead of waiting through an empty intro', async () => {
+    vi.mocked(api.bundle).mockResolvedValueOnce({
+      ...bundle,
+      tracks: { car: { ...bundle.tracks.car, samples: [[60, 0, 0, 90, 4], [61, 0.001, 0, 90, 4]] } },
+    })
+    await useStore.getState().openRun(run.run_id)
+    expect(clock.playing).toBe(true)
+    expect(clock.speed).toBe(1)
+    expect(clock.t).toBe(60)
+    expect(useStore.getState().t).toBe(60)
+    clock.pause()
+    clock.seek(0)
+    expect(clock.t).toBe(0)
+  })
+
   it('starts cached replays without fetching again', async () => {
     useStore.setState({ replays: { [run.run_id]: buildIndex(bundle) } })
     await useStore.getState().openRun(run.run_id)

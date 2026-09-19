@@ -1054,7 +1054,7 @@ details summary {
   grid-row: 1;
   gap: 14px;
 }
-@media (max-width: 760px) {
+@media (max-width: 860px) {
   .dock {
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;

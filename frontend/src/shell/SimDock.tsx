@@ -22,6 +22,7 @@ export default function SimDock() {
         e.preventDefault()
         clock.toggle()
       } else if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') {
+        if (target?.tagName === 'CANVAS') return
         e.preventDefault()
         clock.seek(clock.t + (e.code === 'ArrowRight' ? 30 : -30))
       }
@@ -57,7 +58,12 @@ export default function SimDock() {
             </button>
           ))}
         </div>
-        <div className="clock" role="timer" aria-label="Simulation clock">
+        {primary && primary.activityStart > 0 && (
+          <button className="ghostbtn" onClick={() => clock.seek(primary.activityStart)} disabled={!ready} aria-label="Jump to active traffic" title={`Skip the quiet intro and jump to recorded activity at +${fmt(primary.activityStart)}`}>
+            Activity
+          </button>
+        )}
+        <div className="clock" role="timer" aria-label="Simulation clock" title="Recorded simulation time. Replays open at active traffic; rewind to watch the full intro.">
           <span className="wall">{simClock(t, true)}</span>
           <span className="rel">{playing ? 'Running' : 'Paused'} · +{fmt(t)}</span>
         </div>

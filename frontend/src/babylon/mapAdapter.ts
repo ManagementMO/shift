@@ -8,7 +8,7 @@ import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector'
 import type { Observer } from '@babylonjs/core/Misc/observable'
 import type { Camera } from '@babylonjs/core/Cameras/camera'
 
-import type { CameraPose } from '../world/camera'
+import type { CameraMode, CameraPose } from '../world/camera'
 import { clock } from '../world/playback'
 import type { SyncMap } from '../world/registry'
 import type { Pose } from './camera'
@@ -39,6 +39,11 @@ export class BabylonSyncMap implements SyncMap {
 
   get cameraLocked(): boolean {
     return this.ws.camera.fixed
+  }
+
+  setCameraPreset(p: CameraPose, mode: CameraMode): void {
+    if (mode === 'city') this.ws.camera.city()
+    else this.ws.camera.setPreset(this.toPose(p), mode)
   }
 
   toPose(p: CameraPose): Pose {

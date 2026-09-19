@@ -15,6 +15,9 @@ type MapLike = {
   getZoom: () => number
   setMinZoom: (zoom: number) => unknown
   setMaxZoom: (zoom: number) => unknown
+  setMinPitch: (pitch: number) => unknown
+  setMaxPitch: (pitch: number) => unknown
+  stop: () => unknown
   unproject: (point: [number, number]) => { lng: number; lat: number }
   on: (ev: string, cb: (e: never) => void) => unknown
   off: (ev: string, cb: (e: never) => void) => unknown
@@ -28,16 +31,6 @@ type MapLike = {
 } & Parameters<typeof registerMap>[1]
 
 const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN as string | undefined)?.trim()
-const FIXED_CONTROLS = {
-  scrollZoom: false,
-  boxZoom: false,
-  dragRotate: false,
-  dragPan: false,
-  keyboard: false,
-  doubleClickZoom: false,
-  touchZoomRotate: false,
-  touchPitch: false,
-}
 
 // Mapbox Standard, art-directed: no POI/transit/road-label clutter, faded palette, warm daylight.
 const STANDARD_CONFIG: Record<string, unknown> = {
@@ -127,9 +120,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
         zoom: pose.zoom,
         pitch: pose.pitch,
         bearing: pose.bearing,
-        ...FIXED_CONTROLS,
-        minPitch: pose.pitch,
-        maxPitch: pose.pitch,
+        maxPitch: 75,
         antialias: true,
         attributionControl: false,
         logoPosition: 'bottom-right',
@@ -139,29 +130,35 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
       mapRef.current = m as unknown as MapLike
       m.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right')
       const map = mapRef.current
-      map.cameraLocked = true
-      const lockView = () => {
+      map.cameraLocked = false
+      const fitView = (preset: CameraPose) => {
         const width = container.clientWidth
         const height = container.clientHeight
         const [west, south, east, north] = pack.bbox
         const dx = (east - west) * 0.1
         const dy = (north - south) * 0.1
         const corners: [number, number][] = [[0, 0], [width, 0], [0, height], [width, height]]
-        map.setMinZoom(0)
+        const target: CameraPose = {
+          ...preset,
+          pitch: Math.max(20, Math.min(48, preset.pitch)),
+          center: [Math.max(west + dx * 2, Math.min(east - dx * 2, preset.center[0])), Math.max(south + dy * 2, Math.min(north - dy * 2, preset.center[1]))],
+        }
+        map.stop()
+        map.setMinZoom(11)
         map.setMaxZoom(24)
-        let zoom = pose.zoom
+        map.setMinPitch(0)
+        map.setMaxPitch(75)
+        let zoom = Math.max(11, Math.min(23, target.zoom))
         for (; zoom < 24; zoom += 0.25) {
-          map.jumpTo({ ...pose, zoom })
+          map.jumpTo({ ...target, zoom })
           if (corners.every((corner) => {
             const p = map.unproject(corner)
             return p.lng >= west + dx && p.lng <= east - dx && p.lat >= south + dy && p.lat <= north - dy
           })) break
         }
-        map.setMinZoom(map.getZoom())
-        map.setMaxZoom(map.getZoom())
       }
-      lockView()
-      map.on('resize', lockView)
+      map.setCameraPreset = (requested, mode) => fitView(mode === 'city' ? pose : requested)
+      fitView(pose)
       // Invisible per-slot anchor layers that deck layer groups are inserted before (see SLOT in layers.ts).
       let anchorsReady = false
       const ensureAnchors = () => {

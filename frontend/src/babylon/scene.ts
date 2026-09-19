@@ -99,11 +99,20 @@ export class WorldScene {
     cam.panningInertia = 0.82
     cam.inertia = 0.84
     cam.useNaturalPinchZoom = true
-    if (opts.fixedCamera === false) cam.attachControl(canvas, true)
+    if (!opts.fixedCamera) cam.attachControl(canvas, true)
     scene.onBeforeRenderObservable.add(() => {
       cam.panningSensibility = Math.max(4, 3200 / cam.radius) * 1.0
     })
-    this.camera = new WorldCamera(cam, world, opts.fixedCamera ?? true)
+    this.camera = new WorldCamera(cam, world, opts.fixedCamera ?? false)
+    if (!this.camera.fixed) {
+      const cancelFlight = () => this.camera.cancel()
+      canvas.addEventListener('pointerdown', cancelFlight)
+      canvas.addEventListener('wheel', cancelFlight, { passive: true })
+      scene.onDisposeObservable.addOnce(() => {
+        canvas.removeEventListener('pointerdown', cancelFlight)
+        canvas.removeEventListener('wheel', cancelFlight)
+      })
+    }
 
     // --- shadows (sun) over the buildings; cascaded so the 6 km city and a 50 m block both resolve
     if (opts.shadows ?? true) {
@@ -180,6 +189,7 @@ export class WorldScene {
     this.disposed = true
     window.removeEventListener('resize', this.resize)
     this.engine.stopRenderLoop()
+    this.camera.cancel()
     this.traffic.dispose()
     this.city.dispose()
     this.scene.dispose()

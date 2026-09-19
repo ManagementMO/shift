@@ -29,12 +29,12 @@ export function cityPose(world: WorldData): Pose {
   return { target: [(x0 + x1) / 2, (z0 + z1) / 2], radius: Math.max(450, Math.min(8500, Math.hypot(x1 - x0, z1 - z0) * 0.7)), heading: 22, elevation: 38 }
 }
 
-function fixedCityPose(world: WorldData, aspect: number, fov: number): Pose {
-  const p = { ...cityPose(world), radius: 1450, elevation: 52 }
+function boundedPose(world: WorldData, pose: Pose, aspect: number, fov: number): Pose {
+  const p = { ...pose, radius: Math.max(120, pose.radius), elevation: Math.max(42, Math.min(70, pose.elevation)), y: 0 }
   const [x0, z0, x1, z1] = world.crs.bounds_world
   const margin = Math.min(x1 - x0, z1 - z0) * 0.12
   const bounds = [x0 + margin, z0 + margin, x1 - margin, z1 - margin]
-  p.target = [Math.max(bounds[0], Math.min(bounds[2], p.target[0])), Math.max(bounds[1], Math.min(bounds[3], p.target[1]))]
+  p.target = [Math.max(bounds[0] + margin, Math.min(bounds[2] - margin, p.target[0])), Math.max(bounds[1] + margin, Math.min(bounds[3] - margin, p.target[1]))]
   const heading = p.heading * Math.PI / 180
   const elevation = p.elevation * Math.PI / 180
   const sin = Math.sin(elevation)
@@ -62,6 +62,7 @@ export class WorldCamera {
   readonly world: WorldData
   readonly fixed: boolean
   private fixedPose: Pose | null = null
+  private presetPose: Pose | null = null
 
   constructor(cam: ArcRotateCamera, world: WorldData, fixed = false) {
     this.cam = cam
@@ -70,20 +71,26 @@ export class WorldCamera {
     if (fixed) {
       cam.detachControl()
       cam.inputs.clear()
+      this.presetPose = { ...cityPose(world), radius: 1450, elevation: 52 }
       this.resize(cam.getEngine().getAspectRatio(cam))
-    } else this.apply(cityPose(world))
+    } else this.city(0)
   }
 
   resize(aspect: number): void {
-    if (!this.fixed) return
-    this.fixedPose = fixedCityPose(this.world, aspect, this.cam.fov)
-    this.apply(this.fixedPose)
-    const c = this.cam
-    c.lowerRadiusLimit = c.upperRadiusLimit = c.radius
-    c.lowerAlphaLimit = c.upperAlphaLimit = c.alpha
-    c.lowerBetaLimit = c.upperBetaLimit = c.beta
-    c.inertialAlphaOffset = c.inertialBetaOffset = c.inertialRadiusOffset = 0
-    c.inertialPanningX = c.inertialPanningY = 0
+    if (!this.fixed || !this.presetPose) return
+    this.cancel()
+    this.renderPose(this.presetPose, aspect)
+  }
+
+  setPreset(to: Pose, mode: CameraMode, ms = 1200): void {
+    if (this.fixed) this.presetPose = { ...to, target: [...to.target] }
+    const target = boundedPose(this.world, to, this.cam.getEngine().getAspectRatio(this.cam), this.cam.fov)
+    this.transition(target, ms, mode)
+  }
+
+  private renderPose(p: Pose, aspect = this.cam.getEngine().getAspectRatio(this.cam)): void {
+    if (this.fixed) this.fixedPose = boundedPose(this.world, p, aspect, this.cam.fov)
+    this.apply(p)
   }
 
   get flying(): boolean {
@@ -110,12 +117,27 @@ export class WorldCamera {
     // heading h (camera looks toward h) puts the camera at direction h+180 from the target.
     c.alpha = ((-90 - p.heading) * Math.PI) / 180
     c.beta = ((90 - p.elevation) * Math.PI) / 180
+    if (this.fixed) {
+      c.lowerRadiusLimit = c.upperRadiusLimit = c.radius
+      c.lowerAlphaLimit = c.upperAlphaLimit = c.alpha
+      c.lowerBetaLimit = c.upperBetaLimit = c.beta
+      c.inertialAlphaOffset = c.inertialBetaOffset = c.inertialRadiusOffset = 0
+      c.inertialPanningX = c.inertialPanningY = 0
+    }
   }
 
   flyTo(to: Pose, ms = 1400, mode?: CameraMode): void {
     if (this.fixed) return
+    this.transition(to, ms, mode)
+  }
+
+  private transition(to: Pose, ms: number, mode?: CameraMode): void {
     if (mode) this.mode = mode
     this.cancel()
+    if (ms <= 0) {
+      this.renderPose(to)
+      return
+    }
     const from = this.pose
     // shortest heading turn
     let dh = to.heading - from.heading
@@ -125,7 +147,7 @@ export class WorldCamera {
     const step = (): void => {
       const k = Math.min(1, (performance.now() - t0) / ms)
       const e = ease(k)
-      this.apply({
+      this.renderPose({
         target: [lerp(from.target[0], target.target[0], e), lerp(from.target[1], target.target[1], e)],
         radius: Math.exp(lerp(Math.log(from.radius), Math.log(target.radius), e)),
         heading: lerp(from.heading, target.heading, e),
@@ -144,7 +166,8 @@ export class WorldCamera {
   }
 
   city(ms = 1600): void {
-    this.flyTo(cityPose(this.world), ms, 'city')
+    const pose = cityPose(this.world)
+    this.setPreset({ ...pose, radius: 1450, elevation: 52 }, 'city', ms)
   }
 
   district(x: number, z: number, ms = 1200): void {

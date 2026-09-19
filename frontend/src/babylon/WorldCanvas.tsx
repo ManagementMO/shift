@@ -14,7 +14,7 @@ export interface WorldCanvasProps {
  * Mounts one Babylon engine on one canvas.  React owns nothing inside the scene; it only reports lifecycle
  * (loading / ready / error) and hands the imperative `WorldScene` to the parent through `onReady`.
  */
-export default function WorldCanvas({ packId, onReady, className, fixedCamera = true }: WorldCanvasProps) {
+export default function WorldCanvas({ packId, onReady, className, fixedCamera = false }: WorldCanvasProps) {
   const ref = useRef<HTMLCanvasElement>(null)
   const [state, setState] = useState<{ phase: 'loading' | 'building' | 'ready' | 'error'; detail?: string }>({ phase: 'loading' })
 

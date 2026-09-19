@@ -6,6 +6,7 @@ import SimDock from './shell/SimDock'
 import ToolRail from './shell/ToolRail'
 import ToolPanel from './shell/ToolPanel'
 import AgentBubble from './shell/AgentBubble'
+import CameraModes from './shell/CameraModes'
 import SwarmLens from './shell/SwarmLens'
 import ScenarioDrawer from './shell/ScenarioDrawer'
 import './App.css'
@@ -53,6 +54,7 @@ export default function App({ renderer = 'babylon' }: { renderer?: Renderer }) {
 
       <ToolRail />
       <ToolPanel />
+      <CameraModes />
       <SwarmLens renderer={renderer} />
       <AgentBubble />
 
