@@ -7,7 +7,8 @@ import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 
 import { buildCity, Y } from './city'
 import { cityPose } from './camera'
-import type { WorldData } from './worldData'
+import type { WorldData, WorldLandmark } from './worldData'
+import { cityPose as mapCityPose } from '../world/camera'
 
 const fixture = (): WorldData => ({
   version: 1, pack_id: 'new-city', network_fingerprint: 'fixture',
@@ -63,6 +64,56 @@ describe('New-city rendering without appearance configuration', () => {
     expect(city.chunks.some((m) => m.name.startsWith('trees-') && m.thinInstanceCount > 0)).toBe(true)
     expect(JSON.stringify(world)).toBe(original)
     expect(cityPose(world).target).toEqual([4200, 7200])
+    city.dispose()
+    expect(scene.meshes).toHaveLength(0)
+    expect(scene.textures).toHaveLength(0)
+    scene.dispose()
+    engine.dispose()
+  })
+})
+
+describe('Waterloo E7 district', () => {
+  const e7: WorldLandmark = {
+    id: 'w382735686', kind: 'engineering_7', name: 'Engineering 7 (E7)',
+    x: 4250, z: 7150, h: 27,
+    ring: [4230, 7130, 4270, 7130, 4270, 7170, 4230, 7170],
+  }
+
+  it('frames E7 instead of the network midpoint and retains a venue fallback', () => {
+    const world = fixture()
+    world.pack_id = 'waterloo_e7'
+    world.landmarks = [e7]
+    expect(cityPose(world).target).toEqual([e7.x, e7.z])
+    expect(cityPose(world).radius).toBeLessThan(1500)
+    world.landmarks = []
+    expect(cityPose(world).target).toEqual([world.venue.x, world.venue.z])
+    expect(mapCityPose('waterloo_e7', [-80.5395046, 43.4729528]).center).toEqual([-80.5395046, 43.4729528])
+    expect(mapCityPose('waterloo_e7', [-80.5395046, 43.4729528]).zoom).toBeGreaterThan(15)
+  })
+
+  it('uses shared glass and concrete textures on campus landmarks without filling courtyards', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const world = fixture()
+    world.pack_id = 'waterloo_e7'
+    const davis: WorldLandmark = {
+      id: 'r8765264', kind: 'davis_centre', name: 'Davis Centre', x: 4350, z: 7150, h: 13.8,
+      ring: [4330, 7130, 4370, 7130, 4370, 7170, 4330, 7170],
+      holes: [[4340, 7140, 4360, 7140, 4360, 7160, 4340, 7160]],
+    }
+    world.landmarks = [e7, davis]
+    world.buildings.push(...world.landmarks.map((lm) => ({ ...lm, cat: 'landmark' as const, lm: lm.kind })))
+    const original = JSON.stringify(world)
+    const city = buildCity(scene, world)
+    const glass = city.chunks.find((m) => m.name === 'landmark-glazing')!
+    expect(glass).toBeDefined()
+    expect(glass.material?.getActiveTextures()[0].name).toBe('city-glass')
+    expect(city.landmarks.material?.getActiveTextures()[0].name).toBe('city-concrete')
+    const down = (x: number, z: number) => new Ray(new Vector3(x, 100, z), new Vector3(0, -1, 0), 200)
+    expect(down(e7.x, e7.z).intersectsMesh(city.landmarks).hit).toBe(true)
+    expect(down(davis.x, davis.z).intersectsMesh(city.landmarks).hit).toBe(false)
+    expect(down(davis.x, davis.z).intersectsMesh(glass).hit).toBe(false)
+    expect(JSON.stringify(world)).toBe(original)
     city.dispose()
     expect(scene.meshes).toHaveLength(0)
     expect(scene.textures).toHaveLength(0)

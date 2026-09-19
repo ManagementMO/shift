@@ -23,6 +23,7 @@ export const TORONTO_CITY: CameraPose = { center: [-79.3848, 43.6438], zoom: 15.
 const CITY_POSES: Record<string, CameraPose> = {
   toronto: TORONTO_CITY,
   waterloo: { center: [-80.5265, 43.4668], zoom: 14.4, pitch: 55, bearing: -8 },
+  waterloo_e7: { center: [-80.5395046, 43.4729528], zoom: 15.7, pitch: 42, bearing: -35 },
 }
 
 export function cityPose(packId: string, center: [number, number]): CameraPose {

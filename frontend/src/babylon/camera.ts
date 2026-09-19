@@ -22,6 +22,10 @@ export interface Pose {
 
 /** Downtown / waterfront hero: lake in the lower third, skyline rising toward the top of the frame. */
 export function cityPose(world: WorldData): Pose {
+  if (world.pack_id === 'waterloo_e7') {
+    const e7 = world.landmarks.find((l) => l.kind === 'engineering_7') ?? world.venue
+    return { target: [e7.x, e7.z], radius: 1050, heading: -35, elevation: 48 }
+  }
   const cn = world.landmarks.find((l) => l.kind === 'cn_tower')
   const union = world.landmarks.find((l) => l.kind === 'union_station')
   if (cn && union) return { target: [(cn.x + union.x) / 2, (cn.z + union.z) / 2 - 40], radius: 1650, heading: 22, elevation: 34 }

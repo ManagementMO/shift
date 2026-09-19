@@ -74,6 +74,11 @@ export type LandmarkKind =
   | 'city_hall'
   | 'roy_thomson_hall'
   | 'ripleys_aquarium'
+  | 'engineering_7'
+  | 'engineering_5'
+  | 'engineering_6'
+  | 'davis_centre'
+  | 'quantum_nano'
 
 export interface WorldLandmark {
   id: string
@@ -83,6 +88,7 @@ export interface WorldLandmark {
   z: number
   h: number
   ring: Flat
+  holes?: Flat[]
 }
 
 export interface WorldStop {
