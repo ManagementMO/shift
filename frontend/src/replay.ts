@@ -99,12 +99,19 @@ export function personStateAt(events: PersonEvent[] | undefined, t: number, mode
 }
 
 /** Position of an entity at time t, or null if there is no valid sample (not inserted, arrived, gap, or break). */
+/** Latest recorded sample `[t, lon, lat, angle, speed]` at or before `t`, or null if the entity is not on the map. */
 export function positionAt(ix: TrackIndex, t: number): number[] | null {
   const i = lowerBound(ix.times, t)
   if (i < 0) return null
   const s = ix.track.samples[i]
   if (t - s[0] > MAX_GAP_S) return null
   return s
+}
+
+/** Measured `[lon, lat]` of an entity at `t`, or null. */
+export function lonLatAt(ix: TrackIndex, t: number): [number, number] | null {
+  const s = positionAt(ix, t)
+  return s ? [s[1], s[2]] : null
 }
 
 /** Trail: contiguous samples in [t-window, t], split at recorded breaks and gaps. */

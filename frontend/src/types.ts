@@ -49,6 +49,26 @@ export type CityPack = {
   network_fingerprint: string
 }
 
+export type Traveler = {
+  person_id: string
+  origin_edge: string
+  dest_edge: string
+  dest_zone: string
+  depart_s: number
+  has_car: boolean
+  walk_limit_m: number
+}
+
+export type DemandSet = {
+  demand_id: string
+  seed: number
+  travelers: Traveler[]
+  synthetic: boolean
+  generation_method: string
+}
+
+export type Corridor = { label: string; edge_ids: string[]; flagship_closure?: boolean }
+
 export type Restriction = {
   restriction_id: string
   edge_ids: string[]

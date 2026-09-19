@@ -1,6 +1,8 @@
 import type {
   CityPack,
   CompileInfo,
+  Corridor,
+  DemandSet,
   EntityTrack,
   EvidenceBundle,
   Health,
@@ -38,10 +40,12 @@ export const api = {
   packs: () => get<{ pack_id: string; name: string }[]>('/api/packs'),
   pack: (id: string) => get<CityPack>(`/api/packs/${id}`),
   roads: (id: string) => get<GeoJSON.FeatureCollection>(`/api/packs/${id}/roads`),
+  corridors: (id: string) => get<Record<string, Corridor>>(`/api/packs/${id}/corridors`),
   scenarios: () => get<ScenarioSpec[]>('/api/scenarios'),
   scenario: (id: string) => get<ScenarioSpec>(`/api/scenarios/${id}`),
   createFlagship: (body: { pack_id: string; seed: number; cohort_size: number; horizon_s: number }) =>
     post<ScenarioSpec>('/api/scenarios/flagship', body),
+  demand: (sid: string) => get<DemandSet>(`/api/scenarios/${sid}/demand`),
   plans: (sid: string) => get<PlanWithValidation[]>(`/api/scenarios/${sid}/plans`),
   submitPlan: (sid: string, plan: ServicePlan) =>
     post<PlanWithValidation>(`/api/scenarios/${sid}/plans`, plan),

@@ -1,77 +1,90 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from './store'
-import MapView from './components/MapView'
-import Timeline from './components/Timeline'
-import ScenarioPanel from './components/ScenarioPanel'
-import Inspector from './components/Inspector'
-import ComparePanel from './components/ComparePanel'
-import EditPanel from './components/EditPanel'
+import WorldMap from './world/WorldMap'
+import TopStrip from './shell/TopStrip'
+import SimDock from './shell/SimDock'
+import ToolRail from './shell/ToolRail'
+import ToolPanel from './shell/ToolPanel'
+import CommandBar from './shell/CommandBar'
+import AgentBubble from './shell/AgentBubble'
+import CameraModes from './shell/CameraModes'
+import SwarmLens from './shell/SwarmLens'
+import ScenarioDrawer from './shell/ScenarioDrawer'
+import CompareSplit from './shell/CompareSplit'
 import './App.css'
 
 export default function App() {
   const boot = useStore((s) => s.boot)
-  const health = useStore((s) => s.health)
   const error = useStore((s) => s.error)
   const setError = useStore((s) => s.setError)
-  const toggle = useStore((s) => s.toggle)
-  const showCars = useStore((s) => s.showCars)
-  const showPersons = useStore((s) => s.showPersons)
-  const showRoads = useStore((s) => s.showRoads)
+  const building = useStore((s) => s.building)
+  const compareMode = useStore((s) => s.compareMode)
+  const primaryRunId = useStore((s) => s.primaryRunId)
+  const runs = useStore((s) => s.runs)
+  const refreshRuns = useStore((s) => s.refreshRuns)
+  const openRun = useStore((s) => s.openRun)
+  const scenarioId = useStore((s) => s.scenarioId)
   const pack = useStore((s) => s.pack)
+  const [drawer, setDrawer] = useState(false)
 
   useEffect(() => {
     void boot()
   }, [boot])
 
+  // Poll while SUMO is running; when the newest run lands, show it.
+  useEffect(() => {
+    const active = runs.some((r) => r.status === 'running' || r.status === 'queued')
+    if (!active) return
+    const id = setInterval(() => void refreshRuns(), 1500)
+    return () => clearInterval(id)
+  }, [runs, refreshRuns])
+  useEffect(() => {
+    if (primaryRunId) return
+    const done = runs.filter((r) => r.status === 'completed' && r.scenario_id === scenarioId)
+    if (done.length) void openRun(done[done.length - 1].run_id, 'primary')
+  }, [runs, primaryRunId, scenarioId, openRun])
+
+  const noRun = pack && scenarioId && !primaryRunId && !runs.some((r) => r.status === 'running' || r.status === 'queued')
+
   return (
-    <div className="app">
-      <header>
-        <div className="brand">
-          CITY<span>//</span>SHIFT <span className="dim small">finite-fleet scenario lab</span>
-        </div>
-        <div className="row small">
-          {pack && <span className="chip">{pack.name}</span>}
-          {health && (
-            <>
-              <span className="chip">{health.sumo}</span>
-              <span className={`chip ${health.providers.llm.available ? '' : 'warn'}`}>
-                LLM {health.providers.llm.provider}
-              </span>
-              <span className={`chip ${health.providers.evidence.available ? '' : 'warn'}`}>
-                evidence {health.providers.evidence.available ? health.providers.evidence.provider : 'offline'}
-              </span>
-              <span className="chip">sentry {health.providers.sentry.enabled ? 'on' : 'off (no DSN)'}</span>
-              <span className="chip">share {health.providers.share.mode}</span>
-            </>
-          )}
-          <label className="chip">
-            <input type="checkbox" checked={showRoads} onChange={() => toggle('showRoads')} /> roads
-          </label>
-          <label className="chip">
-            <input type="checkbox" checked={showCars} onChange={() => toggle('showCars')} /> cars
-          </label>
-          <label className="chip">
-            <input type="checkbox" checked={showPersons} onChange={() => toggle('showPersons')} /> travelers
-          </label>
-        </div>
-      </header>
-      {error && (
-        <div className="error" onClick={() => setError(null)}>
-          {error} (click to dismiss)
+    <div className="shell">
+      <div className="worlds">{compareMode ? <CompareSplit /> : <WorldMap runId={primaryRunId} side="solo" />}</div>
+
+      <TopStrip onOpenScenarios={() => setDrawer((d) => !d)} />
+      {drawer && <ScenarioDrawer onClose={() => setDrawer(false)} />}
+
+      <ToolRail />
+      <ToolPanel />
+      <CameraModes />
+      <SwarmLens />
+      <AgentBubble />
+
+      <div className="bottom">
+        <CommandBar />
+        <SimDock />
+      </div>
+
+      {noRun && (
+        <div className="hint">
+          No measured run for this scenario yet — open <button onClick={() => setDrawer(true)}>Scenarios</button> and run a plan in SUMO.
         </div>
       )}
-      <main>
-        <ScenarioPanel />
-        <section className="center">
-          <MapView />
-          <Timeline />
-          <EditPanel />
-        </section>
-        <aside className="panel right">
-          <Inspector />
-          <ComparePanel />
-        </aside>
-      </main>
+
+      {building && (
+        <div className="building">
+          <div className="building-card">
+            <i />
+            <b>{building}</b>
+            <span className="small dim">The current world is frozen. A new compiled scenario will load when the branch is ready.</span>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="error" onClick={() => setError(null)}>
+          {error}
+        </div>
+      )}
     </div>
   )
 }

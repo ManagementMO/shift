@@ -1,6 +1,7 @@
 import { useStore } from '../store'
 import { personStateAt, seriesAt } from '../replay'
 import { fmt } from '../util'
+import { clock } from '../world/playback'
 
 function Spark({ series, max, t }: { series: { times: number[]; values: number[] } | undefined; max: number; t: number }) {
   if (!series || series.times.length < 2) return null
@@ -23,7 +24,6 @@ export default function Inspector() {
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
   const t = useStore((s) => s.t)
   const select = useStore((s) => s.select)
-  const setT = useStore((s) => s.setT)
 
   if (!selection) {
     return (
@@ -126,7 +126,7 @@ export default function Inspector() {
             <div key={d.duty_id} className={`duty ${t >= d.depart_s && t <= d.est_end_s ? 'now' : ''}`}>
               <span className="mono">{d.duty_id}</span> dep {fmt(d.depart_s)} → {d.stop_sequence.map((s) => pack?.stops.find((x) => x.stop_id === s)?.name ?? s).join(' → ')}
               <span className="dim"> est end {fmt(d.est_end_s)}</span>
-              <button className="tiny" onClick={() => setT(d.depart_s)}>
+              <button className="tiny" onClick={() => clock.seek(d.depart_s)}>
                 go
               </button>
             </div>
@@ -201,7 +201,7 @@ export default function Inspector() {
                 @{pack?.stops.find((s) => s.stop_id === e.stop_id)?.name ?? e.stop_id}
               </button>
             )}
-            <button className="tiny" onClick={() => setT(e.t)}>
+            <button className="tiny" onClick={() => clock.seek(e.t)}>
               go
             </button>
           </div>
