@@ -35,6 +35,11 @@ export function destinationPack(_location: Pick<Location, 'lat' | 'lon'>): 'toro
   return 'toronto'
 }
 
+/** The globe marker whose flight lands in a given city pack; packs without a marker cannot be entered from orbit. */
+export function locationForPack(packId: string): Location | null {
+  return LOCATIONS.find((place) => destinationPack(place) === packId && place.id === packId) ?? null
+}
+
 export function orbitRadius(width: number, height: number): number {
   return Math.max(3.25, 3.05 * height / Math.max(1, width))
 }

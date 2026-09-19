@@ -88,6 +88,7 @@ type State = {
 }
 
 let packSelectionRequest = 0
+let scenarioSelectionRequest = 0
 
 export const useStore = create<State>((set, get) => ({
   health: null,
@@ -158,9 +159,11 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async selectScenario(sid) {
+    const request = ++scenarioSelectionRequest
     const sc = get().scenarios.find((s) => s.scenario_id === sid)
     if (sc && sc.pack_id !== get().pack?.pack_id) {
       const [pack, roads] = await Promise.all([api.pack(sc.pack_id), api.roads(sc.pack_id)])
+      if (request !== scenarioSelectionRequest) return
       set({ pack, roads })
       cameraTo(cityPose(pack.pack_id, pack.center), 'city')
     }
@@ -169,6 +172,7 @@ export const useStore = create<State>((set, get) => ({
     if (sc) clock.setHorizon(sc.constraints.horizon_s)
     set({ scenarioId: sid, primaryRunId: null, compareRunId: null, selection: null, ghost: null })
     const [plans, runs, demand] = await Promise.all([api.plans(sid), api.runs(sid), api.demand(sid).catch(() => null)])
+    if (request !== scenarioSelectionRequest) return
     set({ plans, runs, travelers: Object.fromEntries((demand?.travelers ?? []).map((t) => [t.person_id, t])) })
     const done = runs.filter((r) => r.status === 'completed')
     if (done.length) await get().openRun(done[done.length - 1].run_id, 'primary')

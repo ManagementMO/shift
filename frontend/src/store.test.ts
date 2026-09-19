@@ -110,6 +110,22 @@ describe('District selection', () => {
     expect(useStore.getState().scenarioId).toBe('toronto-run')
   })
 
+  it('keeps the scenario chosen from the globe when a slower earlier selection finishes later', async () => {
+    vi.mocked(api.scenarios).mockResolvedValue([scenario('toronto', 'boot-default'), scenario('toronto', 'chosen-from-globe')])
+    useStore.setState({ pack: { pack_id: 'toronto' } as CityPack, scenarios: [scenario('toronto', 'boot-default'), scenario('toronto', 'chosen-from-globe')] })
+    const slow = deferred<[]>()
+    vi.mocked(api.plans).mockImplementationOnce(() => slow.promise as Promise<never>)
+    vi.mocked(api.runs).mockImplementation(async (sid) => sid === 'boot-default' ? [{ run_id: 'stale', scenario_id: 'boot-default', status: 'completed' }] as never : [])
+    const stale = useStore.getState().selectScenario('boot-default')
+    await useStore.getState().selectScenario('chosen-from-globe')
+    slow.resolve([])
+    await stale
+    const state = useStore.getState()
+    expect(state.scenarioId).toBe('chosen-from-globe')
+    expect(state.runs).toEqual([])
+    expect(state.primaryRunId).toBeNull()
+  })
+
   it('clears the previous city replay and selection when switching to a fresh district', async () => {
     useStore.setState({
       pack: { pack_id: 'toronto' } as CityPack,

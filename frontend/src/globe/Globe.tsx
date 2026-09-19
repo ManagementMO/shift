@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { GlobeScene } from './GlobeScene'
 import { LOCATIONS, smooth, type Location } from './flight'
+import RecentWork from './RecentWork'
 import SimulationSettings from '../shell/SimulationSettings'
 import { BrandMark } from '../components/Icon'
+import type { ScenarioSpec } from '../types'
 import './globe.css'
 
 export type GlobePhase = 'globe' | 'preparing' | 'flight'
@@ -11,7 +13,7 @@ interface Props {
   phase: GlobePhase
   selected: Location | null
   error: string | null
-  onSelect: (place: Location) => void
+  onSelect: (place: Location, scenario?: ScenarioSpec) => void
   onReveal: () => void
   onComplete: () => void
   onCancel: () => void
@@ -84,8 +86,10 @@ export default function Globe(props: Props) {
     <main className="orbital" data-busy={busy} style={{ opacity, '--entry-haze': haze } as CSSProperties}>
       <header className="orbital-header">
         <a className="orbital-brand" href="/" aria-label="Concrete Consequences home"><BrandMark /><span>Concrete Consequences</span></a>
-        <SimulationSettings disabled={busy} appearance={{ monochrome: tactical, setMonochrome: setTactical }} />
+        <span className="orbital-header-note">Toronto prototype</span>
       </header>
+
+      <div className="orbital-panel orbital-panel-left"><SimulationSettings docked appearance={{ monochrome: tactical, setMonochrome: setTactical }} /></div>
 
       <section className="orbital-stage" aria-label="Interactive Earth">
         <canvas ref={canvasRef} tabIndex={0} aria-label="Rotate Earth by dragging or using the arrow keys. Select a city marker to enter." />
@@ -97,9 +101,10 @@ export default function Globe(props: Props) {
         {!ready && !failure && <div className="orbital-render-error">Loading Earth…</div>}
         {imageryError && <span className="orbital-imagery-note">Earth imagery unavailable. Location selection still works.</span>}
         <div className="orbital-haze" aria-hidden="true" />
+        {busy && <div className="orbital-flight-status" role="status" aria-live="polite"><div><span>{props.error ? 'Unable to open city' : props.phase === 'preparing' ? 'Preparing Toronto…' : `Opening ${target.name}`}</span><button onClick={props.onCancel}>Cancel</button></div><small>{props.error ?? 'Toronto prototype · From orbit to street level'}</small><progress max={1} value={props.phase === 'flight' ? progress : undefined} aria-label="Flight progress" /></div>}
       </section>
 
-      {busy && <div className="orbital-flight-status" role="status" aria-live="polite"><div><span>{props.error ? 'Unable to open city' : props.phase === 'preparing' ? 'Preparing Toronto…' : `Opening ${target.name}`}</span><button onClick={props.onCancel}>Cancel</button></div><small>{props.error ?? 'Toronto prototype · From orbit to street level'}</small><progress max={1} value={props.phase === 'flight' ? progress : undefined} aria-label="Flight progress" /></div>}
+      <div className="orbital-panel orbital-panel-right"><RecentWork disabled={busy} onOpen={(place, scenario) => { if (!busy) props.onSelect(place, scenario) }} /></div>
 
       <footer className="orbital-footer"><span>Prototype · All markers open Toronto</span><span><a href="https://github.com/mrdoob/three.js" target="_blank" rel="noreferrer">Earth imagery</a><i /><a href="https://github.com/nvkelso/natural-earth-vector" target="_blank" rel="noreferrer">Natural Earth</a></span></footer>
     </main>

@@ -2,6 +2,8 @@
 .settings-trigger:hover, .settings-trigger.on { color: #f2f2ee; background: #1b1b1b; border-color: #484848; }
 .settings-trigger:focus-visible { outline: 1px solid #eee; outline-offset: 3px; }
 .sim-settings { position: fixed; top: 78px; right: 24px; width: 338px; max-width: calc(100vw - 32px); max-height: calc(100dvh - 100px); overflow: auto; overscroll-behavior: contain; z-index: 220; background: #101010; border: 1px solid #353535; border-radius: 5px; color: #e9e9e5; font: 12px 'Helvetica Neue', Helvetica, Arial, sans-serif; box-shadow: 0 18px 60px #0006; scrollbar-width: thin; scrollbar-color: #383838 transparent; }
+.sim-settings-docked { position: static; width: auto; max-width: none; max-height: none; height: 100%; min-height: 0; border: 0; border-radius: 0; box-shadow: none; background: #080808; }
+.sim-settings-docked > header { padding-top: 24px; }
 .sim-settings > header { display: flex; justify-content: space-between; align-items: flex-start; padding: 21px 21px 19px; border-bottom: 1px solid #292929; gap: 12px; }
 .sim-settings h2 { font-size: 17px; font-weight: 500; letter-spacing: -0.04em; line-height: 1.2; margin: 0; }
 .sim-settings header p { color: #777; font-size: 11px; margin: 7px 0 0; }
