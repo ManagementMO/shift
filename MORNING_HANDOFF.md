@@ -65,7 +65,7 @@ this from the scenario drawer / tool rail / command bar.
 | 15 | Sentry | **unavailable** | DSN-gated no-op |
 | 16 | Elastic Cloud, Baseten | **unavailable** | same client code, different env; never exercised |
 | 17 | Browser end-to-end by a persistent testing agent | tested once | recording + screenshots on PR #1; found: scenario list collapsed at normal zoom, Share showed a server path, no city switch — all three fixed in the follow-up commit; luma.gl uniform-reflection console messages remain (not exceptions) |
-| 18 | Babylon.js `/world` preview (migration in progress; Mapbox `/` unchanged) | tested (screenshots + unit tests) | W1 world compiler `world.json` (34,804 SUMO edges as `WorldRoad`, 10,461 buildings, landmarks) + coordinate service; W2 replay-driven thin-instanced buses/cars/people aligned to the SUMO net; W3 crowd LOD (figure ≤420 m, ground marker beyond / from city camera), release pulses at each recorded venue depart, state tallies, **Egress** hero camera at Rogers Centre. `docs/visual-reviews/w1..w3-*.jpg`; `frontend/src/babylon/*.test.ts` (24 tests). Not yet: timeline/selection parity, edits, Havok/tornado, compare (W4–W8) |
+| 18 | Babylon.js `/world` preview (migration in progress; Mapbox `/` unchanged) | tested (screenshots + unit tests) | W1 world compiler `world.json` (34,804 SUMO edges as `WorldRoad`, 10,461 buildings, landmarks) + coordinate service; W2 replay-driven thin-instanced buses/cars/people aligned to the SUMO net; W3 crowd LOD (figure ≤420 m, ground marker beyond / from city camera), release pulses at each recorded venue depart, state tallies, **Egress** hero camera at Rogers Centre; W4 the full shell (top strip, sim dock, tool rail, command bar, camera modes, agent bubble, Swarm Lens) runs on Babylon via a `SyncMap` adapter — click-to-select travellers/vehicles with halo + dim, follow camera, closures/ghost/focus drawn on SUMO edges. `docs/visual-reviews/w1..w4-*.jpg`; `frontend/src/babylon/*.test.ts` (28 tests). Bare renderer lab at `/world/lab`. Not yet: Babylon compare split, infrastructure edits, Havok/tornado (W5–W8); W4 was verified by screenshot + unit tests, not browser E2E |
 
 ## Scenario and run ids worth opening
 
@@ -104,3 +104,42 @@ than hand-edited.
 2. Optional sponsor credentials: `BASETEN_API_KEY` (+`LLM_API_BASE`, `LLM_MODEL`), `ELASTIC_CLOUD_URL` +
    `ELASTIC_API_KEY`, `SENTRY_DSN`, `R2_ACCOUNT_ID`/`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY`/`R2_BUCKET` (+`R2_PUBLIC_BASE_URL`).
 3. Decide whether the hazard visual should move to a Three.js custom layer.
+
+## Roadmap for the team (Babylon migration, in priority order)
+
+What exists after W1–W4: `/world` is the whole product on the Babylon miniature Toronto; `/` is the same
+product on Mapbox/deck.gl. Everything below the renderer (SUMO, validators, agents, edits, replay
+artifacts) is shared and unchanged. Suggested order, with the concrete seams to build on:
+
+1. **Compare on Babylon (W7)** — `CompareSplit` still mounts two `WorldMap`s. Give it a renderer prop
+   (same pattern as `App`), mount two `WorldBabylon`s (`side="left"|"right"`); the camera sync already
+   goes through `registerMap`/`SyncMap`, so the divider and clock sync should work with no new plumbing.
+   Two Babylon engines on one page: budget ~2× the 10k-building geometry — consider sharing `world.json`
+   parse via the existing `loadWorld` cache.
+2. **Infrastructure edits with ghosts (W5)** — `Overlay.set()` already draws ghost edges/stops from
+   `store.ghost`. Add-stop is UI + a new edit `kind` (`contracts.py` `ScenarioEdit.kind`, applied in `domain/edits.py`)
+   that inserts a stop on an existing edge and re-runs the compiler; catchment = 400 m disc, snapped via
+   `RoadIndex.nearest()`. Add-road /
+   add-intersection need a `netconvert` rebuild: implement as a backend job (`citypack/build.py` →
+   child pack id) and reuse the existing `building` state for the "Building alternate Toronto…" veil.
+3. **Events (W6)** — a `WorldEvent` contract (`{kind: collision|tornado|flood|fire, t0, t1, footprint,
+   edge_ids}`) that (a) becomes timed restrictions via `domain/hazards.py` (already how the storm works)
+   and (b) is rendered by Babylon: Havok (`@babylonjs/havok` is installed, not yet enabled) for
+   collision debris, GPU `ParticleSystem` for the tornado, animated water plane for flood. Keep the
+   SUMO-side effect authoritative; visuals are decoration of a recorded restriction.
+4. **Make `/world` the default (W8)** — flip `Root.tsx`, keep `/mapbox` as fallback, re-run the
+   screenshot loop (`frontend/scripts/shoot.mjs`) for reviews 01–09 and the testing-agent E2E on the
+   Babylon route. Until then, run the Babylon route through the browser E2E at least once.
+
+Engineering debt worth paying early:
+- **Picking** is a screen-space nearest-entity scan (`Traffic.pick`, 22 px). Fine at ~400 entities;
+  switch to Babylon GPU picking or a screen-space grid before scenarios grow past a few thousand.
+- **Zoom ↔ radius** in `mapAdapter.ts` is a Web Mercator approximation so Mapbox-era poses
+  (`world/camera.ts`) work on Babylon. When Mapbox is retired, express poses natively in metres and
+  delete the conversion.
+- **Mobile / low-end GPUs**: 10k extruded buildings + CSM shadows. Add a quality toggle (shadows off,
+  building chunks by distance) before demoing on laptops without discrete GPUs.
+- **Traveller kinds** are `bus | car | person`; the Mapbox `Selection` type also has `stop` and
+  `restriction`. Both routes honour all five, but Babylon draws stops as discs only — a stop bubble with
+  boardings (data already in `metrics.json`) is a cheap win.
+- **Rotate both pasted keys** (Backboard, OpenRouter) — they were shared in chat.
