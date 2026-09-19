@@ -52,8 +52,8 @@ architecture, integration status, and Hack the North priorities.
 
 ## Toronto cityscape preview
 
-The `demo/toronto-cityscape` branch adds an immersive `/showcase` viewer and upgrades the
+The immersive `/showcase` viewer upgrades the
 default Babylon renderer with official downtown massing, dedicated landmark GLBs, PBR
 materials, street details and an isometric camera. See [the cityscape guide](docs/TORONTO_CITYSCAPE.md)
-for the isolated local preview, controls, rendering profiles and asset rebuild instructions.
+for the standard and isolated local previews, controls, rendering profiles and asset rebuild instructions.
 The [asset provenance file](frontend/public/assets/city/ASSETS.md) records sources and geometry limits.

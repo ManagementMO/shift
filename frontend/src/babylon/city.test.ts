@@ -106,19 +106,24 @@ describe('Waterloo E7 district', () => {
     world.buildings.push(...world.landmarks.map((lm) => ({ ...lm, cat: 'landmark' as const, lm: lm.kind })))
     const original = JSON.stringify(world)
     const city = buildCity(scene, world)
-    const glass = city.chunks.find((m) => m.name === 'landmark-glazing')!
-    expect(glass).toBeDefined()
-    expect(glass.material?.getActiveTextures()[0].name).toBe('city-glass')
-    expect(city.landmarks.material?.getActiveTextures()[0].name).toBe('city-concrete')
+    const e7Glass = city.chunks.find((m) => m.name === 'landmark-engineering_7-glass')!
+    const davisGlass = city.chunks.find((m) => m.name === 'landmark-davis_centre-glass')!
+    const e7Solid = city.chunks.find((m) => m.name === 'landmark-engineering_7-solid')!
+    const davisSolid = city.chunks.find((m) => m.name === 'landmark-davis_centre-solid')!
+    expect(e7Glass).toBeDefined()
+    expect(e7Glass.material?.name).toBe('city-glass')
+    expect(e7Glass.material).toBe(davisGlass.material)
+    expect(e7Solid.material?.name).toBe('city-concrete')
     const down = (x: number, z: number) => new Ray(new Vector3(x, 100, z), new Vector3(0, -1, 0), 200)
-    expect(down(e7.x, e7.z).intersectsMesh(city.landmarks).hit).toBe(true)
-    expect(down(davis.x, davis.z).intersectsMesh(city.landmarks).hit).toBe(false)
-    expect(down(davis.x, davis.z).intersectsMesh(glass).hit).toBe(false)
+    expect(down(e7.x, e7.z).intersectsMesh(e7Solid).hit).toBe(true)
+    expect(down(davis.x, davis.z).intersectsMesh(davisSolid).hit).toBe(false)
+    expect(down(davis.x, davis.z).intersectsMesh(davisGlass).hit).toBe(false)
     expect(JSON.stringify(world)).toBe(original)
     city.dispose()
     expect(scene.meshes).toHaveLength(0)
-    expect(scene.textures).toHaveLength(0)
+    expect(scene.textures.filter(t => t.name.startsWith('city-'))).toHaveLength(0)
     scene.dispose()
+    expect(scene.textures).toHaveLength(0)
     engine.dispose()
   })
 })

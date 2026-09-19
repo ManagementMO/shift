@@ -1,6 +1,8 @@
 # Toronto cityscape experiment
 
-Branch: `demo/toronto-cityscape`. Worktree: `/Users/mo/Downloads/shift-cityscape`.
+Developed on `demo/toronto-cityscape` in `/Users/mo/Downloads/shift-cityscape`, then integrated with the Waterloo E7 work on `main`.
+
+The standard local app serves the cityscape at <http://127.0.0.1:5174/showcase> and the full simulation at <http://127.0.0.1:5174/>. The isolated worktree below remains available for further experimentation.
 
 ## Preview
 
@@ -80,3 +82,5 @@ npm run build
 ```
 
 Tests cover texture ownership/disposal, camera projection and reduced-motion jumps, courtyard preservation, vegetation detail-level lifecycle, optional-asset fallback and network mismatch protection, plus the existing geometry, coordinates, roads and replay interpolation suite. Browser verification must include loaded landmark GLBs, all camera presets, lighting, projection switching, replay pause/resume, and synchronized comparison panes. Frame rates depend on viewport size, GPU, camera and background work; record them as local observations, not guarantees.
+
+The integrated frontend suite passed 63 tests; lint and the production build passed. The build still reports the existing large-renderer-chunk advisory. Targeted Waterloo backend checks passed 6 tests with one optional local-pack check skipped because the E7 pack was absent in the isolated runtime. A native-Retina downtown browser sample after the clarity upgrade measured approximately 37–41 fps at 2482×1526 rendering resolution; this was a local observation, not a cross-device benchmark.
