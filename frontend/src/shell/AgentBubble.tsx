@@ -7,7 +7,7 @@ import { cameraTo, leadMap } from '../world/registry'
 import { agentPose, currentPose } from '../world/camera'
 
 const STATE_LABEL: Record<PersonState, string> = {
-  not_departed: 'still inside the venue',
+  not_departed: 'not yet departed',
   walking: 'walking',
   waiting: 'waiting for a shuttle',
   riding: 'riding',
@@ -29,7 +29,7 @@ export default function AgentBubble() {
   const t = useStore((s) => s.t)
   const [pt, setPt] = useState<{ x: number; y: number } | null>(null)
 
-  const id = selection && selection.kind !== 'restriction' && selection.kind !== 'stop' ? selection.id : null
+  const id = selection && ['bus', 'person', 'car'].includes(selection.kind) ? selection.id : null
 
   // Follow the entity on screen (per frame, off the React tree except for the final set when it moves).
   useEffect(() => {
@@ -38,7 +38,7 @@ export default function AgentBubble() {
     let lastFollow = 0
     const update = (tt: number, follow: boolean) => {
       const lead = leadMap()
-      const ix = rx.tracks[id]
+      const ix = rx.tracks[id] ?? rx.tracks[`car_${id}`]
       const stop = pack?.stops.find((s) => s.stop_id === waitingStop(rx.personEvents[id], tt))
       const pos: [number, number] | null = ix ? lonLatAt(ix, tt) : stop ? [stop.lon, stop.lat] : null
       if (!lead || !pos) {
@@ -79,13 +79,13 @@ export default function AgentBubble() {
   }, [id, rx, pack, cameraMode])
 
   if (!selection || !id || !rx) return null
-  const ent = entitiesAt(rx, t).find((e) => e.id === id)
+  const ent = entitiesAt(rx, t).find((e) => e.id === id || e.id === `car_${id}`)
   const style = pt ? { left: pt.x, top: pt.y } : undefined
   const cls = `bubble ${pt ? '' : 'docked'}`
 
   const follow = () => {
     const lead = leadMap()
-    const ix = rx.tracks[id]
+    const ix = rx.tracks[id] ?? rx.tracks[`car_${id}`]
     const pos = ix ? lonLatAt(ix, t) : null
     if (lead && pos) cameraTo(agentPose([pos[0], pos[1]], ent?.angle ?? null, currentPose(lead)), 'agent')
   }
@@ -95,20 +95,22 @@ export default function AgentBubble() {
     const state = personStateAt(ev, t, travelers[id]?.has_car ? 'car' : undefined)
     const trav = travelers[id]
     const zone = pack?.zones.find((z) => z.zone_id === trav?.dest_zone)
+    const development = scenario?.developments?.find((d) => d.development_id === trav?.development_id)
+    const destination = scenario?.developments?.find((d) => d.development_id === trav?.dest_zone)
     const wait = waitedSoFar(ev, t)
     const num = Number(id.replace(/\D/g, ''))
     return (
       <div className={cls} style={style}>
         <div className="bubble-head">
-          <b>Traveler {Number.isFinite(num) ? num : id}</b>
+          <b>{development ? `${development.spec.name} · ${trav?.trip_direction} trip` : `Traveler ${Number.isFinite(num) ? num : id}`}</b>
           <span className={`pill ${state}`}>{STATE_LABEL[state]}</span>
           <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
             ✕
           </button>
         </div>
-        <div className="small">heading to {zone?.name ?? trav?.dest_zone ?? 'unknown'}</div>
+        <div className="small">heading to {zone?.name ?? destination?.spec.name ?? trav?.dest_zone ?? 'unknown'}</div>
         <div className="small dim">
-          {trav?.has_car ? 'drove here' : 'no car'} · leaves at +{fmt(trav?.depart_s ?? 0)}
+          {trav?.has_car ? 'car trip' : 'no car'} · leaves at +{fmt(trav?.depart_s ?? 0)}
           {wait > 0 && ` · waited ${fmt(wait)}`}
           {ent?.speed !== undefined && state !== 'waiting' && ` · ${(ent.speed * 3.6).toFixed(0)} km/h`}
         </div>
@@ -158,11 +160,11 @@ export default function AgentBubble() {
     )
   }
 
-  const owner = id.startsWith('car_p') ? id.slice(4) : null
+  const owner = id.startsWith('car_') ? id.slice(4) : null
   return (
     <div className={cls} style={style}>
       <div className="bubble-head">
-        <b>{owner ? `Traveler ${Number(owner.replace(/\D/g, ''))}'s car` : 'Background car'}</b>
+        <b>{owner ? 'Cohort car trip' : 'Background car'}</b>
         <span className="pill car">car</span>
         <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
           ✕

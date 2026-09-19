@@ -9,7 +9,7 @@ import { Camera } from '@babylonjs/core/Cameras/camera'
 
 import type { WorldData } from './worldData'
 
-export type CameraMode = 'city' | 'district' | 'corridor' | 'agent' | 'vehicle' | 'incident'
+export type CameraMode = 'city' | 'district' | 'corridor' | 'agent' | 'vehicle' | 'incident' | 'development'
 
 export interface Pose {
   target: [number, number] // x, z (world metres); target height is always ground

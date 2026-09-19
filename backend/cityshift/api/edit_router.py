@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from cityshift.api.service import get_service
-from cityshift.contracts import InterventionProposal
+from cityshift.contracts import DevelopmentPreview, DevelopmentSpec, InterventionProposal
 
 router = APIRouter(prefix="/api/scenarios", tags=["edit"])
 
@@ -34,3 +34,23 @@ def apply_edit(sid: str, proposal: InterventionProposal) -> dict:
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return child.model_dump(mode="json")
+
+
+@router.post("/{sid}/developments/preview")
+def preview_development(sid: str, spec: DevelopmentSpec) -> DevelopmentPreview:
+    try:
+        return get_service().preview_development(sid, spec)
+    except KeyError:
+        raise HTTPException(404, f"scenario {sid} not found") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@router.post("/{sid}/developments/apply")
+def apply_development(sid: str, proposal: DevelopmentPreview) -> dict:
+    try:
+        return get_service().apply_development(sid, proposal).model_dump(mode="json")
+    except KeyError:
+        raise HTTPException(404, f"scenario {sid} not found") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None

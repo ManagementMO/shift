@@ -221,16 +221,13 @@ def apply(pack: CityPack, scenario: ScenarioSpec, p: InterventionProposal) -> Sc
         restrictions.append(hazard_restriction(pack.pack_id, p.hazard))
         change.append(f"storm corridor {p.hazard.track_id}: {len(p.edge_ids)} edges {p.start_s}-{p.end_s}s")
     child_id = f"{scenario.scenario_id.split('-v')[0]}-v{hashlib.sha1(('|'.join(change) + scenario.scenario_id).encode()).hexdigest()[:6]}"
-    return ScenarioSpec(
-        scenario_id=child_id,
-        pack_id=scenario.pack_id,
-        demand_id=scenario.demand_id,
-        evidence_bundle_id=scenario.evidence_bundle_id,
-        evidence_hash=scenario.evidence_hash,
-        restrictions=restrictions,
-        hazards=hazards,
-        constraints=cons,
-        parent_scenario_id=scenario.scenario_id,
-        change_set=scenario.change_set + change,
-        label=f"{scenario.label} · edit: {p.reason}",
-    )
+    return scenario.model_copy(deep=True, update={
+        "scenario_id": child_id,
+        "restrictions": restrictions,
+        "hazards": hazards,
+        "constraints": cons,
+        "parent_scenario_id": scenario.scenario_id,
+        "change_set": scenario.change_set + change,
+        "label": f"{scenario.label} · edit: {p.reason}",
+        "created_at": datetime.now(UTC),
+    })

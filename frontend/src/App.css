@@ -332,6 +332,50 @@ button:disabled {
   opacity: 1;
 }
 
+.toolpanel.toolpanel-development {
+  width: 360px;
+  top: 78px;
+  transform: none;
+  max-height: calc(100vh - 220px);
+}
+.development-tool h3 { margin: 0; font-size: 17px; }
+.development-steps { display: flex; gap: 14px; color: var(--dim); font-size: 11px; }
+.development-steps b, .development-eyebrow { color: var(--accent); }
+.development-eyebrow { text-transform: uppercase; letter-spacing: 0.1em; font-size: 10px; }
+.development-placement, .development-summary { display: flex; flex-direction: column; gap: 4px; padding: 11px 12px; border-radius: 10px; background: var(--accent-soft); }
+.development-placement { border: 1px dashed var(--accent); }
+.development-placement.placed { border-style: solid; }
+.development-placement span, .development-summary span { font-size: 11px; color: var(--ink-2); }
+.development-summary b { color: var(--accent); font-size: 15px; }
+.development-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.development-grid > *, .development-grid input { min-width: 0; width: 100%; }
+.development-tool input[type='number'] { padding: 5px 8px; border: 1px solid rgba(80, 104, 116, 0.24); border-radius: 7px; background: rgba(255, 255, 255, 0.8); width: 100%; }
+.development-tool input[type='number']:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.development-section { border-top: 1px solid rgba(80, 104, 116, 0.16); padding-top: 10px; }
+.development-section summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
+.development-section p { margin: 8px 0; }
+.development-section > details > label { margin: 7px 0; }
+.development-fields { min-width: 0; border: 1px solid rgba(80, 104, 116, 0.2); border-radius: 8px; padding: 8px; margin: 10px 0; }
+.development-fields legend { font-weight: 600; padding: 0 4px; }
+.development-fields > label { margin-top: 7px; }
+.development-tool label.check { flex-direction: row; align-items: center; gap: 8px; }
+.development-error { overflow-wrap: anywhere; }
+.population-summary { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; }
+.development-markers { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
+.development-pin { visibility: hidden; position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 9px; padding: 9px 12px; min-width: 180px; max-width: 270px; text-align: left; pointer-events: auto; background: rgba(252, 253, 250, 0.96); border: 1px solid var(--development-color); border-left-width: 4px; border-radius: 10px; box-shadow: 0 5px 20px rgba(22, 32, 44, 0.2); will-change: transform; }
+.development-pin::after { content: ''; position: absolute; left: calc(50% - 5px); bottom: -6px; width: 10px; height: 10px; background: var(--development-color); transform: rotate(45deg); z-index: -1; }
+.development-pin.draft { border-style: dashed; background: rgba(239, 252, 252, 0.94); }
+.development-pin.selected { box-shadow: 0 0 0 3px rgba(23, 143, 131, 0.18), 0 5px 20px rgba(22, 32, 44, 0.2); }
+.development-pin-glyph { font-size: 26px; line-height: 1; color: var(--development-color); }
+.development-pin-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.development-pin-copy small { font-size: 8px; font-weight: 700; letter-spacing: 0.1em; color: var(--development-color); }
+.development-pin-copy b { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.development-pin-copy > span { font-size: 10px; color: var(--dim); }
+.development-pin > i { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--development-color); box-shadow: 0 0 0 4px rgba(23, 143, 131, 0.12); }
+.development-map-hint { position: absolute; top: 76px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 4px; padding: 11px 16px; font-size: 12px; text-align: center; }
+.development-map-hint span { color: var(--dim); font-size: 11px; }
+.development-map-key { position: absolute; bottom: 138px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 7px 12px; border-radius: 20px; background: rgba(252, 253, 250, 0.9); box-shadow: 0 2px 8px rgba(22, 32, 44, 0.12); color: var(--ink-2); font-size: 10px; text-align: center; }
+
 .toolpanel {
   position: absolute;
   left: 72px;
@@ -559,6 +603,16 @@ input[type='checkbox'] {
   margin-top: 4px;
   background: var(--accent);
   color: var(--on-accent);
+}
+.cams button.development {
+  margin-top: 4px;
+  background: rgba(23, 143, 131, 0.16);
+  color: #178f83;
+  font-weight: 600;
+}
+.cams button.development.on {
+  background: #178f83;
+  color: #fff;
 }
 
 /* ---------- drawers (scenario left, lens right) ---------- */

@@ -1,8 +1,11 @@
 import type {
   CityPack,
+  CohortRecord,
   CompileInfo,
   Corridor,
   DemandSet,
+  DevelopmentPreview,
+  DevelopmentSpec,
   EntityTrack,
   EvidenceBundle,
   Health,
@@ -58,20 +61,27 @@ export const api = {
     post<SimulationRun>('/api/runs', { scenario_id, plan_id, seed }),
   cancelRun: (rid: string) => post<{ canceled: boolean }>(`/api/runs/${rid}/cancel`, {}),
   async bundle(run: SimulationRun): Promise<RunBundle> {
-    const [tracks, events, occupancy, stopQueue, compile] = await Promise.all([
+    const [tracks, events, occupancy, stopQueue, compile, scenario, demand, cohort] = await Promise.all([
       get<Record<string, EntityTrack>>(`/api/runs/${run.run_id}/tracks`),
       get<PersonEvent[]>(`/api/runs/${run.run_id}/events`),
       get<Record<string, [number, number][]>>(`/api/runs/${run.run_id}/occupancy`),
       get<Record<string, [number, number][]>>(`/api/runs/${run.run_id}/stop_queue`),
       get<CompileInfo>(`/api/runs/${run.run_id}/compile`).catch(() => null),
+      get<ScenarioSpec>(`/api/runs/${run.run_id}/scenario`).catch(() => get<ScenarioSpec>(`/api/scenarios/${run.scenario_id}`)),
+      get<DemandSet>(`/api/runs/${run.run_id}/demand`).catch(() => get<DemandSet>(`/api/scenarios/${run.scenario_id}/demand`)),
+      get<CohortRecord>(`/api/runs/${run.run_id}/cohort`),
     ])
-    return { run, tracks, events, occupancy, stopQueue, compile }
+    return { run, tracks, events, occupancy, stopQueue, compile, scenario, demand, cohort }
   },
   // prompt-to-edit
   previewEdit: (sid: string, prompt: string) =>
     post<InterventionProposal>(`/api/scenarios/${sid}/edit/preview`, { prompt, use_ai: usePreferences.getState().preferences.aiEnabled }),
   applyEdit: (sid: string, proposal: InterventionProposal) =>
     post<ScenarioSpec>(`/api/scenarios/${sid}/edit/apply`, proposal),
+  previewDevelopment: (sid: string, spec: DevelopmentSpec) =>
+    post<DevelopmentPreview>(`/api/scenarios/${sid}/developments/preview`, spec),
+  applyDevelopment: (sid: string, proposal: DevelopmentPreview) =>
+    post<ScenarioSpec>(`/api/scenarios/${sid}/developments/apply`, proposal),
   // agents
   investigate: (sid: string, problem: string, constraint: string) =>
     post<Investigation>(`/api/scenarios/${sid}/investigate`, { problem, constraint, options: investigationOptions(usePreferences.getState().preferences) }),

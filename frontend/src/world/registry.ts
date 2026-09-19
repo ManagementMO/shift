@@ -13,6 +13,7 @@ export type SyncMap = MapCamera & {
   egress?: () => boolean
   setCameraMode?: (mode: CameraMode) => void
   syncFrom?: (source: SyncMap) => boolean
+  projectElevated?: (lngLat: [number, number], height: number) => { x: number; y: number }
 }
 
 /** Renderer counters for diagnostics (Developer panel / debug bridge). */
@@ -35,6 +36,10 @@ export function registerMap(side: string, map: SyncMap): () => void {
     map.off('move', onMove)
     maps.delete(side)
   }
+}
+
+export function mapForSide(side: string): SyncMap | null {
+  return maps.get(side) ?? null
 }
 
 export function leadMap(): SyncMap | null {

@@ -1,4 +1,5 @@
 import { useStore } from '../store'
+import { DEVELOPMENT_USES, developmentCounts } from '../development'
 import type { SimulationRun } from '../types'
 import { fmt } from '../util'
 
@@ -29,9 +30,10 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
   const cancelRun = useStore((s) => s.cancelRun)
   const openRun = useStore((s) => s.openRun)
   const select = useStore((s) => s.select)
+  const setTool = useStore((s) => s.setTool)
 
   const samePack = scenarios.filter((s) => s.pack_id === (pack?.pack_id ?? s.pack_id))
-  const runsFor = (pid: string) => runs.filter((r) => r.plan_id === pid)
+  const runsFor = (pid: string) => runs.filter((r) => r.plan_id === pid && r.scenario_id === scenarioId)
 
   return (
     <aside className="drawer scenario-drawer">
@@ -65,6 +67,9 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
             fleet {scenario.constraints.fleet.map((f) => `${f.vehicle_id} (${f.capacity})`).join(', ')} · window +{fmt(scenario.constraints.service_window_s[0])}–+
             {fmt(scenario.constraints.service_window_s[1])} · horizon +{fmt(scenario.constraints.horizon_s)}
           </div>
+          {(scenario.developments ?? []).map((d) => <button key={d.development_id} className="linkish" onClick={() => { setTool('development'); select({ kind: 'development', id: d.development_id }) }}>
+            {d.spec.name} · {d.spec.capacity} {DEVELOPMENT_USES[d.spec.land_use].unit} · {developmentCounts(d.spec).trips} added trips
+          </button>)}
           {scenario.restrictions.map((r) => (
             <button key={r.restriction_id} className="linkish" onClick={() => select({ kind: 'restriction', id: r.restriction_id })}>
               ⛔ {r.label} — {r.edge_ids.length} segments, +{fmt(r.start_s)}–+{fmt(r.end_s)}

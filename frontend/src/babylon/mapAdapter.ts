@@ -131,6 +131,11 @@ export class BabylonSyncMap implements SyncMap {
     return this.projectWorld(x, 0, z)
   }
 
+  projectElevated(lngLat: [number, number], height: number): { x: number; y: number } {
+    const [x, z] = this.ws.frame.lonLatToWorld(...lngLat)
+    return this.projectWorld(x, height, z)
+  }
+
   projectWorld(x: number, y: number, z: number): { x: number; y: number } {
     const engine = this.ws.engine
     const cam = this.ws.camera.cam

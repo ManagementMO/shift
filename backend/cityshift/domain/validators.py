@@ -43,11 +43,11 @@ def validate_plan(pack: CityPack, scenario: ScenarioSpec, plan: ServicePlan, dem
             issues.append(ValidationIssue(code="duty.repeated_stop", severity="soft", message=f"{d.duty_id}: repeats a stop inside one duty", refs=[d.duty_id]))
         # every drop must belong to a destination zone or it is a wasted call
         for sid in d.stop_sequence[1:]:
-            if sid in stops and zone_for_stop(pack, stops[sid]) is None:
+            if sid in stops and zone_for_stop(pack, stops[sid], scenario) is None:
                 issues.append(ValidationIssue(code="duty.drop_outside_zones", severity="soft", message=f"{d.duty_id}: drop stop {stops[sid].name!r} is not within 300 m of any destination zone", refs=[d.duty_id, sid]))
     pickups = {d.stop_sequence[0] for d in plan.duties if d.stop_sequence}
     if len(pickups) > 1:
-        issues.append(ValidationIssue(code="plan.multiple_pickups", severity="soft", message="duties pick up at different venue stops; travelers are directed to the first duty's stop"))
+        issues.append(ValidationIssue(code="plan.multiple_pickups", severity="soft", message="duties use multiple pickups; each trip is assigned only to a reachable pickup/alighting pair within its walking limit and departure window"))
 
     if not any(i.severity == "hard" for i in issues):
         schedules, errors = schedule_duties(pack, plan, scenario)
@@ -70,7 +70,13 @@ def validate_plan(pack: CityPack, scenario: ScenarioSpec, plan: ServicePlan, dem
             if last.est_end_s > cons.horizon_s:
                 issues.append(ValidationIssue(code="window.ends_after_horizon", severity="soft", message=f"{vid}: last duty {last.duty.duty_id} is estimated to finish at {last.est_end_s}s, after the {cons.horizon_s}s horizon", refs=[last.duty.duty_id]))
         # capacity: declared no-car demand per zone vs seats offered
-        if demand is not None and schedules:
+        multi_origin = demand is not None and any(t.origin_edge != pack.venue_edge_id or t.development_id for t in demand.travelers)
+        if multi_origin and schedules:
+            issues.append(ValidationIssue(
+                code="capacity.multi_origin", severity="soft",
+                message="Zone seat totals do not establish coverage for multi-origin demand; use compiled trip assignments and measured SUMO queues.",
+            ))
+        if demand is not None and schedules and not multi_origin:
             need: dict[str, int] = {}
             for t in demand.travelers:
                 if not t.has_car:
@@ -78,7 +84,7 @@ def validate_plan(pack: CityPack, scenario: ScenarioSpec, plan: ServicePlan, dem
             cap = {f.vehicle_id: f.capacity for f in cons.fleet}
             offered: dict[str, int] = {}
             for s in schedules:
-                zs = {zone_for_stop(pack, stops[sid]) for sid in s.duty.stop_sequence[1:]}
+                zs = {zone_for_stop(pack, stops[sid], scenario) for sid in s.duty.stop_sequence[1:]}
                 for z in zs:
                     if z:
                         offered[z] = offered.get(z, 0) + cap.get(s.duty.vehicle_id, 60)

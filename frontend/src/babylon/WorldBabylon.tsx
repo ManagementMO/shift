@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef } from 'react'
+import '@babylonjs/core/Culling/ray'
 
 import { useStore } from '../store'
+import { scenarioForView } from '../development'
+import DevelopmentMarkers from '../world/DevelopmentMarkers'
 import { clock } from '../world/playback'
 import { registerMap } from '../world/registry'
 import { BabylonSyncMap } from './mapAdapter'
 import { Overlay } from './overlay'
+import { DevelopmentOverlay } from './developments'
 import type { WorldScene } from './scene'
 import WorldCanvas from './WorldCanvas'
 import './world.css'
@@ -32,7 +36,12 @@ export default function WorldBabylon({ runId, side, onWorldReady, onWorldError }
       if (window.__cityshift) window.__cityshift.babylon = ws
       const map = new BabylonSyncMap(ws)
       const overlay = new Overlay(ws.scene, ws.roads, ws.frame)
+      const developments = new DevelopmentOverlay(ws.scene, ws.frame)
       const unregister = registerMap(side, map)
+      if (side !== 'left') {
+        const pending = useStore.getState().pendingDevelopmentFocus
+        if (pending) useStore.getState().focusDevelopment(pending)
+      }
 
       let rxKey: string | null = null
       const sync = (): void => {
@@ -45,16 +54,18 @@ export default function WorldBabylon({ runId, side, onWorldReady, onWorldError }
           ws.traffic.setReplay(rx)
         }
         const sel = s.selection
-        ws.traffic.selectedId = sel && sel.kind !== 'restriction' && sel.kind !== 'stop' ? sel.id : null
+        ws.traffic.selectedId = sel && ['bus', 'car', 'person'].includes(sel.kind)
+          ? sel.kind === 'person' && rx?.bundle.compile?.mode_assignment[sel.id] === 'car' ? `car_${sel.id}` : sel.id : null
         ws.traffic.dimOthers = sel?.kind === 'person'
-        marks(overlay, clock.t)
+        ws.canvas.style.cursor = s.developmentDraft && side !== 'left' ? 'crosshair' : 'default'
+        marks(overlay, developments, clock.t, runIdRef.current, side)
       }
       syncRef.current = sync
       sync()
       ws.simT = clock.t
       const offFrame = clock.onFrame((t) => {
         ws.simT = t
-        marks(overlay, t)
+        marks(overlay, developments, t, runIdRef.current, side)
       })
       const unsub = useStore.subscribe(sync)
 
@@ -72,6 +83,19 @@ export default function WorldBabylon({ runId, side, onWorldReady, onWorldError }
         const r = canvas.getBoundingClientRect()
         const sx = e.clientX - r.left
         const sy = e.clientY - r.top
+        const state = useStore.getState()
+        if (state.developmentDraft && side !== 'left') {
+          const ground = ws.scene.pick(sx, sy, (mesh) => mesh === ws.city.ground)
+          if (ground?.pickedPoint) state.placeDevelopment(ws.frame.worldToLonLat(ground.pickedPoint.x, ground.pickedPoint.z))
+          else useStore.setState({ developmentError: 'Choose a land surface beside an existing network edge.' })
+          return
+        }
+        const building = ws.scene.pick(sx, sy, (mesh) => !!mesh.metadata?.development_id)
+        if (building?.pickedMesh?.metadata?.development_id) {
+          state.setTool('development')
+          state.select({ kind: 'development', id: building.pickedMesh.metadata.development_id })
+          return
+        }
         const project = (x: number, y: number, z: number) => map.projectWorld(x, y, z)
         const hit = ws.traffic.pick(sx, sy, project)
         if (hit) {
@@ -101,6 +125,7 @@ export default function WorldBabylon({ runId, side, onWorldReady, onWorldError }
         offFrame()
         unregister()
         overlay.dispose()
+        developments.dispose()
         map.dispose()
         syncRef.current = () => {}
         if (sceneRef.current === ws) sceneRef.current = null
@@ -111,16 +136,24 @@ export default function WorldBabylon({ runId, side, onWorldReady, onWorldError }
   )
 
   if (!pack) return <div className={`world world-${side} bworld`} />
-  return <WorldCanvas packId={pack.pack_id} onReady={onReady} onError={onWorldError} quality={side === 'solo' ? 'high' : 'balanced'} className={`world world-${side} bworld`} />
+  return <div className={`world world-${side} bworld`}>
+    <WorldCanvas packId={pack.pack_id} onReady={onReady} onError={onWorldError} quality={side === 'solo' ? 'high' : 'balanced'} />
+    <DevelopmentMarkers runId={runId} side={side} />
+  </div>
 }
 
 /** Active closures, ghost proposal and focus corridor for sim time `t`, from the store. */
-function marks(overlay: Overlay, t: number): void {
+function marks(overlay: Overlay, developments: DevelopmentOverlay, t: number, runId: string | null, side: string): void {
   const s = useStore.getState()
-  const scenario = s.scenarios.find((x) => x.scenario_id === s.scenarioId)
+  const bundle = runId ? s.replays[runId]?.bundle ?? null : null
+  const scenario = scenarioForView(s.scenarios, s.scenarioId, bundle, side)
   const closed: string[] = []
   for (const r of scenario?.restrictions ?? []) if (t >= r.start_s && t <= r.end_s) closed.push(...r.edge_ids)
   const focusId = s.selection?.kind === 'restriction' ? s.selection.id : null
   const focus = focusId ? scenario?.restrictions.find((r) => r.restriction_id === focusId)?.edge_ids ?? [] : []
-  overlay.set({ closed, ghost: s.ghost?.edges ?? [], focus, ghostStops: s.ghost?.stops ?? [] })
+  const draft = side !== 'left' && s.developmentPlaced ? s.developmentDraft : null
+  const access = draft ? s.developmentPreview?.development.access.map((a) => a.edge_id) ?? [] : []
+  overlay.set({ closed, ghost: side === 'left' ? [] : [...(s.ghost?.edges ?? []), ...access], focus, ghostStops: side === 'left' ? [] : s.ghost?.stops ?? [] })
+  developments.set({ developments: scenario?.developments ?? [], draft, invalidDraft: !!s.developmentError,
+    focusedId: s.selection?.kind === 'development' ? s.selection.id : null, zones: s.pack?.zones ?? [], t })
 }

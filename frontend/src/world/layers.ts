@@ -8,7 +8,8 @@ import { TripsLayer } from '@deck.gl/geo-layers'
 import { ConeGeometry, CubeGeometry, CylinderGeometry } from '@luma.gl/engine'
 import type { Layer, PickingInfo } from '@deck.gl/core'
 import type { Selection } from '../store'
-import type { CityPack, HazardTrack, ScenarioSpec, StopCandidate } from '../types'
+import type { CityPack, DevelopmentSpec, HazardTrack, ScenarioSpec, StopCandidate } from '../types'
+import { DEVELOPMENT_USES, developmentActivity, developmentArrowFraction, developmentDirection, developmentPolygon, validDevelopmentGeometry } from '../development'
 import { entitiesAt, hazardFootprint, MAX_GAP_S, type EntityAt, type PersonState, type ReplayIndex, type TrackIndex } from '../replay'
 
 export type RGBA = [number, number, number, number]
@@ -105,6 +106,8 @@ export type WorldInputs = {
   ghostStops?: StopCandidate[]
   ghostEdges?: string[]
   ghostHazard?: HazardTrack | null
+  developmentDraft?: DevelopmentSpec | null
+  invalidDevelopment?: boolean
   focusCorridorEdges?: string[]
   dimOthers?: boolean
   side?: string
@@ -137,6 +140,52 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
   const out: Layer[] = []
   const selectedId = selection?.id ?? null
   const dim = w.dimOthers && selection && (selection.kind === 'person' || selection.kind === 'bus' || selection.kind === 'car')
+
+  const developments = (scenario?.developments ?? []).map((d) => ({ id: d.development_id, spec: d.spec, ghost: false }))
+  if (w.developmentDraft) developments.push({ id: 'draft', spec: w.developmentDraft, ghost: true })
+  const color = (spec: DevelopmentSpec, ghost: boolean): RGBA => {
+    const hex = ghost ? w.invalidDevelopment ? '#d75e48' : '#1598b0' : DEVELOPMENT_USES[spec.land_use].color
+    return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16), ghost ? 120 : 240]
+  }
+  for (const development of developments) {
+    const { id, spec, ghost } = development
+    if (!validDevelopmentGeometry(spec)) continue
+    const ring = developmentPolygon(spec)
+    const tint = color(spec, ghost)
+    out.push(new PolygonLayer({
+      ...SLOT.top, id: `development-${id}${sfx}`, data: [development],
+      getPolygon: () => ring, getElevation: spec.height_m, extruded: true,
+      getFillColor: tint, getLineColor: withA(tint, 255), wireframe: ghost,
+      pickable: !ghost, onClick: () => select({ kind: 'development', id }),
+    }))
+    out.push(new PathLayer({
+      ...SLOT.top, id: `development-footprint-${id}${sfx}`, data: [ring],
+      getPath: () => [...ring, ring[0]], getColor: withA(tint, 255), getWidth: 2,
+      widthUnits: 'meters', widthMinPixels: 2, parameters: { depthCompare: 'always' },
+    }))
+    const direction = ghost ? developmentDirection(spec) : developmentActivity(spec, t)
+    if (!direction || (!ghost && selectedId !== id)) continue
+    const paths: { path: [number, number][] }[] = []
+    for (const zone of pack?.zones ?? []) {
+      if (!(spec.zone_shares[zone.zone_id] > 0)) continue
+      const other: [number, number] = [zone.lon, zone.lat]
+      const [start, end] = direction === 'outbound' ? [spec.position, other] : [other, spec.position]
+      const dx = end[0] - start[0], dy = end[1] - start[1]
+      const cos = Math.cos(spec.position[1] * Math.PI / 180)
+      const length = Math.hypot(dx * cos, dy)
+      if (!length) continue
+      const fraction = developmentArrowFraction(spec, direction, length * 111320)
+      const tip: [number, number] = [start[0] + dx * fraction, start[1] + dy * fraction]
+      const back: [number, number] = [tip[0] - dx / length * 0.00016, tip[1] - dy / length * 0.00016]
+      const nx = -dy / length * 0.00006 / cos, ny = dx * cos / length * 0.00006
+      paths.push({ path: [start, end] }, { path: [[back[0] + nx, back[1] + ny], tip, [back[0] - nx, back[1] - ny]] })
+    }
+    out.push(new PathLayer({
+      ...SLOT.top, id: `development-intentions-${id}${sfx}`, data: paths,
+      getPath: (d) => d.path, getColor: withA(tint, 190), getWidth: 2,
+      widthUnits: 'meters', widthMinPixels: 2, parameters: { depthCompare: 'always' },
+    }))
+  }
 
   // --- closures & focus corridors (ground, below buildings) ---
   const closedNow = new Set<string>()
@@ -490,7 +539,7 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
         getOrientation: (d) => [0, sumoYaw(d.angle), 0],
         getScale: [2.2 * carK, 0.9 * carK, 0.7 * carK],
         getColor: (d) => {
-          const c = d.id.startsWith('car_p') ? PALETTE.cohortCar : PALETTE.car
+          const c = d.id.startsWith('car_') ? PALETTE.cohortCar : PALETTE.car
           return [c[0], c[1], c[2], alpha(d.id, c[3])] as RGBA
         },
         material: { ambient: 0.5, diffuse: 0.6, shininess: 24, specularColor: [90, 90, 90] },
@@ -509,7 +558,7 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
         getRadius: 2.6,
         radiusUnits: 'meters',
         radiusMinPixels: 1.8,
-        getFillColor: (d) => (d.id.startsWith('car_p') ? PALETTE.cohortCar : PALETTE.car),
+        getFillColor: (d) => (d.id.startsWith('car_') ? PALETTE.cohortCar : PALETTE.car),
       }),
     )
   }

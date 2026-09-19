@@ -15,6 +15,8 @@ const MODES: { id: CameraMode; label: string; key: string }[] = [
 export default function CameraModes({ active = true }: { active?: boolean }) {
   const cameraMode = useStore((s) => s.cameraMode)
   const setCameraMode = useStore((s) => s.setCameraMode)
+  const hasDevelopment = useStore((s) => (s.scenarios.find((x) => x.scenario_id === s.scenarioId)?.developments?.length ?? 0) > 0)
+  const focusDevelopment = useStore((s) => s.focusDevelopment)
 
   const primaryRunId = useStore((s) => s.primaryRunId)
   const pack = useStore((s) => s.pack)
@@ -44,6 +46,10 @@ export default function CameraModes({ active = true }: { active?: boolean }) {
         egress()
         return
       }
+      if (e.key === '7') {
+        useStore.getState().focusDevelopment()
+        return
+      }
       const m = MODES.find((x) => x.key === e.key)
       if (m) go(m.id)
     }
@@ -61,6 +67,11 @@ export default function CameraModes({ active = true }: { active?: boolean }) {
       {hero && (
         <button className="hero" onClick={egress} title="Egress (6) — rewind to the first travellers leaving the Blue Jays game">
           Egress
+        </button>
+      )}
+      {hasDevelopment && (
+        <button className={`development ${cameraMode === 'development' ? 'on' : ''}`} onClick={() => focusDevelopment()} title="Development (7) — fly to the newest building added in this scenario">
+          Development
         </button>
       )}
     </nav>

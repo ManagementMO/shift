@@ -1,6 +1,6 @@
 // Cinematic camera presets. Every transition is an eased easeTo/flyTo; nothing jumps.
 
-export type CameraMode = 'city' | 'district' | 'corridor' | 'agent' | 'incident'
+export type CameraMode = 'city' | 'district' | 'corridor' | 'agent' | 'incident' | 'development'
 
 export type CameraPose = { center: [number, number]; zoom: number; pitch: number; bearing: number }
 
@@ -54,6 +54,13 @@ export function agentPose(center: [number, number], heading: number | null, base
 export function incidentPose(center: [number, number], radiusM: number, base: CameraPose): CameraPose {
   const zoom = Math.max(14.5, Math.min(16.5, 17.2 - Math.log2(Math.max(60, radiusM) / 60)))
   return { center, zoom, pitch: 60, bearing: base.bearing + 25 }
+}
+
+/** Close-up on a placed building: the whole footprint and roof stay in frame, with street context around it. */
+export function developmentPose(center: [number, number], footprintM: [number, number], heightM: number, base: CameraPose): CameraPose {
+  const extent = Math.max(60, ...footprintM, heightM * 0.8)
+  const zoom = Math.max(15.5, Math.min(17.9, 18.9 - Math.log2(extent / 30)))
+  return { center, zoom, pitch: 58, bearing: base.bearing }
 }
 
 export function currentPose(map: MapCamera): CameraPose {

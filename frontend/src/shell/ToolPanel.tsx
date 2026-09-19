@@ -5,6 +5,7 @@ import type { Corridor, ServicePlan } from '../types'
 import { fmt } from '../util'
 import { ghostFromProposal } from './ghost'
 import ProposalCard from './ProposalCard'
+import DevelopmentTool from './DevelopmentTool'
 
 const TITLES: Record<ToolId, string> = {
   closure: 'Close or reopen a street',
@@ -12,6 +13,7 @@ const TITLES: Record<ToolId, string> = {
   stop: 'Bus stops',
   population: 'Population',
   event: 'Event',
+  development: 'New development',
   weather: 'Moving hazard',
   road: 'Roads',
   intersection: 'Intersections',
@@ -22,7 +24,7 @@ export default function ToolPanel() {
   const setTool = useStore((s) => s.setTool)
   if (!tool) return null
   return (
-    <aside className="toolpanel">
+    <aside className={`toolpanel ${tool === 'development' ? 'toolpanel-development' : ''}`}>
       <div className="toolpanel-head">
         <b>{TITLES[tool]}</b>
         <button className="iconbtn small" onClick={() => setTool(null)} aria-label="Close">
@@ -35,6 +37,7 @@ export default function ToolPanel() {
       {tool === 'stop' && <StopTool />}
       {tool === 'population' && <PopulationTool />}
       {tool === 'event' && <EventTool />}
+      {tool === 'development' && <DevelopmentTool />}
       {(tool === 'road' || tool === 'intersection') && <StructuralTool kind={tool} />}
       <ProposalCard />
     </aside>

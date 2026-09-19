@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import TypeVar
 
+from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from cityshift.contracts import (
@@ -20,14 +22,30 @@ from cityshift.contracts import (
 
 STORE_ROOT = Path(__file__).resolve().parents[2] / "var" / "store"
 T = TypeVar("T", bound=BaseModel)
+STORAGE_UNAVAILABLE_MESSAGE = (
+    "MongoDB Atlas is unavailable. Check MONGODB_URI, MONGODB_DATABASE, "
+    "Atlas network access, TLS trust, and database-user permissions."
+)
+
+
+class StorageUnavailable(RuntimeError):
+    pass
 
 
 class Store:
+    backend = "json"
+
     def __init__(self, root: Path = STORE_ROOT):
         self.root = root
         self.lock = threading.RLock()
         for sub in ("scenarios", "demand", "plans", "validations", "runs", "evidence", "investigations"):
             (root / sub).mkdir(parents=True, exist_ok=True)
+
+    def ping(self) -> bool:
+        return self.root.is_dir()
+
+    def close(self) -> None:
+        pass
 
     def _write(self, sub: str, key: str, obj: BaseModel) -> None:
         with self.lock:
@@ -50,10 +68,15 @@ class Store:
 
     # scenarios ------------------------------------------------------------------------------
     def put_scenario(self, s: ScenarioSpec, demand: DemandSet) -> None:
-        if self.get_scenario(s.scenario_id) is not None:
-            raise ValueError(f"scenario {s.scenario_id} already exists (immutable)")
-        self._write("scenarios", s.scenario_id, s)
-        self._write("demand", s.scenario_id, demand)
+        with self.lock:
+            if self.get_scenario(s.scenario_id) is not None:
+                raise ValueError(f"scenario {s.scenario_id} already exists (immutable)")
+            if s.demand_id != demand.demand_id:
+                raise ValueError("scenario and demand identities do not match")
+            if len({t.person_id for t in demand.travelers}) != len(demand.travelers):
+                raise ValueError("traveler IDs must be unique within a demand set")
+            self._write("demand", s.scenario_id, demand)
+            self._write("scenarios", s.scenario_id, s)
 
     def get_scenario(self, sid: str) -> ScenarioSpec | None:
         return self._read("scenarios", sid, ScenarioSpec)
@@ -113,3 +136,19 @@ class Store:
         if sid:
             runs = [r for r in runs if r.scenario_id == sid]
         return sorted(runs, key=lambda r: r.created_at)
+
+
+def storage_backend() -> str:
+    return os.environ.get("CITYSHIFT_STORAGE", os.environ.get("CITYSHIFT_STORE", "mongodb")).strip().lower()
+
+
+def create_store(root: Path = STORE_ROOT) -> Store:
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+    backend = storage_backend()
+    if backend == "json":
+        return Store(root)
+    if backend != "mongodb":
+        raise StorageUnavailable("CITYSHIFT_STORAGE must be mongodb or json (explicit offline mode); CITYSHIFT_STORE is a legacy alias")
+    from cityshift.mongo_store import MongoStore
+
+    return MongoStore.from_env()

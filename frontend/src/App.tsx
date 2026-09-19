@@ -25,6 +25,7 @@ export default function App({ renderer = 'babylon', active = true, onGlobe, onWo
   const refreshRuns = useStore((s) => s.refreshRuns)
   const scenarioId = useStore((s) => s.scenarioId)
   const pack = useStore((s) => s.pack)
+  const placingDevelopment = useStore((s) => !!s.developmentDraft)
   const [drawer, setDrawer] = useState(false)
 
   useEffect(() => {
@@ -66,7 +67,7 @@ export default function App({ renderer = 'babylon', active = true, onGlobe, onWo
         <SimDock active={active} />
       </div>
 
-      {noRun && (
+      {noRun && !placingDevelopment && (
         <div className="hint">
           No measured run for this scenario yet — open <button onClick={() => setDrawer(true)}>Scenarios</button> and run a plan in SUMO.
         </div>
