@@ -5,7 +5,7 @@ import { Scene } from '@babylonjs/core/scene'
 import { Ray } from '@babylonjs/core/Culling/ray'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 
-import { buildCity, Y } from './city'
+import { buildCity, PALETTE, Y } from './city'
 import { cityPose } from './camera'
 import type { WorldData } from './worldData'
 
@@ -22,6 +22,21 @@ const fixture = (): WorldData => ({
 })
 
 describe('New-city rendering without appearance configuration', () => {
+  it('textures the entire base plate and preserves its land tint under bright lighting', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const city = buildCity(scene, fixture())
+    const ground = city.ground
+    expect(ground.material?.getActiveTextures()).toHaveLength(1)
+    expect(ground.getVerticesData('uv')).toHaveLength(ground.getTotalVertices() * 2)
+    const colors = ground.getVerticesData('color')!
+    for (let i = 0; i < 3; i++) expect(colors[i]).toBeCloseTo(PALETTE.land[i])
+    city.dispose()
+    expect(scene.textures).toHaveLength(0)
+    scene.dispose()
+    engine.dispose()
+  })
+
   it('keeps water below the base plate with open lake cutouts, solid islands and shoreline walls', () => {
     const engine = new NullEngine()
     const scene = new Scene(engine)

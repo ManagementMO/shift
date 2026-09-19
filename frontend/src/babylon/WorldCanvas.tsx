@@ -28,14 +28,19 @@ export default function WorldCanvas({ packId, onReady, className }: WorldCanvasP
         if (cancelled) return
         setState({ phase: 'building' })
         // let the "building" frame paint before the (synchronous) geometry pass
-        requestAnimationFrame(() => {
+        requestAnimationFrame(async () => {
           if (cancelled) return
           try {
-            ws = new WorldScene(canvas, world)
+            const worldScene = new WorldScene(canvas, world)
+            ws = worldScene
+            await worldScene.scene.whenReadyAsync(true)
+            if (cancelled) return
+            await new Promise<void>((resolve) => worldScene.scene.onAfterRenderObservable.addOnce(() => resolve()))
+            if (cancelled) return
             setState({ phase: 'ready' })
-            onReady?.(ws)
+            onReady?.(worldScene)
           } catch (e) {
-            setState({ phase: 'error', detail: e instanceof Error ? e.message : String(e) })
+            if (!cancelled) setState({ phase: 'error', detail: e instanceof Error ? e.message : String(e) })
           }
         })
       })
