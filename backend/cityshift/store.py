@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
-import json
 import threading
 from pathlib import Path
 from typing import TypeVar
 
 from pydantic import BaseModel
 
-from cityshift.contracts import DemandSet, ScenarioSpec, ServicePlan, SimulationRun, ValidationReport
+from cityshift.contracts import (
+    DemandSet,
+    EvidenceBundle,
+    Investigation,
+    ScenarioSpec,
+    ServicePlan,
+    SimulationRun,
+    ValidationReport,
+)
 
 STORE_ROOT = Path(__file__).resolve().parents[2] / "var" / "store"
 T = TypeVar("T", bound=BaseModel)
@@ -19,7 +26,7 @@ class Store:
     def __init__(self, root: Path = STORE_ROOT):
         self.root = root
         self.lock = threading.RLock()
-        for sub in ("scenarios", "demand", "plans", "validations", "runs"):
+        for sub in ("scenarios", "demand", "plans", "validations", "runs", "evidence", "investigations"):
             (root / sub).mkdir(parents=True, exist_ok=True)
 
     def _write(self, sub: str, key: str, obj: BaseModel) -> None:
@@ -37,7 +44,7 @@ class Store:
         for p in sorted((self.root / sub).glob("*.json")):
             try:
                 out.append(cls.model_validate_json(p.read_text()))
-            except Exception:
+            except ValueError:  # skip a corrupt file rather than hide the rest
                 continue
         return out
 
@@ -73,6 +80,26 @@ class Store:
         for p in sorted((self.root / "plans").glob(f"{sid}__*.json")):
             out.append(ServicePlan.model_validate_json(p.read_text()))
         return out
+
+    # evidence / investigations -------------------------------------------------------------
+    def put_bundle(self, b: EvidenceBundle) -> None:
+        if self.get_bundle(b.bundle_id) is None:  # frozen: first write wins, identical hash anyway
+            self._write("evidence", b.bundle_id, b)
+
+    def get_bundle(self, bid: str) -> EvidenceBundle | None:
+        return self._read("evidence", bid, EvidenceBundle)
+
+    def put_investigation(self, inv: Investigation) -> None:
+        self._write("investigations", inv.investigation_id, inv)
+
+    def get_investigation(self, iid: str) -> Investigation | None:
+        return self._read("investigations", iid, Investigation)
+
+    def list_investigations(self, sid: str | None = None) -> list[Investigation]:
+        out = self._list("investigations", Investigation)
+        if sid:
+            out = [i for i in out if i.scenario_id == sid]
+        return sorted(out, key=lambda i: i.created_at)
 
     # runs -------------------------------------------------------------------------------------
     def put_run(self, r: SimulationRun) -> None:

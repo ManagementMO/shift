@@ -7,11 +7,13 @@ events, boarding/alighting, occupancy, teleports; then derives metrics from the 
 from __future__ import annotations
 
 import json
+import math
 import statistics
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Literal
 from xml.etree import ElementTree as ET
 
 import sumolib
@@ -20,6 +22,25 @@ from traci import constants as tc
 
 from cityshift.contracts import EntityTrack, PersonEvent, RunMetrics
 from cityshift.transport.sumo_env import binary
+
+
+def _finite(value: float, fallback: float) -> float:
+    return value if math.isfinite(value) else fallback
+
+
+def sample(tr: EntityTrack, t: int, lon: float, lat: float, angle: float, speed: float) -> None:
+    """Append one TraCI sample.  A non-finite position (a teleporting vehicle reports INVALID_DOUBLE_VALUE)
+    is no measurement at all: nothing is appended and the trail breaks before the next real sample.  Non-finite
+    angle/speed (e.g. a bus while stopped) would make the artifact invalid JSON, so they carry the previous value."""
+    if not (math.isfinite(lon) and math.isfinite(lat)):
+        nxt = len(tr.samples)
+        if nxt and (not tr.breaks or tr.breaks[-1] != nxt):
+            tr.breaks.append(nxt)
+        return
+    prev = tr.samples[-1] if tr.samples else None
+    a = _finite(angle, prev[3] if prev else 0.0)
+    v = _finite(speed, prev[4] if prev else 0.0)
+    tr.samples.append([t, round(lon, 7), round(lat, 7), round(a, 1), round(v, 2)])
 
 # Derived person states.  SUMO reports stage type 3 ("driving") both while a person waits at a stop
 # for a ride and while riding; the two are told apart by whether a vehicle is assigned.
@@ -133,12 +154,12 @@ class SumoRunner:
                 for vid, d in conn.vehicle.getAllSubscriptionResults().items():
                     x, y = d[tc.VAR_POSITION]
                     lon, lat = self.to_lonlat(x, y)
-                    kind = kinds.get(vid, "car")
+                    kind: Literal["bus", "car", "person"] = "bus" if kinds.get(vid) == "bus" else "car"
                     tr = tracks.get(vid)
                     if tr is None:
                         tr = tracks[vid] = EntityTrack(entity_id=vid, kind=kind, samples=[])
                     if t % self.sample_every_s == 0:
-                        tr.samples.append([t, round(lon, 7), round(lat, 7), round(d[tc.VAR_ANGLE], 1), round(d[tc.VAR_SPEED], 2)])
+                        sample(tr, t, lon, lat, d[tc.VAR_ANGLE], d[tc.VAR_SPEED])
                     if kind == "bus":
                         occupancy.setdefault(vid, []).append((t, d[tc.VAR_PERSON_NUMBER]))
                     elif vid in cohort_vehicles:
@@ -170,7 +191,7 @@ class SumoRunner:
                             seen_persons.add(pid)
                             events.append(PersonEvent(t=t, person_id=pid, event="depart"))
                     if t % self.sample_every_s == 0:
-                        tr.samples.append([t, round(lon, 7), round(lat, 7), 0.0, round(d[tc.VAR_SPEED], 2)])
+                        sample(tr, t, lon, lat, 0.0, d[tc.VAR_SPEED])
                     prev = last_state.get(pid)
                     if state != prev:
                         if state == STATE_WAITING:
@@ -204,10 +225,10 @@ class SumoRunner:
         finally:
             try:
                 conn.close()
-            except Exception:  # pragma: no cover
+            except Exception:  # noqa: BLE001, S110  # pragma: no cover
                 pass
         final_state = {pid: (None if pid in arrived else last_state.get(pid)) for pid in cohort_ids}
-        for pid, reason in unroutable.items():
+        for pid in unroutable:
             final_state[pid] = "unroutable"
             events.append(PersonEvent(t=0, person_id=pid, event="unroutable"))
         return RunRecord(
@@ -310,18 +331,18 @@ def parse_tripinfo(path: Path) -> dict:
     if not path.exists():
         return {}
     root = ET.parse(path).getroot()
-    out = {"persons": {}, "vehicles": {}}
+    out: dict[str, dict[str, dict]] = {"persons": {}, "vehicles": {}}
     for el in root:
         if el.tag == "personinfo":
-            out["persons"][el.get("id")] = {c.tag: dict(c.attrib) for c in el}
+            out["persons"][el.get("id", "")] = {c.tag: dict(c.attrib) for c in el}
         elif el.tag == "tripinfo":
-            out["vehicles"][el.get("id")] = dict(el.attrib)
+            out["vehicles"][el.get("id", "")] = dict(el.attrib)
     return out
 
 
 def sumo_check(cfg: Path) -> tuple[bool, str]:
     """Dry-run route/network consistency without stepping (fast fail for compile errors)."""
     res = subprocess.run(
-        [binary("sumo"), "-c", str(cfg), "--end", "1", "--no-step-log", "true"], capture_output=True, text=True
+        [binary("sumo"), "-c", str(cfg), "--end", "1", "--no-step-log", "true"], capture_output=True, text=True, check=False
     )
     return res.returncode == 0, (res.stderr or res.stdout)[-2000:]

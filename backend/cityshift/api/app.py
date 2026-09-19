@@ -93,7 +93,7 @@ def get_pack_artifact(pack_id: str, artifact: str) -> FileResponse:
 
 # --- scenarios ----------------------------------------------------------------------------------
 class FlagshipRequest(BaseModel):
-    pack_id: str = "waterloo"
+    pack_id: str = "toronto"
     seed: int = 7
     cohort_size: int = Field(default=240, ge=10, le=2000)
     horizon_s: int = Field(default=2700, ge=600, le=14400)

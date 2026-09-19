@@ -46,6 +46,7 @@ def fetch_tiles(bbox: tuple[float, float, float, float], out_dir: Path, nx: int 
 
 
 if __name__ == "__main__":
-    bbox = tuple(float(x) for x in sys.argv[1].split(","))  # minlon,minlat,maxlon,maxlat
+    a, b, c, d = (float(x) for x in sys.argv[1].split(","))  # minlon,minlat,maxlon,maxlat
+    bbox = (a, b, c, d)
     out = Path(sys.argv[2])
     print("\n".join(str(p) for p in fetch_tiles(bbox, out)))

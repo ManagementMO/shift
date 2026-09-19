@@ -20,6 +20,7 @@ import httpx
 LLM_API_BASE = os.environ.get("LLM_API_BASE", "http://localhost:11434/v1")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b")
+LLM_TIMEOUT_S = float(os.environ.get("LLM_TIMEOUT_S", "600"))  # local 7B models on a laptop GPU can take minutes per call
 ELASTIC_URL = os.environ.get("ELASTIC_CLOUD_URL") or os.environ.get("ELASTIC_URL", "http://localhost:9200")
 ELASTIC_API_KEY = os.environ.get("ELASTIC_API_KEY", "")
 
@@ -45,7 +46,7 @@ class ChatResult:
 class LLMClient:
     """Minimal OpenAI-compatible chat client; JSON-mode helper for typed agent outputs."""
 
-    def __init__(self, base: str = LLM_API_BASE, key: str = LLM_API_KEY, model: str = LLM_MODEL, timeout: float = 120):
+    def __init__(self, base: str = LLM_API_BASE, key: str = LLM_API_KEY, model: str = LLM_MODEL, timeout: float = LLM_TIMEOUT_S):
         self.base = base.rstrip("/")
         self.key = key
         self.model = model
@@ -62,7 +63,7 @@ class LLMClient:
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.key}"} if self.key else {}
 
-    def chat(self, messages: list[dict], temperature: float = 0.1, json_mode: bool = False, max_tokens: int = 1200) -> ChatResult:
+    def chat(self, messages: list[dict], temperature: float = 0.1, json_mode: bool = False, max_tokens: int = 600) -> ChatResult:
         body: dict = {"model": self.model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
         if json_mode:
             body["response_format"] = {"type": "json_object"}

@@ -10,17 +10,16 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 
 from cityshift.contracts import (
     CityPack,
-    ConstraintSet,
     DemandSet,
     Duty,
     ScenarioSpec,
     ServicePlan,
     StopCandidate,
-    Traveler,
 )
 from cityshift.domain.network import closed_edges_during, load_net, route, walk_distance_m
 from cityshift.transport.sumo_xml import (
@@ -148,7 +147,7 @@ def schedule_duties(pack: CityPack, plan: ServicePlan, scenario: ScenarioSpec) -
             first_duty_done = True
             arrivals.append(d.depart_s)
             bad = False
-            for a, b in zip(seq, seq[1:]):
+            for a, b in pairwise(seq):
                 path, secs = route(net, a.edge_id, b.edge_id, "bus", closed, from_lane=a.lane_index)
                 if path is None:
                     errors.append(f"{d.duty_id}: no bus route {a.name} -> {b.name} avoiding closures")
@@ -356,7 +355,7 @@ def make_cycles(
         # estimate the cycle time
         closed = closed_edges_during(scenario.restrictions, t, t + 3600, "bus")
         cyc = 0.0
-        for a, b in zip(seq, seq[1:]):
+        for a, b in pairwise(seq):
             _, secs = route(net, stops[a].edge_id, stops[b].edge_id, "bus", closed, from_lane=stops[a].lane_index)
             if secs == math.inf:
                 return duties

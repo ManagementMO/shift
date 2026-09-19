@@ -33,6 +33,10 @@ include = ["cityshift*"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 110
 target-version = "py312"

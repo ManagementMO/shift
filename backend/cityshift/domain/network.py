@@ -155,5 +155,5 @@ def walk_distance_m(pack_id: str, from_edge_id: str, to_edge_id: str) -> float |
         _walk_cache[key] = dist
     dist = _walk_cache[key]
     cands = [dist.get(dst_edge.getFromNode().getID()), dist.get(dst_edge.getToNode().getID())]
-    cands = [c for c in cands if c is not None]
-    return min(cands) + dst_edge.getLength() / 2 if cands else None
+    present = [c for c in cands if c is not None]
+    return min(present) + dst_edge.getLength() / 2 if present else None

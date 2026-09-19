@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
-from cityshift.contracts import CityPack, DemandSet, ScenarioSpec, ServicePlan, ValidationIssue, ValidationReport
-from cityshift.domain.compiler import HOLD_BEFORE_DEPART_S, schedule_duties, stops_by_id, zone_for_stop
+from itertools import pairwise
+from typing import Literal
+
+from cityshift.contracts import (
+    CityPack,
+    DemandSet,
+    ScenarioSpec,
+    ServicePlan,
+    ValidationIssue,
+    ValidationReport,
+)
+from cityshift.domain.compiler import schedule_duties, stops_by_id, zone_for_stop
 
 
 def validate_plan(pack: CityPack, scenario: ScenarioSpec, plan: ServicePlan, demand: DemandSet | None = None) -> ValidationReport:
@@ -48,9 +58,9 @@ def validate_plan(pack: CityPack, scenario: ScenarioSpec, plan: ServicePlan, dem
             by_vehicle.setdefault(s.duty.vehicle_id, []).append(s)
         for vid, scheds in by_vehicle.items():
             scheds.sort(key=lambda s: s.duty.depart_s)
-            for a, b in zip(scheds, scheds[1:]):
+            for a, b in pairwise(scheds):
                 if b.duty.depart_s < a.est_return_s:
-                    sev = "hard" if b.duty.depart_s < a.est_end_s else "soft"
+                    sev: Literal["hard", "soft"] = "hard" if b.duty.depart_s < a.est_end_s else "soft"
                     issues.append(ValidationIssue(
                         code="continuity.overlap", severity=sev,
                         message=f"{vid}: duty {b.duty.duty_id} departs at {b.duty.depart_s}s but {a.duty.duty_id} is estimated back at the venue at {a.est_return_s}s"

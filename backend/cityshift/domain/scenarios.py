@@ -1,4 +1,4 @@
-"""Flagship scenario factory: concert egress during an Uptown closure with two extra buses."""
+"""Flagship scenario factory: venue egress during a named corridor closure with two extra buses."""
 
 from __future__ import annotations
 
@@ -12,16 +12,19 @@ def flagship_scenario(pack: CityPack, seed: int = 7, cohort_size: int = 240, hor
     demand = generate_demand(pack, seed=seed, cohort_size=cohort_size)
     venue_stop = venue_stop_candidates(pack)[0]
     corridors = load_corridors(pack.pack_id)
+    closure_key = next((k for k, c in corridors.items() if c.get("flagship_closure")), "king_uptown")
     restrictions = []
-    if "king_uptown" in corridors:
+    closure_label = "no closure"
+    if closure_key in corridors:
+        closure_label = corridors[closure_key]["label"]
         restrictions.append(
             Restriction(
-                restriction_id="closure-king-uptown",
-                edge_ids=corridors["king_uptown"]["edge_ids"],
+                restriction_id=f"closure-{closure_key.replace('_', '-')}",
+                edge_ids=corridors[closure_key]["edge_ids"],
                 start_s=0,
                 end_s=horizon_s,
                 modes=["passenger", "bus"],
-                label=corridors["king_uptown"]["label"] + " — closed both directions (fixture notice, not a live advisory)",
+                label=closure_label + " — closed both directions (fixture notice, not a live advisory)",
             )
         )
     cons = ConstraintSet(
@@ -41,6 +44,6 @@ def flagship_scenario(pack: CityPack, seed: int = 7, cohort_size: int = 240, hor
         demand_id=demand.demand_id,
         restrictions=restrictions,
         constraints=cons,
-        label="Concert egress at Waterloo Park during the King St Uptown closure; two extra buses for 35 minutes",
+        label=f"Event egress ({pack.name.split(' — ')[0]}) during the {closure_label} closure; two extra buses for {(horizon_s - 600) // 60} minutes",
     )
     return spec, demand

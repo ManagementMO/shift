@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Literal
 
@@ -14,7 +14,7 @@ SCHEMA_VERSION = "0.1"
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def content_hash(obj: BaseModel | dict) -> str:
@@ -90,8 +90,10 @@ class EvidenceBundle(BaseModel):
     frozen_at: datetime = Field(default_factory=utcnow)
     content_hash: str = ""
 
-    def freeze(self) -> "EvidenceBundle":
-        self.content_hash = content_hash(self.model_dump(exclude={"content_hash", "frozen_at"}))
+    def freeze(self) -> EvidenceBundle:
+        body = self.model_dump(exclude={"content_hash", "frozen_at"})
+        body["query_records"] = [{k: v for k, v in r.items() if k != "at"} for r in body["query_records"]]
+        self.content_hash = content_hash(body)
         return self
 
 
@@ -293,6 +295,24 @@ class AgentDecision(BaseModel):
     provider: str
     timestamp: datetime = Field(default_factory=utcnow)
     tool_calls: list[dict] = []
+
+
+class Investigation(BaseModel):
+    """One agent investigation: problem + constraint text -> frozen evidence -> proposed, validated plans."""
+
+    investigation_id: str
+    scenario_id: str
+    problem_text: str
+    constraint_text: str
+    status: Literal["queued", "running", "completed", "failed"] = "queued"
+    engine: str = "openjiuwen-react"
+    evidence_bundle_id: str | None = None
+    decisions: list[AgentDecision] = []
+    proposed_plan_ids: list[str] = []
+    rejected_plan_ids: list[str] = []
+    error: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    finished_at: datetime | None = None
 
 
 class InterventionProposal(BaseModel):

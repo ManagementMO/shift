@@ -5,20 +5,25 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from cityshift.agents.orchestrator import InvestigationRunner, new_investigation
 from cityshift.contracts import (
     CityPack,
     DemandSet,
+    InterventionProposal,
+    Investigation,
     RunStatus,
     ScenarioSpec,
     ServicePlan,
     SimulationRun,
     ValidationReport,
 )
+from cityshift.domain import edits
 from cityshift.domain.compiler import baseline_plan, heuristic_plans
 from cityshift.domain.network import PACK_ROOT, load_pack
 from cityshift.domain.runs import execute_run, run_id_for
 from cityshift.domain.scenarios import flagship_scenario
 from cityshift.domain.validators import validate_plan
+from cityshift.providers import LLMClient
 from cityshift.store import Store
 
 
@@ -26,6 +31,7 @@ class Service:
     def __init__(self, store: Store | None = None, workers: int = 2):
         self.store = store or Store()
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="sumo")
+        self.agent_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agents")
         self.cancel_flags: dict[str, threading.Event] = {}
         self.lock = threading.Lock()
 
@@ -123,6 +129,33 @@ class Service:
         if r is None:
             raise KeyError(rid)
         return r
+
+    # prompt-to-edit ------------------------------------------------------------------------------
+    def preview_edit(self, sid: str, prompt: str) -> InterventionProposal:
+        scenario = self.scenario(sid)
+        return edits.preview(self.pack(scenario.pack_id), scenario, prompt, llm=LLMClient())
+
+    def apply_edit(self, sid: str, proposal: InterventionProposal) -> ScenarioSpec:
+        scenario = self.scenario(sid)
+        child = edits.apply(self.pack(scenario.pack_id), scenario, proposal)
+        return self.register_scenario(child, self.demand(sid))
+
+    # agents --------------------------------------------------------------------------------------
+    def investigate(self, sid: str, problem: str, constraint: str) -> Investigation:
+        scenario = self.scenario(sid)
+        demand = self.demand(sid)
+        pack = self.pack(scenario.pack_id)
+        inv = new_investigation(sid, problem, constraint)
+        self.store.put_investigation(inv)
+        runner = InvestigationRunner(self.store)
+        self.agent_pool.submit(runner.run, inv, pack, scenario, demand)
+        return inv
+
+    def investigation(self, iid: str) -> Investigation:
+        inv = self.store.get_investigation(iid)
+        if inv is None:
+            raise KeyError(iid)
+        return inv
 
 
 _service: Service | None = None

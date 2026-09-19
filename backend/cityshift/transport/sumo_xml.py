@@ -106,8 +106,10 @@ def write_routes(
             (
                 b.depart_s,
                 0,
-                f'    <vehicle id={q(b.vehicle_id)} type={q(b.vtype)} depart="{b.depart_s}" line={q(b.line or b.vehicle_id)} departPos="0">\n'
-                f'        <route edges={q(" ".join(b.edges))}/>{stop_xml}\n    </vehicle>',
+                (
+                    f'    <vehicle id={q(b.vehicle_id)} type={q(b.vtype)} depart="{b.depart_s}" line={q(b.line or b.vehicle_id)} departPos="0">\n'
+                    f'        <route edges={q(" ".join(b.edges))}/>{stop_xml}\n    </vehicle>'
+                ),
             )
         )
     for c in cars:
@@ -177,6 +179,7 @@ def write_sumocfg(
         <tripinfo-output.write-unfinished value="true"/>
         <vehroute-output value="{Path(tripinfo).with_name('vehroutes.xml')}"/>
         <vehroute-output.write-unfinished value="true"/>
+        <vehroute-output.exit-times value="true"/>
     </output>
     <report>
         <no-step-log value="true"/>

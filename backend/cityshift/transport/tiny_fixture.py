@@ -22,6 +22,17 @@ NODES = """<?xml version="1.0" encoding="UTF-8"?>
 </nodes>
 """
 
+# Same corridor on real ground (downtown Toronto waterfront, ~300 m spacing) for geo-aware code paths.
+GEO_NODES = """<?xml version="1.0" encoding="UTF-8"?>
+<nodes>
+    <node id="A" x="-79.39000" y="43.64000" type="priority"/>
+    <node id="B" x="-79.38628" y="43.64000" type="priority"/>
+    <node id="C" x="-79.38256" y="43.64000" type="priority"/>
+    <node id="D" x="-79.37884" y="43.64000" type="priority"/>
+    <node id="E" x="-79.38256" y="43.64270" type="priority"/>
+</nodes>
+"""
+
 EDGES = """<?xml version="1.0" encoding="UTF-8"?>
 <edges>
     <edge id="e_AB" from="A" to="B" numLanes="1" speed="13.9" sidewalkWidth="2.0"/>
@@ -44,12 +55,13 @@ STOPS = [
 ]
 
 
-def build_tiny_network(out_dir: Path) -> Path:
+def build_tiny_network(out_dir: Path, geo: bool = False) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-    nodes = out_dir / "tiny.nod.xml"
-    edges = out_dir / "tiny.edg.xml"
-    net = out_dir / "tiny.net.xml"
-    nodes.write_text(NODES)
+    stem = "tiny_geo" if geo else "tiny"
+    nodes = out_dir / f"{stem}.nod.xml"
+    edges = out_dir / f"{stem}.edg.xml"
+    net = out_dir / f"{stem}.net.xml"
+    nodes.write_text(GEO_NODES if geo else NODES)
     edges.write_text(EDGES)
     if net.exists() and net.stat().st_mtime > max(nodes.stat().st_mtime, edges.stat().st_mtime):
         return net
@@ -61,9 +73,9 @@ def build_tiny_network(out_dir: Path) -> Path:
         "--no-turnarounds", "false",
         "--crossings.guess", "true",
         "--geometry.remove", "false",
-        "--proj.utm", "false",
+        "--proj.utm", "true" if geo else "false",
     ]
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if res.returncode != 0:
         raise RuntimeError(f"netconvert failed: {res.stderr}")
     return net
