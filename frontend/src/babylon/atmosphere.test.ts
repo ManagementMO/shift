@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera'
+import { Camera } from '@babylonjs/core/Cameras/camera'
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine'
 import { Material } from '@babylonjs/core/Materials/material'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
+import { PBRMaterial } from '@babylonjs/core/Materials/PBR/pbrMaterial'
+import { PBRMetallicRoughnessMaterial } from '@babylonjs/core/Materials/PBR/pbrMetallicRoughnessMaterial'
 import type { UniformBuffer } from '@babylonjs/core/Materials/uniformBuffer'
 import { Color3 } from '@babylonjs/core/Maths/math.color'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
@@ -14,6 +17,7 @@ import { buildSky } from './sky'
 import type { WorldCrs } from './coords'
 
 const bounds: WorldCrs['bounds_world'] = [-3200, -2450, 3200, 2450]
+const materialTypes = [['standard', StandardMaterial], ['PBR', PBRMaterial], ['metallic-roughness', PBRMetallicRoughnessMaterial]] as const
 
 describe('World fade distances', () => {
   it('keeps the focus region clear at close, city, and overview zooms', () => {
@@ -58,12 +62,12 @@ describe('Sky-matched world atmosphere', () => {
     engine.dispose()
   })
 
-  it('applies to existing and later materials but not the sky or another scene', () => {
+  it.each(materialTypes)('applies to existing and later %s materials but not the sky or another scene', (_name, MaterialType) => {
     const sky = buildSky(scene, new Color3(0.86, 0.87, 0.9))
-    const terrain = new StandardMaterial('terrain', scene)
+    const terrain = new MaterialType('terrain', scene)
     scene.fogMode = Scene.FOGMODE_EXP2
     applyWorldAtmosphere(scene, bounds, sky)
-    const traffic = new StandardMaterial('traffic', scene)
+    const traffic = new MaterialType('traffic', scene)
     expect(scene.fogMode).toBe(Scene.FOGMODE_NONE)
     expect(terrain.pluginManager?.getPlugin('WorldAtmosphere')).toBeTruthy()
     expect(traffic.pluginManager?.getPlugin('WorldAtmosphere')).toBeTruthy()
@@ -72,14 +76,14 @@ describe('Sky-matched world atmosphere', () => {
     expect(terrain.hasTexture(texture)).toBe(true)
     expect(traffic.getActiveTextures()).toContain(texture)
     const other = new Scene(engine)
-    const unrelated = new StandardMaterial('unrelated', other)
+    const unrelated = new MaterialType('unrelated', other)
     expect(unrelated.pluginManager?.getPlugin('WorldAtmosphere')).toBeFalsy()
     other.dispose()
   })
 
-  it('updates fade uniforms after zooming even when the material is frozen', () => {
+  it.each(materialTypes)('updates fade uniforms after zooming even when the %s material is frozen', (_name, MaterialType) => {
     const sky = buildSky(scene, new Color3(0.86, 0.87, 0.9))
-    const terrain = new StandardMaterial('terrain', scene)
+    const terrain = new MaterialType('terrain', scene)
     applyWorldAtmosphere(scene, bounds, sky)
     terrain.freeze()
     const plugin = terrain.pluginManager!.getPlugin('WorldAtmosphere')!
@@ -91,11 +95,43 @@ describe('Sky-matched world atmosphere', () => {
     scene.onBeforeRenderObservable.notifyObservers(scene)
     plugin.hardBindForSubMesh(uniforms as unknown as UniformBuffer, scene, engine, {} as SubMesh)
     expect(uniforms.updateFloat3).toHaveBeenLastCalledWith('worldFadeRange', ...worldFadeRange(bounds, 9000, 40000))
-    expect(uniforms.updateFloat4).toHaveBeenLastCalledWith('worldFadeBounds', ...bounds)
+    expect(uniforms.updateFloat4).toHaveBeenCalledWith('worldFadeBounds', ...bounds)
     expect(uniforms.setTexture).toHaveBeenLastCalledWith('worldSkySampler', (sky.material as StandardMaterial).emissiveTexture)
   })
 
-  it('keeps the shared sky texture alive until scene disposal and removes its observer', async () => {
+  it('keeps sky sampling aligned when switching between orthographic and perspective views', () => {
+    const sky = buildSky(scene, new Color3(0.86, 0.87, 0.9))
+    const terrain = new StandardMaterial('terrain', scene)
+    camera.mode = Camera.ORTHOGRAPHIC_CAMERA
+    applyWorldAtmosphere(scene, bounds, sky)
+    terrain.freeze()
+    const plugin = terrain.pluginManager!.getPlugin('WorldAtmosphere')!
+    const uniforms = { updateFloat4: vi.fn(), updateFloat3: vi.fn(), setTexture: vi.fn() }
+    plugin.hardBindForSubMesh(uniforms as unknown as UniformBuffer, scene, engine, {} as SubMesh)
+    const orthographic = uniforms.updateFloat4.mock.calls.findLast(([name]) => name === 'worldSkyView')
+    expect(orthographic).toBeDefined()
+    expect(orthographic?.[4]).toBe(1)
+    expect(Math.hypot(...orthographic!.slice(1, 4))).toBeCloseTo(1)
+    camera.mode = Camera.PERSPECTIVE_CAMERA
+    camera.alpha += 0.5
+    scene.onBeforeRenderObservable.notifyObservers(scene)
+    plugin.hardBindForSubMesh(uniforms as unknown as UniformBuffer, scene, engine, {} as SubMesh)
+    const perspective = uniforms.updateFloat4.mock.calls.findLast(([name]) => name === 'worldSkyView')
+    expect(perspective?.[4]).toBe(0)
+    expect(perspective?.slice(1, 4)).not.toEqual(orthographic?.slice(1, 4))
+  })
+
+  it('converts the sky to linear space before composing PBR lighting', () => {
+    const sky = buildSky(scene, new Color3(0.86, 0.87, 0.9))
+    const terrain = new PBRMaterial('terrain', scene)
+    applyWorldAtmosphere(scene, bounds, sky)
+    const code = terrain.pluginManager?.getPlugin('WorldAtmosphere')?.getCustomCode('fragment')?.CUSTOM_FRAGMENT_BEFORE_FOG
+    expect(code).toContain('PBR_FRAGMENT_SHADER')
+    expect(code).toContain('finalColor.rgb')
+    expect(code).toContain('toLinearSpace')
+  })
+
+  it.each(materialTypes)('keeps the shared sky texture alive when disposing a %s material and removes its observer', async (_name, MaterialType) => {
     const sky = buildSky(scene, new Color3(0.86, 0.87, 0.9))
     const baseline = [...Material.OnEventObservable.observers]
     applyWorldAtmosphere(scene, bounds, sky)
@@ -103,7 +139,7 @@ describe('Sky-matched world atmosphere', () => {
     let disposed = false
     const texture = (sky.material as StandardMaterial).emissiveTexture!
     texture.onDisposeObservable.add(() => { disposed = true })
-    const terrain = new StandardMaterial('terrain', scene)
+    const terrain = new MaterialType('terrain', scene)
     terrain.dispose(false, true)
     expect(disposed).toBe(false)
     scene.dispose()

@@ -8,6 +8,7 @@ import type { Scene } from '@babylonjs/core/scene'
 
 const WIDTH = 1024
 const HEIGHT = 512
+export const SKY_RADIUS = 30000
 const HORIZON_ELEVATION = -0.6
 let cachedSky: { horizon: Color3; pixels: Uint8Array } | null = null
 
@@ -79,7 +80,7 @@ export function skyTexturePixels(horizon: Color3, width = WIDTH, height = HEIGHT
 export function buildSky(scene: Scene, horizon: Color3): Mesh {
   const rings = 32
   const segs = 64
-  const r = 30000
+  const r = SKY_RADIUS
   const positions: number[] = []
   const uvs: number[] = []
   const indices: number[] = []

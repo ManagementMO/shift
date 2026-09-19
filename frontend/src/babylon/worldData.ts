@@ -5,6 +5,7 @@
  */
 
 import type { WorldCrs } from './coords'
+import type { MassingData } from './massing'
 
 /** Flat [x0, z0, x1, z1, ...] */
 export type Flat = number[]
@@ -74,6 +75,11 @@ export type LandmarkKind =
   | 'city_hall'
   | 'roy_thomson_hall'
   | 'ripleys_aquarium'
+  | 'engineering_7'
+  | 'engineering_5'
+  | 'engineering_6'
+  | 'davis_centre'
+  | 'quantum_nano'
 
 export interface WorldLandmark {
   id: string
@@ -83,6 +89,7 @@ export interface WorldLandmark {
   z: number
   h: number
   ring: Flat
+  holes?: Flat[]
 }
 
 export interface WorldStop {
@@ -129,6 +136,7 @@ export interface WorldData {
   water: { ring: Flat; holes?: Flat[] }[]
   counts: Record<string, number>
   provenance: string[]
+  massing?: MassingData
 }
 
 const cache = new Map<string, Promise<WorldData>>()
@@ -138,7 +146,17 @@ export function loadWorld(packId: string): Promise<WorldData> {
   if (!p) {
     p = fetch(`/api/packs/${packId}/world`).then(async (r) => {
       if (!r.ok) throw new Error(`world.json for ${packId}: HTTP ${r.status} (run make_pack ${packId} --pack-only)`)
-      return (await r.json()) as WorldData
+      const world = await r.json() as WorldData
+      if (packId === 'toronto') {
+        try {
+          const asset = await fetch('/assets/city/toronto-massing.json')
+          if (asset.ok && asset.headers.get('content-type')?.includes('json')) {
+            const massing = await asset.json() as MassingData
+            if (massing.version === 1 && massing.network_fingerprint === world.network_fingerprint) world.massing = massing
+          }
+        } catch { /* City packs remain usable when the optional appearance asset is absent. */ }
+      }
+      return world
     })
     cache.set(packId, p)
   }

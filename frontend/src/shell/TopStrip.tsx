@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useStore } from '../store'
 import { api } from '../api'
 
-const CITY_NAMES: Record<string, string> = { toronto: 'Toronto', waterloo: 'Waterloo' }
+const CITY_NAMES: Record<string, string> = { toronto: 'Toronto', waterloo: 'Waterloo', waterloo_e7: 'Waterloo · E7' }
 
 function runStatus(status: string | undefined, progress: number | undefined, loading: boolean): { label: string; cls: string } {
   if (loading) return { label: 'Loading replay', cls: 'busy' }
@@ -56,6 +56,7 @@ export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => v
         {st.label}
       </div>
       <div className="strip-actions">
+        {pack?.pack_id === 'toronto' && <a className="ghostbtn" href="/showcase">Cityscape ↗</a>}
         <button className={`ghostbtn ${compareMode ? 'on' : ''}`} onClick={() => setCompareMode(!compareMode)}>
           Compare
         </button>
