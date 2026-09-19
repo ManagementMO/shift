@@ -24,6 +24,8 @@ import '@babylonjs/core/Rendering/geometryBufferRendererSceneComponent'
 import { WorldFrame } from './coords'
 import { buildCity, type CityMeshes } from './city'
 import { WorldCamera } from './camera'
+import { RoadIndex } from './roadIndex'
+import { Traffic } from './traffic'
 import type { WorldData } from './worldData'
 
 export interface WorldSceneOptions {
@@ -41,6 +43,10 @@ export class WorldScene {
   readonly shadows: CascadedShadowGenerator | null
   readonly canvas: HTMLCanvasElement
   readonly world: WorldData
+  readonly roads: RoadIndex
+  readonly traffic: Traffic
+  /** Sim time (s) the traffic is drawn at; set by the playback clock each frame. */
+  simT = 0
   private disposed = false
 
   constructor(canvas: HTMLCanvasElement, world: WorldData, opts: WorldSceneOptions = {}) {
@@ -139,6 +145,12 @@ export class WorldScene {
     }
 
     for (const m of scene.materials) m.freeze()
+
+    // --- replay traffic (created after the static materials are frozen: its own materials stay live)
+    this.roads = new RoadIndex(world)
+    this.traffic = new Traffic(scene, this.frame, this.shadows)
+    scene.onBeforeRenderObservable.add(() => this.traffic.update(this.simT))
+
     scene.autoClear = true
     scene.autoClearDepthAndStencil = true
     scene.skipPointerMovePicking = true
@@ -163,6 +175,7 @@ export class WorldScene {
     this.disposed = true
     window.removeEventListener('resize', this.resize)
     this.engine.stopRenderLoop()
+    this.traffic.dispose()
     this.city.dispose()
     this.scene.dispose()
     this.engine.dispose()

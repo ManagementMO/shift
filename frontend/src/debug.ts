@@ -3,6 +3,7 @@ import { useStore } from './store'
 import { cameraTo, leadMap, renderStats } from './world/registry'
 import type { CameraMode, CameraPose } from './world/camera'
 import { clock } from './world/playback'
+import type { WorldScene } from './babylon/scene'
 
 declare global {
   interface Window {
@@ -15,6 +16,7 @@ declare global {
       map?: () => ReturnType<typeof leadMap>
       stats?: typeof renderStats
       store?: typeof useStore
+      babylon?: WorldScene
     }
   }
 }

@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { clock } from '../world/playback'
+import Transport from './Transport'
 import WorldCanvas from './WorldCanvas'
 import type { WorldScene } from './scene'
+import { useReplay } from './useReplay'
 import './world.css'
 
 /**
@@ -9,13 +12,36 @@ import './world.css'
  * miniature Toronto; the HUD/sim dock/tooling from the Mapbox shell are wired in milestone by milestone.
  */
 export default function WorldApp() {
-  const packId = new URLSearchParams(window.location.search).get('pack') ?? 'toronto'
+  const params = new URLSearchParams(window.location.search)
+  const packId = params.get('pack') ?? 'toronto'
+  const runId = params.get('run')
   const sceneRef = useRef<WorldScene | null>(null)
   const [ready, setReady] = useState<WorldScene | null>(null)
   const [fps, setFps] = useState(0)
+  const replay = useReplay(packId, runId)
+  const rx = replay.phase === 'ready' ? replay.rx : null
+
+  // replay -> scene: the clock drives `simT`; Babylon reads it every frame, React never re-renders per frame
+  useEffect(() => {
+    const ws = sceneRef.current
+    if (!ready || !ws) return
+    ws.traffic.setReplay(rx)
+    if (!rx) return
+    ws.simT = clock.t
+    const off = clock.onFrame((t) => {
+      ws.simT = t
+    })
+    if (!clock.playing) clock.play()
+    return () => {
+      off()
+      clock.pause()
+    }
+  }, [ready, rx])
+  const stats = useCallback(() => sceneRef.current?.traffic.stats ?? { buses: 0, cars: 0, people: 0 }, [])
 
   const onReady = useCallback((ws: WorldScene) => {
     sceneRef.current = ws
+    if (window.__cityshift) window.__cityshift.babylon = ws
     setReady(ws)
   }, [])
 
@@ -29,6 +55,10 @@ export default function WorldApp() {
     const onKey = (e: KeyboardEvent): void => {
       const ws = sceneRef.current
       if (!ws || (e.target instanceof HTMLElement && /input|textarea/i.test(e.target.tagName))) return
+      if (e.key === ' ') {
+        e.preventDefault()
+        clock.toggle()
+      }
       if (e.key === '1') ws.camera.city()
       if (e.key === '2') flyLandmark(ws, 'cn_tower')
       if (e.key === '3') flyLandmark(ws, 'union_station')
@@ -48,6 +78,16 @@ export default function WorldApp() {
           <b>CITY//SHIFT</b>
           <span className="small dim">world · {packId}</span>
         </div>
+        {world && (
+          <div className="bworld-status small dim">
+            <span>{world.counts.roads.toLocaleString()} SUMO edges</span>
+            <span>{world.counts.buildings.toLocaleString()} buildings</span>
+            <span>{world.stops.length} stops</span>
+            <span>net {world.network_fingerprint.slice(0, 8)}</span>
+            {replay.phase === 'ready' && <span>run {replay.run.run_id.replace('run-', '').slice(0, 8)}</span>}
+            <span>{fps} fps</span>
+          </div>
+        )}
         <div className="bworld-top-right">
           <span className="small dim">Babylon.js preview</span>
           <a className="bworld-link small" href="/">
@@ -73,15 +113,11 @@ export default function WorldApp() {
         </div>
       )}
 
-      {world && (
-        <div className="bworld-status small dim">
-          <span>{world.counts.roads.toLocaleString()} SUMO edges</span>
-          <span>{world.counts.buildings.toLocaleString()} buildings</span>
-          <span>{world.stops.length} stops</span>
-          <span>net {world.network_fingerprint.slice(0, 8)}</span>
-          <span>{fps} fps</span>
-        </div>
+      {ready && rx && <Transport rx={rx} stats={stats} />}
+      {ready && replay.phase === 'none' && (
+        <div className="bworld-transport small dim">No completed SUMO run for {packId} yet — run one from the Mapbox shell.</div>
       )}
+      {ready && replay.phase === 'error' && <div className="bworld-transport small bworld-err">{replay.message}</div>}
     </div>
   )
 }
