@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import threading
 import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from cityshift.contracts import (
     CityPack,
@@ -26,13 +26,25 @@ from cityshift.transport.sumo_env import sumo_version
 RUN_ROOT = Path(__file__).resolve().parents[3] / "var" / "runs"
 
 
-def closure_violations(vehroutes: Path, scenario: ScenarioSpec) -> list[str]:
-    """Audit SUMO's own vehroute output: any vehicle whose driven route entered a closed edge while it was closed."""
+def closure_violations(vehroutes: Path, scenario: ScenarioSpec) -> dict[str, str]:
+    """Audit SUMO's own vehroute output against the scenario's closures.
+
+    Returns vehicle id -> "entered" (entered a closed edge while it was closed; with SUMO this is a teleport jumping
+    along its route) or "caught" (was already on the edge when it closed).
+
+    With `vehroute-output.exit-times` each edge has an occupancy interval [previous exit, own exit]; without it the
+    audit falls back to the conservative trip-level overlap (route touches a closed edge and the trip spans the window).
+    """
     if not vehroutes.exists() or not scenario.restrictions:
-        return []
+        return {}
     import xml.etree.ElementTree as ET
 
-    bad: list[str] = []
+    closed: dict[str, list[tuple[int, int]]] = {}
+    for r in scenario.restrictions:
+        for eid in r.edge_ids:
+            closed.setdefault(eid, []).append((r.start_s, r.end_s))
+
+    bad: dict[str, str] = {}
     for veh in ET.parse(vehroutes).getroot().iter("vehicle"):
         depart = float(veh.get("depart", "0"))
         arrival = float(veh.get("arrival") or scenario.constraints.horizon_s)
@@ -41,11 +53,26 @@ def closure_violations(vehroutes: Path, scenario: ScenarioSpec) -> list[str]:
             route_el = veh.find("routeDistribution/route[last()]")
         if route_el is None:
             continue
-        edges = set((route_el.get("edges") or "").split())
-        for r in scenario.restrictions:
-            if r.start_s < arrival and r.end_s > depart and edges & set(r.edge_ids):
-                bad.append(veh.get("id", "?"))
-                break
+        edges = (route_el.get("edges") or "").split()
+        exits = [float(x) for x in (route_el.get("exitTimes") or "").split()]
+        windows: list[tuple[str, float, float]] = []
+        if len(exits) == len(edges):
+            prev = depart
+            for eid, ex in zip(edges, exits, strict=True):
+                windows.append((eid, prev, ex))
+                prev = ex
+        else:
+            windows = [(eid, depart, arrival) for eid in edges]
+        vid = veh.get("id", "?")
+        precise = len(exits) == len(edges)
+        for eid, a, b in windows:
+            for start, end in closed.get(eid, ()):
+                if not (a < end and b > start):
+                    continue
+                if a >= start or not precise:
+                    bad[vid] = "entered"
+                else:
+                    bad.setdefault(vid, "caught")
     return bad
 
 _runners: dict[str, SumoRunner] = {}
@@ -115,9 +142,16 @@ def execute_run(
         )
         metrics = compute_metrics(rec, scenario.constraints.horizon_s, [f.vehicle_id for f in scenario.constraints.fleet])
         metrics.warnings.extend(comp.notes)
-        violations = closure_violations(run_dir / "vehroutes.xml", scenario)
-        if violations:
-            metrics.warnings.append(f"RESTRICTION INTEGRITY: {len(violations)} vehicle(s) drove through a closed edge while it was closed: {violations[:5]}")
+        audit = closure_violations(run_dir / "vehroutes.xml", scenario)
+        entered = sorted(v for v, how in audit.items() if how == "entered")
+        caught = sorted(v for v, how in audit.items() if how == "caught")
+        if entered:
+            metrics.warnings.append(
+                f"RESTRICTION INTEGRITY: {len(entered)} vehicle(s) crossed a closed edge while it was closed "
+                f"(SUMO teleports jump along the route; their trails are broken, not drawn): {entered[:5]}"
+            )
+        if caught:
+            metrics.warnings.append(f"{len(caught)} vehicle(s) were already on an edge when it closed and finished leaving it: {caught[:5]}")
         else:
             metrics.warnings.append("restriction integrity: no vehicle route used a closed edge during its closure (vehroute audit)")
         save_record(rec, metrics, run_dir)
