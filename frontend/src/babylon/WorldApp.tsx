@@ -8,8 +8,7 @@ import { useReplay } from './useReplay'
 import './world.css'
 
 /**
- * `/world` — the Babylon.js living-city route.  During the migration it is a self-contained preview of the
- * miniature Toronto; the HUD/sim dock/tooling from the Mapbox shell are wired in milestone by milestone.
+ * `/world/lab` — the bare Babylon workbench. `/` is the full simulation and `/showcase` the cityscape viewer.
  */
 export default function WorldApp() {
   const params = new URLSearchParams(window.location.search)
@@ -92,7 +91,7 @@ export default function WorldApp() {
         <div className="bworld-top-right">
           <span className="small dim">Babylon.js preview</span>
           <a className="bworld-link small" href="/">
-            Mapbox view
+            Full simulation
           </a>
         </div>
       </div>

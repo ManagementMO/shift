@@ -56,6 +56,7 @@ export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => v
         {st.label}
       </div>
       <div className="strip-actions">
+        {pack?.pack_id === 'toronto' && <a className="ghostbtn" href="/showcase">Cityscape ↗</a>}
         <button className={`ghostbtn ${compareMode ? 'on' : ''}`} onClick={() => setCompareMode(!compareMode)}>
           Compare
         </button>

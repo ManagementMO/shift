@@ -9,6 +9,8 @@ export type SyncMap = MapCamera & {
   /** Renderer-native framings (Babylon world): opening city hero and the venue egress scene. */
   cityHero?: () => void
   egress?: () => boolean
+  setCameraMode?: (mode: CameraMode) => void
+  syncFrom?: (source: SyncMap) => boolean
 }
 
 /** Renderer counters for diagnostics (Developer panel / debug bridge). */
@@ -23,7 +25,7 @@ export function registerMap(side: string, map: SyncMap): () => void {
     if (syncing) return
     syncing = true
     const pose: CameraPose = { center: [map.getCenter().lng, map.getCenter().lat], zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() }
-    for (const [k, m] of maps) if (k !== side) m.jumpTo(pose)
+    for (const [k, m] of maps) if (k !== side && !m.syncFrom?.(map)) m.jumpTo(pose)
     syncing = false
   }
   map.on('move', onMove)
@@ -49,6 +51,7 @@ export function watchCameraMode(cb: (m: CameraMode) => void): () => void {
 
 export function cameraTo(pose: CameraPose, mode: CameraMode) {
   const lead = leadMap()
+  for (const map of maps.values()) map.setCameraMode?.(mode)
   if (lead && mode === 'city' && lead.cityHero) lead.cityHero()
   else if (lead) moveTo(lead, pose, mode) // followers sync through the 'move' handler
   onMode?.(mode)

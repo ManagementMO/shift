@@ -57,7 +57,7 @@ describe('New-city rendering without appearance configuration', () => {
     expect(textured.length).toBeGreaterThan(4)
     for (const mesh of textured) {
       expect(mesh.getVerticesData('uv')?.length).toBe(mesh.getTotalVertices() * 2)
-      expect(mesh.material?.getActiveTextures().length).toBe(1)
+      expect(mesh.material?.getActiveTextures().length).toBeGreaterThanOrEqual(1)
     }
     expect(textured.some((m) => m.material?.name === 'city-masonry')).toBe(true)
     expect(city.chunks.some((m) => m.name.startsWith('trees-') && m.thinInstanceCount > 0)).toBe(true)
@@ -65,8 +65,9 @@ describe('New-city rendering without appearance configuration', () => {
     expect(cityPose(world).target).toEqual([4200, 7200])
     city.dispose()
     expect(scene.meshes).toHaveLength(0)
-    expect(scene.textures).toHaveLength(0)
+    expect(scene.textures.filter(t => t.name.startsWith('city-'))).toHaveLength(0)
     scene.dispose()
+    expect(scene.textures).toHaveLength(0)
     engine.dispose()
   })
 })

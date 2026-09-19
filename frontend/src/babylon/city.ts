@@ -10,10 +10,13 @@ import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import type { Scene } from '@babylonjs/core/scene'
+import type { Material } from '@babylonjs/core/Materials/material'
+import { addArchitecture } from './architecture'
+import { appendMassing } from './massing'
 
 import { Batch, bounds, centroid, hash01, mix, scale, signedArea, type RGB } from './geometry'
 import { facadeFor, TEXTURE_RECIPES, type TextureKind } from './appearance'
-import { interiorBox, roadDashes, treePlacements } from './details'
+import { roadDashes, treePlacements } from './details'
 import { CityMaterials } from './materials'
 import { buildVegetation } from './vegetation'
 import type { BuildingCategory, WorldBuilding, WorldData, WorldLandmark, WorldRoad } from './worldData'
@@ -34,9 +37,9 @@ export const Y = {
 export const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255]
 
 export const PALETTE = {
-  land: hex('#d8d2c4'),
-  water: hex('#3f7392'),
-  green: hex('#93b96f'),
+  land: hex('#b7b6a5'),
+  water: hex('#327781'),
+  green: hex('#78985b'),
   sand: hex('#e3d3a8'),
   rail: hex('#6f685e'),
   asphaltMajor: hex('#55585e'),
@@ -82,7 +85,7 @@ export interface CityMeshes {
   dispose(): void
 }
 
-export function meshFromBatch(name: string, batch: Batch, scene: Scene, material: StandardMaterial): Mesh {
+export function meshFromBatch(name: string, batch: Batch, scene: Scene, material: Material): Mesh {
   const mesh = new Mesh(name, scene)
   if (!batch.isEmpty()) {
     const vd = new VertexData()
@@ -143,11 +146,11 @@ function buildingColor(b: WorldBuilding): { wall: RGB; roof: RGB } {
   const wall = mix(c.wall, c.alt, j * 0.9)
   // taller = cooler/glassier; short = warmer
   const tall = Math.min(1, Math.max(0, (b.h - 30) / 120))
-  const glass = [hex('#94b2bf'), hex('#bec8c5'), hex('#87999e'), hex('#b9b9a6'), hex('#98b3c9')][Math.floor(hash01(`${b.id}:glazing`) * 5)]
-  return { wall: mix(wall, glass, Math.max(tall * 0.65, b.cat === 'office' ? 0.7 : 0)), roof: mix(c.roof, PALETTE.roofDark, tall * 0.5) }
+  const glass = [hex('#7f9b94'), hex('#c4c4ae'), hex('#688b98'), hex('#ad9e80'), hex('#89978a'), hex('#adb8b8'), hex('#77847f')][Math.floor(hash01(`${b.id}:glazing`) * 7)]
+  return { wall: mix(wall, glass, Math.max(tall * 0.88, b.cat === 'office' ? 0.85 : 0)), roof: mix(c.roof, PALETTE.roofDark, tall * 0.5) }
 }
 
-export function buildCity(scene: Scene, world: WorldData): CityMeshes {
+export function buildCity(scene: Scene, world: WorldData, facadeResolution = 1024): CityMeshes {
   const [bx0, bz0, bx1, bz1] = world.crs.bounds_world
   const w = bx1 - bx0
   const d = bz1 - bz0
@@ -166,7 +169,7 @@ export function buildCity(scene: Scene, world: WorldData): CityMeshes {
   ground.receiveShadows = true
   ground.isPickable = true
 
-  const materials = new CityMaterials(scene)
+  const materials = new CityMaterials(scene, facadeResolution)
   const flatMat = vertexColorMaterial('flat', scene, 0.02)
   const foliageMat = vertexColorMaterial('foliage', scene, 0.02)
   const landmarkMat = materials.get('concrete')
@@ -242,35 +245,25 @@ export function buildCity(scene: Scene, world: WorldData): CityMeshes {
   flush(surf, 'surface', false)
 
   // --- buildings, chunked 800 m so the camera only draws what it sees
-  const bld = new ChunkGrid(800, makeBatches)
+  const bld = new ChunkGrid(500, makeBatches)
+  const focus = world.landmarks.find(l => l.kind === 'cn_tower') ?? world.venue
+  const replaced = new Set(world.massing?.excluded_osm_ids ?? [])
   for (const b of world.buildings) {
+    if (replaced.has(b.id)) continue
     if (b.cat === 'landmark' && world.landmarks.some((l) => l.id === b.id)) continue
     if (b.ring.length < 6 || Math.abs(signedArea(b.ring)) < 4) continue
     const [cx, cz] = centroid(b.ring)
     const c = buildingColor(b)
-    const h = Math.max(3, b.h)
-    const top = Y.building + h
     const cell = bld.at(cx, cz)
-    const facade = batchFor(cell, facadeFor(b))
-    const roof = batchFor(cell, 'roof')
-    facade.walls(b.ring, b.holes, Y.building, top, c.wall, 1)
-    roof.polygon(b.ring, b.holes, top, c.roof)
-    if (h > 12) {
-      const trim = batchFor(cell, 'concrete')
-      trim.walls(b.ring, b.holes, top, top + 0.55, scale(c.wall, 1.08), 1)
-      for (let i = 0; i < b.ring.length; i += 2) {
-        const j = (i + 2) % b.ring.length
-        trim.ribbon([b.ring[i], b.ring[i + 1], b.ring[j], b.ring[j + 1]], 0.45, top + 0.55, scale(c.wall, 1.08))
-      }
-    }
-    if (h > 40) {
-      // a slim rooftop plant box reads as "tower" at miniature scale
-      const box = interiorBox(b, 3)
-      if (box) roof.extrude(box, undefined, top, top + Math.min(6, h * 0.05), scale(c.wall, 0.9), scale(c.roof, 0.9))
-    } else if (h > 8) {
-      const box = interiorBox(b, 1.6)
-      if (box) roof.extrude(box, undefined, top, top + 1.3, [0.65, 0.67, 0.65], [0.52, 0.55, 0.55])
-    }
+    addArchitecture({
+      facade: batchFor(cell, facadeFor(b)), roof: batchFor(cell, 'roof'),
+      stone: batchFor(cell, 'concrete'), glass: batchFor(cell, 'glass'), metal: batchFor(cell, 'industrial'),
+    }, b, c, Math.hypot(cx - focus.x, cz - focus.z) < 1500)
+  }
+  for (const b of world.massing?.buildings ?? []) {
+    const cell = bld.at(b.x, b.z)
+    const color = buildingColor({ ...b, ring: [] })
+    appendMassing(b, batchFor(cell, facadeFor(b)), batchFor(cell, 'roof'), color.wall)
   }
   flush(bld, 'buildings', true)
 
@@ -278,19 +271,21 @@ export function buildCity(scene: Scene, world: WorldData): CityMeshes {
   chunks.push(...trees)
   casters.push(...trees)
 
-  // --- landmarks
-  const lm = new Batch()
-  const landmarkGlass = new Batch(TEXTURE_RECIPES.glass.metres)
-  for (const l of world.landmarks) buildLandmark(lm, landmarkGlass, l)
-  if (!landmarkGlass.isEmpty()) {
-    const glazing = meshFromBatch('landmark-glazing', landmarkGlass, scene, materials.get('glass'))
-    glazing.receiveShadows = true
-    chunks.push(glazing)
-    casters.push(glazing)
+  // --- landmarks; individual fallback meshes stay visible until their GLB is ready.
+  const landmarks = new Mesh('landmarks', scene)
+  for (const l of world.landmarks) {
+    const lm = new Batch(TEXTURE_RECIPES.concrete.metres)
+    const landmarkGlass = new Batch(TEXTURE_RECIPES.glass.metres)
+    buildLandmark(lm, landmarkGlass, l)
+    for (const [suffix, batch, mat] of [['solid', lm, landmarkMat], ['glass', landmarkGlass, materials.get('glass')]] as const) {
+      if (batch.isEmpty()) continue
+      const mesh = meshFromBatch(`landmark-${l.kind}-${suffix}`, batch, scene, mat)
+      mesh.metadata = { landmarkKind: l.kind }
+      mesh.receiveShadows = true
+      chunks.push(mesh)
+      casters.push(mesh)
+    }
   }
-  const landmarks = meshFromBatch('landmarks', lm, scene, landmarkMat)
-  landmarks.receiveShadows = true
-  casters.push(landmarks)
 
   // --- stops
   const st = new Batch()

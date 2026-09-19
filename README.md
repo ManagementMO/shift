@@ -49,3 +49,11 @@ Optional backend environment (`.env.example` lists everything): `LLM_API_BASE`/`
 
 See [the local demo and project review](docs/LOCAL_DEMO_AND_REVIEW.md) for verified results,
 architecture, integration status, and Hack the North priorities.
+
+## Toronto cityscape preview
+
+The `demo/toronto-cityscape` branch adds an immersive `/showcase` viewer and upgrades the
+default Babylon renderer with official downtown massing, dedicated landmark GLBs, PBR
+materials, street details and an isometric camera. See [the cityscape guide](docs/TORONTO_CITYSCAPE.md)
+for the isolated local preview, controls, rendering profiles and asset rebuild instructions.
+The [asset provenance file](frontend/public/assets/city/ASSETS.md) records sources and geometry limits.

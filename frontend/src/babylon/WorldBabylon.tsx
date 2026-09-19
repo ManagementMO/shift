@@ -110,7 +110,7 @@ export default function WorldBabylon({ runId, side }: { runId: string | null; si
   )
 
   if (!pack) return <div className={`world world-${side} bworld`} />
-  return <WorldCanvas packId={pack.pack_id} onReady={onReady} className={`world world-${side} bworld`} />
+  return <WorldCanvas packId={pack.pack_id} onReady={onReady} quality={side === 'solo' ? 'high' : 'balanced'} className={`world world-${side} bworld`} />
 }
 
 /** Active closures, ghost proposal and focus corridor for sim time `t`, from the store. */

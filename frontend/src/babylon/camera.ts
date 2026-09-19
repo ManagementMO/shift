@@ -5,6 +5,7 @@
 
 import type { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
+import { Camera } from '@babylonjs/core/Cameras/camera'
 
 import type { WorldData } from './worldData'
 
@@ -24,7 +25,7 @@ export interface Pose {
 export function cityPose(world: WorldData): Pose {
   const cn = world.landmarks.find((l) => l.kind === 'cn_tower')
   const union = world.landmarks.find((l) => l.kind === 'union_station')
-  if (cn && union) return { target: [(cn.x + union.x) / 2, (cn.z + union.z) / 2 - 40], radius: 1650, heading: 22, elevation: 34 }
+  if (cn && union) return { target: [(cn.x + union.x) / 2 + 40, (cn.z + union.z) / 2 + 80], radius: 1250, heading: -28, elevation: 43, y: 75 }
   const [x0, z0, x1, z1] = world.crs.bounds_world
   return { target: [(x0 + x1) / 2, (z0 + z1) / 2], radius: Math.max(450, Math.min(8500, Math.hypot(x1 - x0, z1 - z0) * 0.7)), heading: 22, elevation: 38 }
 }
@@ -36,11 +37,31 @@ export class WorldCamera {
   mode: CameraMode = 'city'
   readonly cam: ArcRotateCamera
   readonly world: WorldData
+  projection: 'isometric' | 'perspective' = 'isometric'
 
   constructor(cam: ArcRotateCamera, world: WorldData) {
     this.cam = cam
     this.world = world
+    this.setProjection('isometric')
     this.apply(cityPose(world))
+    cam.getScene().onBeforeRenderObservable.add(() => this.updateProjection())
+  }
+
+  setProjection(projection: 'isometric' | 'perspective'): void {
+    this.projection = projection
+    this.cam.mode = projection === 'isometric' ? Camera.ORTHOGRAPHIC_CAMERA : Camera.PERSPECTIVE_CAMERA
+    this.updateProjection()
+  }
+
+  private updateProjection(): void {
+    if (this.projection !== 'isometric') return
+    const engine = this.cam.getEngine()
+    const aspect = engine.getRenderWidth() / Math.max(1, engine.getRenderHeight())
+    const half = this.cam.radius * 0.44
+    this.cam.orthoLeft = -half * aspect
+    this.cam.orthoRight = half * aspect
+    this.cam.orthoBottom = -half
+    this.cam.orthoTop = half
   }
 
   get flying(): boolean {
@@ -66,11 +87,13 @@ export class WorldCamera {
     // heading h (camera looks toward h) puts the camera at direction h+180 from the target.
     c.alpha = ((-90 - p.heading) * Math.PI) / 180
     c.beta = ((90 - p.elevation) * Math.PI) / 180
+    this.updateProjection()
   }
 
   flyTo(to: Pose, ms = 1400, mode?: CameraMode): void {
     if (mode) this.mode = mode
     this.cancel()
+    if (ms <= 0) { this.apply(to); return }
     const from = this.pose
     // shortest heading turn
     let dh = to.heading - from.heading
@@ -99,6 +122,7 @@ export class WorldCamera {
   }
 
   city(ms = 1600): void {
+    this.setProjection('isometric')
     this.flyTo(cityPose(this.world), ms, 'city')
   }
 
@@ -120,6 +144,7 @@ export class WorldCamera {
   }
 
   agent(x: number, z: number, heading: number | null, ms = 900): void {
+    this.setProjection('perspective')
     this.flyTo({ target: [x, z], radius: 95, heading: heading ?? this.pose.heading, elevation: 28, y: 2 }, ms, 'agent')
   }
 
