@@ -52,6 +52,11 @@ LANDMARKS: dict[str, tuple[str, str, float | None]] = {  # osm way id -> (kind, 
     "w198500761": ("city_hall", "Toronto City Hall", 12.0),
     "w141694015": ("roy_thomson_hall", "Roy Thomson Hall", 22.0),
     "w197447638": ("ripleys_aquarium", "Ripley's Aquarium", 14.0),
+    "w382735686": ("engineering_7", "Engineering 7 (E7) / Pearl Sullivan Engineering", None),
+    "w51125806": ("engineering_5", "Engineering 5 (E5)", None),
+    "w158807251": ("engineering_6", "Engineering 6 (E6)", None),
+    "r8765264": ("davis_centre", "Davis Centre (DC)", None),
+    "w182091547": ("quantum_nano", "Quantum Nano Centre (QNC)", None),
 }
 GREEN_TAGS = {
     ("leisure", "park"), ("leisure", "garden"), ("leisure", "pitch"), ("leisure", "playground"),
@@ -237,7 +242,10 @@ def compile_buildings(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[l
         if lm:
             rec["lm"] = lm[0]
             c = poly.centroid
-            landmarks.append({"id": key, "kind": lm[0], "name": lm[1], "x": q(c.x), "z": q(c.y), "h": q(h), "ring": ring})
+            landmark = {"id": key, "kind": lm[0], "name": lm[1], "x": q(c.x), "z": q(c.y), "h": q(h), "ring": ring}
+            if holes:
+                landmark["holes"] = holes
+            landmarks.append(landmark)
         buildings.append(rec)
 
     for rid, (members, tags) in osm.relations.items():

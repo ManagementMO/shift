@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useStore } from '../store'
 import { api } from '../api'
 
-const CITY_NAMES: Record<string, string> = { toronto: 'Toronto', waterloo: 'Waterloo' }
+const CITY_NAMES: Record<string, string> = { toronto: 'Toronto', waterloo: 'Waterloo', waterloo_e7: 'Waterloo · E7' }
 
 function runStatus(status: string | undefined, progress: number | undefined, loading: boolean): { label: string; cls: string } {
   if (loading) return { label: 'Loading replay', cls: 'busy' }

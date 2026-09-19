@@ -74,6 +74,11 @@ const LANDMARK_COLOR: Record<string, { wall: RGB; roof: RGB }> = {
   city_hall: { wall: hex('#cfd3d8'), roof: hex('#9aa0a7') },
   roy_thomson_hall: { wall: hex('#9fb6c8'), roof: hex('#7d94a6') },
   ripleys_aquarium: { wall: hex('#83aabe'), roof: hex('#5f8a9f') },
+  engineering_7: { wall: hex('#c7b99f'), roof: hex('#879399') },
+  engineering_5: { wall: hex('#c5cbd0'), roof: hex('#879299') },
+  engineering_6: { wall: hex('#b4c0c6'), roof: hex('#77858e') },
+  davis_centre: { wall: hex('#d9c4ae'), roof: hex('#b38b75') },
+  quantum_nano: { wall: hex('#b5c2c5'), roof: hex('#73868b') },
 }
 
 export interface CityMeshes {
@@ -314,6 +319,25 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
 function buildLandmark(batch: Batch, glazing: Batch, l: WorldLandmark): void {
   const c = LANDMARK_COLOR[l.kind] ?? CATEGORY.landmark
   switch (l.kind) {
+    case 'engineering_7':
+    case 'engineering_5':
+    case 'engineering_6':
+    case 'davis_centre':
+    case 'quantum_nano': {
+      const top = Y.building + l.h
+      const plinth = Y.building + Math.min(1.4, l.h * 0.1)
+      batch.walls(l.ring, l.holes, Y.building, plinth, c.wall, 1)
+      let glassStart = plinth
+      for (let y = Y.building + 3.3; y < top - 0.45; y += 3.3) {
+        glazing.walls(l.ring, l.holes, glassStart, y, c.wall, 1)
+        glassStart = Math.min(y + 0.3, top - 0.45)
+        batch.walls(l.ring, l.holes, y, glassStart, scale(c.wall, 1.08), 1)
+      }
+      glazing.walls(l.ring, l.holes, glassStart, top - 0.45, c.wall, 1)
+      batch.walls(l.ring, l.holes, top - 0.45, top, c.wall, 1)
+      batch.polygon(l.ring, l.holes, top, c.roof)
+      return
+    }
     case 'cn_tower': {
       // The real thing: 553 m to the antenna tip, main pod 335-350 m, SkyPod at 447 m.  Footprint centroid = axis.
       const x = l.x
