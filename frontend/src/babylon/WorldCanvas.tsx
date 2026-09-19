@@ -9,13 +9,14 @@ export interface WorldCanvasProps {
   onReady?: (scene: WorldScene) => void
   onError?: (message: string) => void
   className?: string
+  quality?: 'high' | 'balanced'
 }
 
 /**
  * Mounts one Babylon engine on one canvas.  React owns nothing inside the scene; it only reports lifecycle
  * (loading / ready / error) and hands the imperative `WorldScene` to the parent through `onReady`.
  */
-export default function WorldCanvas({ packId, onReady, onError, className }: WorldCanvasProps) {
+export default function WorldCanvas({ packId, onReady, onError, className, quality = 'high' }: WorldCanvasProps) {
   const ref = useRef<HTMLCanvasElement>(null)
   const [state, setState] = useState<{ phase: 'loading' | 'building' | 'ready' | 'error'; detail?: string }>({ phase: 'loading' })
 
@@ -33,7 +34,7 @@ export default function WorldCanvas({ packId, onReady, onError, className }: Wor
         requestAnimationFrame(() => {
           if (cancelled) return
           try {
-            ws = new WorldScene(canvas, world)
+            ws = new WorldScene(canvas, world, { quality })
             ws.setDisplay(useDisplay.getState())
             const offDisplay = useDisplay.subscribe((settings) => ws?.setDisplay(settings))
             ws.scene.onDisposeObservable.addOnce(offDisplay)
@@ -59,7 +60,7 @@ export default function WorldCanvas({ packId, onReady, onError, className }: Wor
     }
     // onReady is intentionally not a dependency: remounting the engine on every parent render is the one thing to avoid.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [packId])
+  }, [packId, quality])
 
   return (
     <div className={className ?? 'bworld'}>

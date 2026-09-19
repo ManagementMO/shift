@@ -8,8 +8,7 @@ import { useReplay } from './useReplay'
 import './world.css'
 
 /**
- * `/world` — the Babylon.js living-city route.  During the migration it is a self-contained preview of the
- * miniature Toronto; the HUD/sim dock/tooling from the Mapbox shell are wired in milestone by milestone.
+ * `/world/lab` — the bare Babylon workbench. `/` is the full simulation and `/showcase` the cityscape viewer.
  */
 export default function WorldApp() {
   const params = new URLSearchParams(window.location.search)
@@ -41,6 +40,7 @@ export default function WorldApp() {
 
   const onReady = useCallback((ws: WorldScene) => {
     sceneRef.current = ws
+    ws.camera.setPreferredProjection('isometric')
     if (window.__cityshift) window.__cityshift.babylon = ws
     setReady(ws)
   }, [])
@@ -60,9 +60,8 @@ export default function WorldApp() {
         clock.toggle()
       }
       if (e.key === '1') ws.camera.city()
-      if (e.key === '2') flyLandmark(ws, 'cn_tower')
-      if (e.key === '3') flyLandmark(ws, 'union_station')
-      if (e.key === '4') flyLandmark(ws, 'rogers_centre')
+      const landmark = landmarkShortcuts(ws)[Number(e.key) - 2]
+      if (landmark) flyLandmark(ws, landmark.kind)
       if (e.key === '5') egress(ws)
     }
     window.addEventListener('keydown', onKey)
@@ -91,8 +90,8 @@ export default function WorldApp() {
         )}
         <div className="bworld-top-right">
           <span className="small dim">Babylon.js preview</span>
-          <a className="bworld-link small" href="/">
-            Mapbox view
+          <a className="bworld-link small" href={`/world?pack=${encodeURIComponent(packId)}`}>
+            Full simulation
           </a>
         </div>
       </div>
@@ -102,15 +101,11 @@ export default function WorldApp() {
           <button onClick={() => ready.camera.city()} title="1">
             City
           </button>
-          <button onClick={() => flyLandmark(ready, 'cn_tower')} title="2">
-            CN Tower
-          </button>
-          <button onClick={() => flyLandmark(ready, 'union_station')} title="3">
-            Union
-          </button>
-          <button onClick={() => flyLandmark(ready, 'rogers_centre')} title="4">
-            Rogers Centre
-          </button>
+          {landmarkShortcuts(ready).map((landmark, i) => (
+            <button key={landmark.id} onClick={() => flyLandmark(ready, landmark.kind)} title={`${i + 2} — ${landmark.name}`}>
+              {landmark.name.split(' / ')[0]}
+            </button>
+          ))}
           {rx && (
             <button className="hero" onClick={() => egress(ready)} title="5 — rewind to the first traveller leaving the Blue Jays game">
               Egress
@@ -126,6 +121,12 @@ export default function WorldApp() {
       {ready && replay.phase === 'error' && <div className="bworld-transport small bworld-err">{replay.message}</div>}
     </div>
   )
+}
+
+function landmarkShortcuts(ws: WorldScene) {
+  return ['cn_tower', 'union_station', 'rogers_centre', 'engineering_7', 'davis_centre', 'quantum_nano']
+    .flatMap((kind) => ws.world.landmarks.filter((l) => l.kind === kind))
+    .slice(0, 3)
 }
 
 function flyLandmark(ws: WorldScene, kind: string): void {

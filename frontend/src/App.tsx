@@ -32,7 +32,7 @@ export default function App({ renderer = 'babylon', active = true, onGlobe, onWo
   const [drawer, setDrawer] = useState(false)
 
   useEffect(() => {
-    void boot()
+    void boot(new URLSearchParams(window.location.search).get('pack') ?? undefined)
   }, [boot])
 
   // Poll while SUMO is running; when the newest run lands, show it.

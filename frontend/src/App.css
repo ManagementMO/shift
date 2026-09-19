@@ -238,6 +238,8 @@ button:disabled {
   border-left: 1px solid rgba(255, 255, 255, 0.12);
 }
 .ghostbtn {
+  text-decoration: none;
+  white-space: nowrap;
   padding: 6px 11px;
   border-radius: var(--r);
   color: var(--ink-2);
