@@ -1,5 +1,5 @@
 // Screenshot loop against the live Chrome (CDP) or a headless Chromium fallback.
-// usage: node scripts/shoot.mjs <name> [--t=SEC] [--play] [--click=SELECTOR]... [--key=K] [--wait=MS] [--eval=JS]
+// usage: node scripts/shoot.mjs <name> [--url=PATH] [--t=SEC] [--play] [--click=SELECTOR]... [--key=K] [--wait=MS] [--eval=JS]
 import { chromium } from 'playwright'
 import { mkdirSync } from 'node:fs'
 
@@ -23,8 +23,9 @@ await page.setViewportSize({ width: 1440, height: 900 })
 const logs = []
 page.on('console', (m) => (m.type() === 'error' || m.type() === 'warning') && logs.push(`${m.type()}: ${m.text().slice(0, 300)}`))
 page.on('pageerror', (e) => logs.push(`pageerror: ${e.message}`))
-await page.goto('http://localhost:5173/', { waitUntil: 'load' })
-await page.waitForFunction(() => document.querySelector('.world canvas') !== null, null, { timeout: 30000 })
+await page.goto(`http://localhost:5173${opt('url')[0] ?? '/'}`, { waitUntil: 'load' })
+await page.waitForFunction(() => document.querySelector('.world canvas, .bworld-canvas') !== null, null, { timeout: 30000 })
+await page.waitForFunction(() => !document.querySelector('.bworld-veil'), null, { timeout: 120000 }).catch(() => {})
 // wait for tiles/buildings + replay
 await page.waitForFunction(() => !document.querySelector('.status.busy'), null, { timeout: 60000 }).catch(() => {})
 await page.waitForTimeout(Number(opt('wait')[0] ?? 6000))

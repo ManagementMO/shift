@@ -2,7 +2,7 @@
 
     python -m cityshift.citypack.make_pack toronto           # builds var/citypacks/toronto (skips steps whose outputs exist)
     python -m cityshift.citypack.make_pack waterloo --force  # rebuild netconvert + pack artifacts
-    python -m cityshift.citypack.make_pack toronto --pack-only  # re-derive pack.json/geojson from the existing net
+    python -m cityshift.citypack.make_pack toronto --pack-only  # re-derive pack.json/geojson/world.json from the existing net
 
 The netconvert options below are the ones recorded in the header of the shipped waterloo.net.xml, so a
 rebuild reproduces the same network given the same OSM tiles.  OSM tiles are cached under var/osm/<pack_id>/.
@@ -15,7 +15,8 @@ import sys
 from pathlib import Path
 
 from cityshift.citypack.build import CITIES, PACK_ROOT, CityConfig, build_pack
-from cityshift.citypack.osm_fetch import fetch_tiles
+from cityshift.citypack.osm_fetch import fetch_shoreline, fetch_tiles
+from cityshift.citypack.world import compile_world
 from cityshift.transport.sumo_env import binary
 
 NETCONVERT_OPTS = [
@@ -72,6 +73,10 @@ def make_pack(cfg: CityConfig, force: bool = False, pack_only: bool = False) -> 
         print(f"{pack.pack_id}: {len(pack.stops)} stops, {len(pack.zones)} zones, fingerprint {pack.network_fingerprint}")
     else:
         print(f"{pack_dir} already built; pass --force to rebuild")
+    if force or pack_only or not (pack_dir / "world.json").exists():
+        if cfg.lake_relations:
+            fetch_shoreline(cfg.osm_bbox, osm_dir(cfg).with_name(f"{cfg.pack_id}_water"), cfg.lake_relations)
+        compile_world(cfg.pack_id)
     return pack_dir
 
 

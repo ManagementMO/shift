@@ -1,0 +1,106 @@
+.bworld-shell {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #dfe3e8;
+}
+.bworld {
+  position: absolute;
+  inset: 0;
+}
+.bworld-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  outline: none;
+  touch-action: none;
+}
+.bworld-veil {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(180deg, #d9e2ea, #c9d3dc);
+  transition: opacity 0.4s;
+}
+.bworld-veil-card {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  padding: 22px 30px;
+  border-radius: var(--r);
+  background: var(--glass-strong);
+  box-shadow: var(--glass-shadow);
+  min-width: 280px;
+  text-align: center;
+}
+.bworld-veil-card i {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  animation: bworld-spin 0.9s linear infinite;
+}
+@keyframes bworld-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.bworld-top {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
+}
+.bworld-top > * {
+  pointer-events: auto;
+}
+.bworld-brand,
+.bworld-top-right,
+.bworld-status,
+.bworld-cams {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: var(--glass);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(10px);
+}
+.bworld-brand b {
+  letter-spacing: 0.08em;
+}
+.bworld-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+.bworld-status {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  gap: 14px;
+}
+.bworld-cams {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  gap: 4px;
+  padding: 5px;
+}
+.bworld-cams button {
+  padding: 6px 11px;
+  border-radius: 999px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.bworld-cams button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}

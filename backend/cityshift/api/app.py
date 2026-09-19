@@ -39,7 +39,7 @@ RUN_ARTIFACTS = {
     "manifest": "manifest.json",
     "tripinfo_summary": "tripinfo_summary.json",
 }
-PACK_ARTIFACTS = {"roads": "roads.geojson", "walk": "walk.geojson", "corridors": "corridors.json"}
+PACK_ARTIFACTS = {"roads": "roads.geojson", "walk": "walk.geojson", "corridors": "corridors.json", "world": "world.json"}
 
 
 def _not_found(what: str) -> HTTPException:

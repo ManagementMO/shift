@@ -10,7 +10,41 @@ from pathlib import Path
 import httpx
 
 OSM_API = "https://api.openstreetmap.org/api/0.6/map"
+OVERPASS_API = "https://overpass-api.de/api/interpreter"
 UA = "cityshift/0.1 (transport scenario lab; contact via repo)"
+
+
+def fetch_shoreline(bbox: tuple[float, float, float, float], out_dir: Path, lake_relations: tuple[int, ...]) -> list[Path]:
+    """Overpass pull of the big-water geometry the tile API cannot give us: member ways of the named lake
+    relations that touch the (padded) bbox, plus every other natural=water way/relation in it.  Used only by the
+    world compiler for the Babylon miniature."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    minlon, minlat, maxlon, maxlat = bbox
+    pad = 0.01
+    bb = f"{minlat - pad},{minlon - pad},{maxlat + pad},{maxlon + pad}"
+    queries = {
+        "lake_ways.json": f"[out:json][timeout:150][bbox:{bb}];(" + "".join(f"rel({rid});way(r);" for rid in lake_relations) + ");out geom;",
+        "lake.json": f'[out:json][timeout:150];(way["natural"="water"]({bb});relation["natural"="water"](if:t["name"]!="Lake Ontario")({bb});way(r)({bb}););out geom;',
+    }
+    files: list[Path] = []
+    with httpx.Client(timeout=240, headers={"User-Agent": UA}) as client:
+        for name, query in queries.items():
+            path = out_dir / name
+            if path.exists() and path.stat().st_size > 1000:
+                files.append(path)
+                continue
+            for attempt in range(4):
+                r = client.post(OVERPASS_API, data={"data": query})
+                if r.status_code == 200:
+                    path.write_bytes(r.content)
+                    files.append(path)
+                    print(f"shoreline {name}: {len(r.content)/1e6:.1f} MB", file=sys.stderr)
+                    break
+                print(f"shoreline {name}: HTTP {r.status_code}, retry {attempt}", file=sys.stderr)
+                time.sleep(10 * (attempt + 1))
+            else:
+                print(f"shoreline {name}: giving up; world will have no large water bodies", file=sys.stderr)
+    return files
 
 
 def fetch_tiles(bbox: tuple[float, float, float, float], out_dir: Path, nx: int = 4, ny: int = 4) -> list[Path]:

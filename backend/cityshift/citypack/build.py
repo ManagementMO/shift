@@ -183,6 +183,7 @@ class CityConfig:
     transit_agency: str
     extra_stops: tuple[ExtraStopSpec, ...] = ()  # declared shuttle bays where OSM has no usable stop
     limitations: tuple[str, ...] = field(default_factory=tuple)
+    lake_relations: tuple[int, ...] = ()  # OSM water relations too big for the tile API (world compiler only)
 
     @property
     def net_name(self) -> str:
@@ -245,6 +246,7 @@ TORONTO = CityConfig(
         "OSM has no bus stop within 900 m of Rogers Centre; two shuttle bays are declared on real bus-permitted lanes (ids SB_*).",
         "Streetcar/subway service is not simulated; only the declared shuttle fleet and background traffic run.",
     ),
+    lake_relations=(1206310,),  # Lake Ontario
 )
 
 CITIES: dict[str, CityConfig] = {c.pack_id: c for c in (WATERLOO, TORONTO)}
