@@ -67,7 +67,7 @@ type State = {
   cameraMode: CameraMode
   building: string | null // "freeze → build → reload" banner text while a branch is compiled
 
-  boot: () => Promise<void>
+  boot: (packId?: string) => Promise<void>
   selectPack: (packId: string) => Promise<void>
   selectScenario: (sid: string) => Promise<void>
   createFlagship: (cohort: number, seed: number) => Promise<void>
@@ -115,12 +115,15 @@ export const useStore = create<State>((set, get) => ({
   cameraMode: 'city',
   building: null,
 
-  async boot() {
+  async boot(requestedPackId) {
     try {
       const [health, scenarios, packs] = await Promise.all([api.health(), api.scenarios(), api.packs()])
       set({ health, scenarios, packs })
-      const preferred = scenarios.find((s) => s.pack_id === 'toronto') ?? scenarios[scenarios.length - 1]
-      const packId = preferred?.pack_id ?? packs.find((p) => p.pack_id === 'toronto')?.pack_id ?? packs[0]?.pack_id ?? 'toronto'
+      const requested = packs.find((p) => p.pack_id === requestedPackId)
+      const preferred = requested
+        ? scenarios.filter((s) => s.pack_id === requested.pack_id).at(-1)
+        : scenarios.find((s) => s.pack_id === 'toronto') ?? scenarios.at(-1)
+      const packId = requested?.pack_id ?? preferred?.pack_id ?? packs.find((p) => p.pack_id === 'toronto')?.pack_id ?? packs[0]?.pack_id ?? 'toronto'
       const [pack, roads] = await Promise.all([api.pack(packId), api.roads(packId)])
       set({ pack, roads })
       if (preferred) await get().selectScenario(preferred.scenario_id)
@@ -133,14 +136,15 @@ export const useStore = create<State>((set, get) => ({
     if (packId === get().pack?.pack_id) return
     try {
       const [pack, roads] = await Promise.all([api.pack(packId), api.roads(packId)])
-      set({ pack, roads })
+      clock.pause()
+      clock.seek(0)
+      set({
+        pack, roads, scenarioId: null, travelers: {}, plans: [], runs: [], primaryRunId: null, compareRunId: null,
+        selection: null, ghost: null, investigation: null, tool: null, compareMode: false, cameraMode: 'city', error: null,
+      })
       cameraTo(cityPose(pack.pack_id, pack.center), 'city')
       const own = get().scenarios.filter((s) => s.pack_id === packId)
       if (own.length) await get().selectScenario(own[own.length - 1].scenario_id)
-      else {
-        clock.pause()
-        set({ scenarioId: null, plans: [], runs: [], primaryRunId: null, compareRunId: null, selection: null, ghost: null })
-      }
     } catch (e) {
       set({ error: String(e) })
     }
