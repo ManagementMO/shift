@@ -4,8 +4,9 @@ import { Scene } from '@babylonjs/core/scene'
 
 import { Ray } from '@babylonjs/core/Culling/ray'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
+import { PBRMaterial } from '@babylonjs/core/Materials/PBR/pbrMaterial'
 
-import { buildCity, Y } from './city'
+import { buildCity, PALETTE, Y } from './city'
 import { cityPose } from './camera'
 import { Overlay, MARK } from './overlay'
 import { RoadIndex } from './roadIndex'
@@ -91,6 +92,39 @@ describe('New-city rendering without appearance configuration', () => {
       expect(hits).toHaveLength(1)
       expect(hits[0].pickedPoint!.y).toBeCloseTo(Y.road)
     }
+    const colors = city.ground.getVerticesData('color')!
+    for (let i = 0; i < 3; i++) expect(colors[i]).toBeCloseTo(PALETTE.land[i])
+    city.dispose()
+    scene.dispose()
+    engine.dispose()
+  })
+
+  it('textures the entire base plate and preserves its land tint under bright lighting', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const city = buildCity(scene, fixture())
+    const ground = city.ground
+    const material = ground.material as PBRMaterial
+    expect(material).toBeInstanceOf(PBRMaterial)
+    expect(material.albedoTexture?.name).toBe('city-concrete-albedo')
+    expect(ground.getVerticesData('uv')).toHaveLength(ground.getTotalVertices() * 2)
+    const colors = ground.getVerticesData('color')!
+    for (let i = 0; i < 3; i++) expect(colors[i]).toBeCloseTo(PALETTE.land[i])
+    const brdf = material.environmentBRDFTexture
+    city.dispose()
+    expect(scene.textures).toEqual([brdf])
+    scene.dispose()
+    expect(scene.textures).toHaveLength(0)
+    engine.dispose()
+  })
+
+  it.each([512, 1024])('preserves the requested %i px facade quality', (resolution) => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const city = buildCity(scene, fixture(), resolution)
+    const facade = scene.getMaterialByName('city-masonry') as PBRMaterial
+    expect(facade.albedoTexture?.getSize().width).toBe(resolution)
+    expect((city.ground.material as PBRMaterial).albedoTexture?.getSize().width).toBe(512)
     city.dispose()
     scene.dispose()
     engine.dispose()
