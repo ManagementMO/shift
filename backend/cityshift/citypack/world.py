@@ -11,21 +11,24 @@ rendered and simulated geography share one coordinate system by construction.  E
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from itertools import pairwise
 from pathlib import Path
 
 import sumolib
-from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
+from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import polygonize, unary_union
-from shapely.strtree import STRtree
 
 from cityshift.citypack.build import PACK_ROOT
+from cityshift.citypack.geometry import iter_polys, polygon_record, resolve_building_volumes
+from cityshift.citypack.massing import prepare_massing
+
+MASSING_ASSET = PACK_ROOT.parents[1] / "frontend" / "public" / "assets" / "city" / "toronto-massing.json"
 
 LEVEL_M = 3.3
 DEFAULT_HEIGHT = {
@@ -54,6 +57,11 @@ LANDMARKS: dict[str, tuple[str, str, float | None]] = {  # osm way id -> (kind, 
     "w198500761": ("city_hall", "Toronto City Hall", 12.0),
     "w141694015": ("roy_thomson_hall", "Roy Thomson Hall", 22.0),
     "w197447638": ("ripleys_aquarium", "Ripley's Aquarium", 14.0),
+    "w382735686": ("engineering_7", "Engineering 7 (E7) / Pearl Sullivan Engineering", None),
+    "w51125806": ("engineering_5", "Engineering 5 (E5)", None),
+    "w158807251": ("engineering_6", "Engineering 6 (E6)", None),
+    "r8765264": ("davis_centre", "Davis Centre (DC)", None),
+    "w182091547": ("quantum_nano", "Quantum Nano Centre (QNC)", None),
 }
 GREEN_TAGS = {
     ("leisure", "park"), ("leisure", "garden"), ("leisure", "pitch"), ("leisure", "playground"),
@@ -148,19 +156,6 @@ def polygon_rings(poly: Polygon) -> tuple[list[float], list[list[float]]]:
     return flat(ext), holes
 
 
-def iter_polys(geom) -> Iterable[Polygon]:
-    if isinstance(geom, Polygon):
-        if not geom.is_empty:
-            yield geom
-    elif isinstance(geom, MultiPolygon):
-        for g in geom.geoms:
-            if not g.is_empty:
-                yield g
-    elif hasattr(geom, "geoms"):
-        for g in geom.geoms:
-            yield from iter_polys(g)
-
-
 def way_coords(osm: OsmData, refs: list[str], frame: WorldFrame) -> list[tuple[float, float]]:
     pts = []
     for r in refs:
@@ -248,7 +243,10 @@ def compile_buildings(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[l
         if lm:
             rec["lm"] = lm[0]
             c = poly.centroid
-            landmarks.append({"id": key, "kind": lm[0], "name": lm[1], "x": q(c.x), "z": q(c.y), "h": q(h), "ring": ring})
+            landmark = {"id": key, "kind": lm[0], "name": lm[1], "x": q(c.x), "z": q(c.y), "h": q(h), "ring": ring}
+            if holes:
+                landmark["holes"] = holes
+            landmarks.append(landmark)
         buildings.append(rec)
 
     for rid, (members, tags) in osm.relations.items():
@@ -273,69 +271,6 @@ def compile_buildings(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[l
         for i, p in enumerate(iter_polys(poly)):
             emit(p, tags, f"w{wid}" if i == 0 else f"w{wid}.{i}")
     return resolve_building_volumes(buildings), landmarks
-
-
-def polygon_record(poly: Polygon) -> dict:
-    return {
-        "ring": [v for point in list(poly.exterior.coords)[:-1] for v in point],
-        "holes": [[v for point in list(h.coords)[:-1] for v in point] for h in poly.interiors],
-    }
-
-
-def resolve_building_volumes(buildings: list[dict]) -> list[dict]:
-    if not buildings:
-        return []
-    shapes = [Polygon(list(zip(b["ring"][::2], b["ring"][1::2], strict=True)),
-                      [list(zip(h[::2], h[1::2], strict=True)) for h in b.get("holes", [])]).buffer(0)
-              for b in buildings]
-    bases = [b.get("base", 0) for b in buildings]
-    tops = [base + b["h"] for base, b in zip(bases, buildings, strict=True)]
-    tree = STRtree(shapes)
-    parents = list(range(len(buildings)))
-
-    def root(i):
-        while parents[i] != i:
-            parents[i] = parents[parents[i]]
-            i = parents[i]
-        return i
-
-    for i, shape in enumerate(shapes):
-        if buildings[i]["cat"] == "landmark":
-            continue
-        for index in tree.query(shape, predicate="intersects"):
-            j = int(index)
-            if j <= i or buildings[j]["cat"] == "landmark":
-                continue
-            if min(tops[i], tops[j]) <= max(bases[i], bases[j]):
-                continue
-            if shape.intersection(shapes[j]).area > 0.01:
-                parents[root(j)] = root(i)
-    groups: dict[int, list[int]] = {}
-    for i in range(len(buildings)):
-        groups.setdefault(root(i), []).append(i)
-    out: list[dict] = []
-    for group in groups.values():
-        if len(group) == 1:
-            out.append(buildings[group[0]])
-            continue
-        levels = sorted({v for i in group for v in (bases[i], tops[i])})
-        for low, high in pairwise(levels):
-            active = sorted((i for i in group if bases[i] <= low and tops[i] >= high),
-                            key=lambda i: (tops[i], shapes[i].area, buildings[i]["id"]))
-            occupied = Polygon()
-            above = unary_union([shapes[i] for i in group if bases[i] <= high and tops[i] > high])
-            for i in active:
-                visible = shapes[i].difference(occupied)
-                occupied = unary_union([occupied, shapes[i]])
-                source = buildings[i]
-                for part, poly in enumerate(iter_polys(visible)):
-                    if poly.area < 0.01:
-                        continue
-                    out.append({**source, **polygon_record(poly), "id": f'{source["id"]}:volume:{low:g}:{part}',
-                                "source_id": source["id"], "source_height": source["h"],
-                                "base": low, "h": high - low,
-                                "roofs": [polygon_record(p) for p in iter_polys(poly.difference(above)) if p.area >= 0.01]})
-    return out
 
 
 def compile_areas(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[list[dict], list[dict], list[list[float]]]:
@@ -617,18 +552,31 @@ def compile_world(pack_id: str, out_path: Path | None = None) -> Path:
             break
 
     loc = net.getLocationOffset()
+    crs = {
+        "proj": "+proj=utm +zone=17 +ellps=WGS84 +datum=WGS84 +units=m +no_defs",
+        "utm_zone": 17,
+        "net_offset": [loc[0], loc[1]],
+        "origin_net": [round(frame.origin[0], 3), round(frame.origin[1], 3)],
+        "origin_lonlat": [round(v, 7) for v in frame.world_to_lonlat(0.0, 0.0)],
+        "bounds_world": [round(v, 1) for v in bw],
+    }
+    massing = None
+    if pack_id == "toronto" and MASSING_ASSET.exists():
+        raw = MASSING_ASSET.read_bytes()
+        asset = json.loads(raw)
+        try:
+            buildings, massing = prepare_massing(asset, crs, landmarks, buildings, pack["network_fingerprint"],
+                                                 hashlib.sha256(raw).hexdigest())
+            massing_path = pack_dir / "massing.json"
+            massing_path.write_text(json.dumps(massing, separators=(",", ":")))
+            print(json.dumps({"massing": massing["alignment"], "buildings": len(massing["buildings"])}), f"-> {massing_path}", file=sys.stderr)
+        except ValueError as exc:
+            print(f"massing skipped: {exc}", file=sys.stderr)
     world = {
         "version": 1,
         "pack_id": pack_id,
         "network_fingerprint": pack["network_fingerprint"],
-        "crs": {
-            "proj": "+proj=utm +zone=17 +ellps=WGS84 +datum=WGS84 +units=m +no_defs",
-            "utm_zone": 17,
-            "net_offset": [loc[0], loc[1]],
-            "origin_net": [round(frame.origin[0], 3), round(frame.origin[1], 3)],
-            "origin_lonlat": [round(v, 7) for v in frame.world_to_lonlat(0.0, 0.0)],
-            "bounds_world": [round(v, 1) for v in bw],
-        },
+        "crs": crs,
         "anchors": anchors,
         "venue": {"x": q(vx), "z": q(vz), "edge": pack["venue_edge_id"]},
         "stops": stops,
@@ -645,6 +593,10 @@ def compile_world(pack_id: str, out_path: Path | None = None) -> Path:
         "counts": {"roads": len(roads), "junctions": len(junctions), "buildings": len(buildings), "water": len(water), "green": len(green), "rail": len(rail)},
         "provenance": ["OpenStreetMap (ODbL) via api.openstreetmap.org tiles + Overpass shoreline", f"SUMO netconvert network {pack['network_fingerprint']}"],
     }
+    if massing:
+        world["massing_url"] = f"/api/packs/{pack_id}/massing"
+        world["counts"]["massing"] = len(massing["buildings"])
+        world["provenance"].append(f"{massing['source']} ({massing['license']}), aligned by {massing['alignment']['method']}")
     out = out_path or (pack_dir / "world.json")
     out.write_text(json.dumps(world, separators=(",", ":")))
     print(json.dumps(world["counts"]), f"-> {out} ({out.stat().st_size / 1e6:.1f} MB)", file=sys.stderr)

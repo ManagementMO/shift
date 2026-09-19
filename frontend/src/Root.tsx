@@ -6,9 +6,11 @@ import Experience from './globe/Experience'
 // `/` opens the globe; `/world` opens the city directly. `/mapbox` is the Mapbox alternative.
 // `/world/lab` is the bare Babylon viewer for renderer experiments.
 const WorldApp = lazy(() => import('./babylon/WorldApp.tsx'))
+const CityShowcase = lazy(() => import('./babylon/CityShowcase.tsx'))
 
 export default function Root() {
   const path = window.location.pathname.replace(/\/+$/, '')
+  if (path === '/showcase') return <Suspense fallback={null}><CityShowcase /></Suspense>
   if (path === '/mapbox') return <App renderer="mapbox" />
   if (path === '/world/lab')
     return (

@@ -4,12 +4,16 @@ export interface DisplaySettings {
   shadows: boolean
   textures: boolean
   sharp: boolean
+  projection: 'perspective' | 'isometric'
+  lighting: 'afternoon' | 'golden'
 }
 
 export const useDisplay = create<DisplaySettings & { set: (patch: Partial<DisplaySettings>) => void }>((set) => ({
   shadows: true,
   textures: true,
   sharp: false,
+  projection: 'perspective',
+  lighting: 'afternoon',
   set: (patch) => set(patch),
 }))
 
