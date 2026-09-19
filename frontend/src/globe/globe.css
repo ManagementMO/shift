@@ -34,8 +34,6 @@
 .orbital-pin > span { position: absolute; top: 19px; left: 19px; padding: 4px 6px; background: rgba(6, 6, 6, 0.82); font-size: 11px; white-space: nowrap; }
 .orbital-pin.home > span { top: -20px; }
 .orbital-pin:hover > span, .orbital-pin:focus-visible > span { color: #fff; background: #171717; }
-.orbital-stage-bottom { position: absolute; bottom: 23px; left: 20px; right: 20px; display: flex; justify-content: center; gap: 16px; color: #70706c; font-size: 11px; pointer-events: none; }
-.orbital-stage-bottom > span:last-child { color: #444; }
 .orbital-footer { grid-area: footer; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 0 30px; border-top: 1px solid #1c1c1c; color: #595956; font-size: 9px; z-index: 3; }
 .orbital-footer > span:last-child { display: flex; align-items: center; gap: 10px; }
 .orbital-footer i { width: 2px; height: 2px; background: #555; border-radius: 50%; }
@@ -96,7 +94,6 @@
   .orbital-panel-left { border-right: 0; border-top: 1px solid #1c1c1c; }
   .orbital-panel-right { border-left: 0; border-top: 1px solid #1c1c1c; }
   .sim-settings-docked, .recent-work { height: auto; min-height: 0; }
-  .orbital-stage-bottom { bottom: 16px; gap: 10px; font-size: 10px; }
   .orbital-footer { padding: 0 18px; font-size: 8px; }
   .orbital-footer > span:last-child { gap: 6px; }
   .orbital-footer > span:last-child a:first-child, .orbital-footer i { display: none; }

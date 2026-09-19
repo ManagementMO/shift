@@ -96,7 +96,6 @@ export default function Globe(props: Props) {
         <div className="orbital-pin-layer">
           {LOCATIONS.map((place) => <button key={place.id} ref={(element) => { if (element) labels.current.set(place.id, element); else labels.current.delete(place.id) }} className={`orbital-pin ${place.id === 'toronto' ? 'home' : ''}`} aria-label={`Fly to ${place.name}`} disabled={busy} onClick={() => choose(place)}><i /><span>{place.name}</span></button>)}
         </div>
-        <div className="orbital-stage-bottom"><span>Drag to rotate.</span><span>Select a marker to enter.</span></div>
         {failure && <div className="orbital-render-error"><b>Globe unavailable</b><span>{failure}</span><a href="/world">Open Toronto directly</a></div>}
         {!ready && !failure && <div className="orbital-render-error">Loading Earth…</div>}
         {imageryError && <span className="orbital-imagery-note">Earth imagery unavailable. Location selection still works.</span>}
