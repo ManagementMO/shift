@@ -56,7 +56,7 @@ export default function AgentBubble() {
       }
       // Agent mode: glide the camera after the entity at most ~1.5×/s, and only once it has drifted off centre.
       const now = performance.now()
-      if (follow && cameraMode === 'agent' && now - lastFollow > 650 && !lead.isMoving()) {
+      if (follow && !lead.cameraLocked && cameraMode === 'agent' && now - lastFollow > 650 && !lead.isMoving()) {
         const c = lead.getCenter()
         const drift = Math.hypot((pos[0] - c.lng) * 80_000, (pos[1] - c.lat) * 111_000)
         if (drift > 12) {
@@ -113,9 +113,11 @@ export default function AgentBubble() {
           {ent?.speed !== undefined && state !== 'waiting' && ` · ${(ent.speed * 3.6).toFixed(0)} km/h`}
         </div>
         <div className="row">
-          <button className="ghostbtn" onClick={follow}>
-            Follow
-          </button>
+          {!leadMap()?.cameraLocked && (
+            <button className="ghostbtn" onClick={follow}>
+              Follow
+            </button>
+          )}
           <button className="ghostbtn" onClick={() => setLens('people')}>
             Why?
           </button>
@@ -143,9 +145,11 @@ export default function AgentBubble() {
           {ent ? ` · ${(ent.speed * 3.6).toFixed(0)} km/h` : ' · not on the road right now'}
         </div>
         <div className="row">
-          <button className="ghostbtn" onClick={follow}>
-            Follow
-          </button>
+          {!leadMap()?.cameraLocked && (
+            <button className="ghostbtn" onClick={follow}>
+              Follow
+            </button>
+          )}
           <button className="ghostbtn" onClick={() => setLens('transport')}>
             Why?
           </button>
@@ -166,9 +170,11 @@ export default function AgentBubble() {
       </div>
       <div className="small dim">{ent ? `${(ent.speed * 3.6).toFixed(0)} km/h` : 'not on the road right now'}</div>
       <div className="row">
-        <button className="ghostbtn" onClick={follow}>
-          Follow
-        </button>
+        {!leadMap()?.cameraLocked && (
+          <button className="ghostbtn" onClick={follow}>
+            Follow
+          </button>
+        )}
         {owner && (
           <button className="ghostbtn" onClick={() => select({ kind: 'person', id: owner })}>
             Traveler

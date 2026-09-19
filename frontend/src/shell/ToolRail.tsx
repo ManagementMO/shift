@@ -9,7 +9,6 @@ const TOOLS: { id: ToolId; label: string; glyph: string }[] = [
   { id: 'weather', label: 'Hazard', glyph: '🌪' },
   { id: 'road', label: 'Road', glyph: '═' },
   { id: 'intersection', label: 'Intersection', glyph: '✚' },
-  { id: 'custom', label: 'Custom', glyph: '…' },
 ]
 
 export default function ToolRail() {

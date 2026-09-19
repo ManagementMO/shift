@@ -6,13 +6,19 @@ import { AmbientLight, DirectionalLight, LightingEffect } from '@deck.gl/core'
 import { useStore } from '../store'
 import { clock } from './playback'
 import { buildWorldLayers, SLOT_NAMES, slotAnchorId } from './layers'
-import { cityPose, TORONTO_CITY, type CameraPose } from './camera'
+import { cityPose, type CameraPose } from './camera'
 import { registerMap, renderStats } from './registry'
 
 type MapLike = {
   addControl: (c: IControl, pos?: string) => unknown
   remove: () => void
   getZoom: () => number
+  setMinZoom: (zoom: number) => unknown
+  setMaxZoom: (zoom: number) => unknown
+  setMinPitch: (pitch: number) => unknown
+  setMaxPitch: (pitch: number) => unknown
+  stop: () => unknown
+  unproject: (point: [number, number]) => { lng: number; lat: number }
   on: (ev: string, cb: (e: never) => void) => unknown
   off: (ev: string, cb: (e: never) => void) => unknown
   once: (ev: string, cb: () => void) => unknown
@@ -76,6 +82,7 @@ const LIGHTING = new LightingEffect({
 })
 
 export default function WorldMap({ runId, side }: { runId: string | null; side: 'solo' | 'left' | 'right' }) {
+  const pack = useStore((s) => s.pack)
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLike | null>(null)
   const runIdRef = useRef(runId)
@@ -86,7 +93,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
   }, [runId])
 
   useEffect(() => {
-    if (!MAPBOX_TOKEN || !containerRef.current || mapRef.current) return
+    if (!MAPBOX_TOKEN || !pack || !containerRef.current || mapRef.current) return
     const container = containerRef.current
     let disposed = false
     let unregister = () => {}
@@ -104,8 +111,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
         effects: [LIGHTING],
         useDevicePixels: true,
       })
-      const pack = useStore.getState().pack
-      const pose = pack ? cityPose(pack.pack_id, pack.center) : TORONTO_CITY
+      const pose = { ...cityPose(pack.pack_id, pack.center), pitch: 38 }
       const m = new mapboxgl.Map({
         container,
         accessToken: MAPBOX_TOKEN,
@@ -114,16 +120,45 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
         zoom: pose.zoom,
         pitch: pose.pitch,
         bearing: pose.bearing,
+        maxPitch: 75,
         antialias: true,
         attributionControl: false,
         logoPosition: 'bottom-right',
-        maxPitch: 75,
         minZoom: 11,
         config: { basemap: STANDARD_CONFIG },
       } as ConstructorParameters<typeof mapboxgl.Map>[0])
       mapRef.current = m as unknown as MapLike
       m.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right')
       const map = mapRef.current
+      map.cameraLocked = false
+      const fitView = (preset: CameraPose) => {
+        const width = container.clientWidth
+        const height = container.clientHeight
+        const [west, south, east, north] = pack.bbox
+        const dx = (east - west) * 0.1
+        const dy = (north - south) * 0.1
+        const corners: [number, number][] = [[0, 0], [width, 0], [0, height], [width, height]]
+        const target: CameraPose = {
+          ...preset,
+          pitch: Math.max(20, Math.min(48, preset.pitch)),
+          center: [Math.max(west + dx * 2, Math.min(east - dx * 2, preset.center[0])), Math.max(south + dy * 2, Math.min(north - dy * 2, preset.center[1]))],
+        }
+        map.stop()
+        map.setMinZoom(11)
+        map.setMaxZoom(24)
+        map.setMinPitch(0)
+        map.setMaxPitch(75)
+        let zoom = Math.max(11, Math.min(23, target.zoom))
+        for (; zoom < 24; zoom += 0.25) {
+          map.jumpTo({ ...target, zoom })
+          if (corners.every((corner) => {
+            const p = map.unproject(corner)
+            return p.lng >= west + dx && p.lng <= east - dx && p.lat >= south + dy && p.lat <= north - dy
+          })) break
+        }
+      }
+      map.setCameraPreset = (requested, mode) => fitView(mode === 'city' ? pose : requested)
+      fitView(pose)
       // Invisible per-slot anchor layers that deck layer groups are inserted before (see SLOT in layers.ts).
       let anchorsReady = false
       const ensureAnchors = () => {
@@ -200,7 +235,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
       mapRef.current = null
       redrawRef.current = () => {}
     }
-  }, [side])
+  }, [side, pack])
 
   return (
     <div ref={containerRef} className={`world world-${side}`}>

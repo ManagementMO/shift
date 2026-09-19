@@ -5,12 +5,10 @@ import TopStrip from './shell/TopStrip'
 import SimDock from './shell/SimDock'
 import ToolRail from './shell/ToolRail'
 import ToolPanel from './shell/ToolPanel'
-import CommandBar from './shell/CommandBar'
 import AgentBubble from './shell/AgentBubble'
 import CameraModes from './shell/CameraModes'
 import SwarmLens from './shell/SwarmLens'
 import ScenarioDrawer from './shell/ScenarioDrawer'
-import CompareSplit from './shell/CompareSplit'
 import './App.css'
 
 const WorldBabylon = lazy(() => import('./babylon/WorldBabylon'))
@@ -22,11 +20,9 @@ export default function App({ renderer = 'babylon' }: { renderer?: Renderer }) {
   const error = useStore((s) => s.error)
   const setError = useStore((s) => s.setError)
   const building = useStore((s) => s.building)
-  const compareMode = useStore((s) => s.compareMode)
   const primaryRunId = useStore((s) => s.primaryRunId)
   const runs = useStore((s) => s.runs)
   const refreshRuns = useStore((s) => s.refreshRuns)
-  const openRun = useStore((s) => s.openRun)
   const scenarioId = useStore((s) => s.scenarioId)
   const pack = useStore((s) => s.pack)
   const [drawer, setDrawer] = useState(false)
@@ -42,11 +38,6 @@ export default function App({ renderer = 'babylon' }: { renderer?: Renderer }) {
     const id = setInterval(() => void refreshRuns(), 1500)
     return () => clearInterval(id)
   }, [runs, refreshRuns])
-  useEffect(() => {
-    if (primaryRunId) return
-    const done = runs.filter((r) => r.status === 'completed' && r.scenario_id === scenarioId)
-    if (done.length) void openRun(done[done.length - 1].run_id, 'primary')
-  }, [runs, primaryRunId, scenarioId, openRun])
 
   const noRun = pack && scenarioId && !primaryRunId && !runs.some((r) => r.status === 'running' || r.status === 'queued')
 
@@ -54,11 +45,7 @@ export default function App({ renderer = 'babylon' }: { renderer?: Renderer }) {
     <div className="shell">
       <div className="worlds">
         <Suspense fallback={null}>
-          {compareMode ? (
-            <CompareSplit renderer={renderer} />
-          ) : (
-            <World runId={primaryRunId} side="solo" />
-          )}
+          <World runId={primaryRunId} side="solo" />
         </Suspense>
       </div>
 
@@ -72,7 +59,6 @@ export default function App({ renderer = 'babylon' }: { renderer?: Renderer }) {
       <AgentBubble />
 
       <div className="bottom">
-        <CommandBar />
         <SimDock />
       </div>
 

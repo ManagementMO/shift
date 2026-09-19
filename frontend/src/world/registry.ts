@@ -2,6 +2,8 @@
 import { moveTo, type CameraMode, type CameraPose, type MapCamera } from './camera'
 
 export type SyncMap = MapCamera & {
+  cameraLocked?: boolean
+  setCameraPreset?: (pose: CameraPose, mode: CameraMode) => void
   jumpTo: (o: CameraPose) => unknown
   isMoving: () => boolean
   on: (ev: string, cb: (e: { originalEvent?: unknown }) => void) => unknown
@@ -51,8 +53,10 @@ export function watchCameraMode(cb: (m: CameraMode) => void): () => void {
 
 export function cameraTo(pose: CameraPose, mode: CameraMode) {
   const lead = leadMap()
+  if (!lead || (lead.cameraLocked && !lead.setCameraPreset)) return
   for (const map of maps.values()) map.setCameraMode?.(mode)
-  if (lead && mode === 'city' && lead.cityHero) lead.cityHero()
-  else if (lead) moveTo(lead, pose, mode) // followers sync through the 'move' handler
+  if (lead.setCameraPreset) lead.setCameraPreset(pose, mode)
+  else if (mode === 'city' && lead.cityHero) lead.cityHero()
+  else moveTo(lead, pose, mode) // followers sync through the 'move' handler
   onMode?.(mode)
 }

@@ -70,7 +70,7 @@ export default function WorldApp() {
   const world = ready?.world
   return (
     <div className="bworld-shell">
-      <WorldCanvas packId={packId} onReady={onReady} />
+      <WorldCanvas packId={packId} onReady={onReady} fixedCamera={false} />
 
       <div className="bworld-top">
         <div className="bworld-brand">

@@ -5,7 +5,6 @@ import { cohortSummaryAt, seriesAt, STATE_COLORS, type PersonState } from '../re
 import type { Investigation, Renderer } from '../types'
 import { fmt } from '../util'
 import Inspector from '../components/Inspector'
-import ComparePanel from '../components/ComparePanel'
 
 const TABS: { id: LensTab; label: string }[] = [
   { id: 'people', label: 'People' },
@@ -206,7 +205,6 @@ function TransportLens() {
           ))}
         </div>
       </div>
-      <ComparePanel />
       {selection && (selection.kind === 'bus' || selection.kind === 'stop' || selection.kind === 'restriction') && <Inspector />}
     </div>
   )
@@ -215,7 +213,6 @@ function TransportLens() {
 function DiagnosticsLens({ renderer }: { renderer: Renderer }) {
   const health = useStore((s) => s.health)
   const rx = useStore((s) => (s.primaryRunId ? s.replays[s.primaryRunId] : null))
-  const compare = useStore((s) => (s.compareRunId ? s.replays[s.compareRunId] : null))
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
   const pack = useStore((s) => s.pack)
   const mapbox = Boolean(import.meta.env.VITE_MAPBOX_TOKEN)
@@ -271,7 +268,6 @@ function DiagnosticsLens({ renderer }: { renderer: Renderer }) {
         {renderer === 'babylon' ? 'Open Mapbox alternative' : 'Return to Babylon'}
       </a>
       {rx && runRow(rx, 'view run')}
-      {compare && runRow(compare, 'compare run')}
       {rx && (
         <details className="small">
           <summary>run warnings ({rx.bundle.run.warnings.length})</summary>

@@ -4,11 +4,12 @@
 type Listener = (t: number) => void
 
 const UI_HZ = 10
+export const PLAYBACK_SPEEDS = [1, 2, 4, 8]
 
 class PlaybackClock {
   t = 0
   playing = false
-  speed = 10
+  speed = 1
   horizon = 2700
   private frameListeners = new Set<Listener>()
   private uiListeners = new Set<Listener>()
@@ -29,6 +30,7 @@ class PlaybackClock {
 
   setSpeed(s: number) {
     this.speed = s
+    this.emit(true)
   }
 
   play() {
@@ -89,9 +91,10 @@ export const clock = new PlaybackClock()
 /** Simulated wall-clock label. The flagship egress is anchored at 22:30 (event end) by convention. */
 export const SIM_ORIGIN_MIN = 22 * 60 + 30
 
-export function simClock(t: number): string {
-  const total = (SIM_ORIGIN_MIN + Math.floor(t / 60)) % (24 * 60)
-  const h = Math.floor(total / 60)
-  const m = total % 60
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+export function simClock(t: number, seconds = false): string {
+  const total = (SIM_ORIGIN_MIN * 60 + Math.floor(t)) % (24 * 60 * 60)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor(total / 60) % 60
+  const label = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+  return seconds ? `${label}:${String(total % 60).padStart(2, '0')}` : label
 }
