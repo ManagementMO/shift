@@ -221,7 +221,7 @@ function RouteTool() {
         name: `Route ${seq.map((s) => pack?.stops.find((x) => x.stop_id === s)?.name ?? s).join(' → ')}`,
         family: 'custom',
         duties: [{ duty_id: `${vehicle}-d1`, vehicle_id: vehicle, stop_sequence: seq, depart_s: scenario?.constraints.service_window_s[0] ?? 0, layover_s: 60 }],
-        authored_by: 'operator',
+        authored_by: 'user',
         rationale: 'Drawn in the route tool.',
         assumptions: [],
         parent_plan_id: null,

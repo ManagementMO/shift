@@ -120,7 +120,7 @@ export type ServicePlan = {
   name: string
   family: 'none' | 'direct' | 'split' | 'heuristic' | 'custom'
   duties: Duty[]
-  authored_by: string
+  authored_by: 'baseline' | 'heuristic' | 'agent' | 'user' | 'revision'
   rationale: string
   assumptions: string[]
   parent_plan_id: string | null
@@ -276,3 +276,5 @@ export type EvidenceBundle = {
   frozen_at: string
   content_hash: string
 }
+
+export type Renderer = 'babylon' | 'mapbox'

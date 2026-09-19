@@ -95,15 +95,28 @@ button:disabled {
   height: 100vh;
 }
 .worlds,
-.world {
+.worlds .world {
   position: absolute;
   inset: 0;
 }
 .world canvas {
   outline: none;
 }
-.mapboxgl-ctrl-bottom-right,
-.maplibregl-ctrl-bottom-right {
+.map-notice {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(360px, calc(100% - 48px));
+  padding: 24px;
+  text-align: center;
+}
+.map-notice p {
+  margin: 8px 0 0;
+  color: var(--dim);
+  line-height: 1.5;
+}
+.mapboxgl-ctrl-bottom-right {
   right: 8px;
   bottom: 2px;
   opacity: 0.55;

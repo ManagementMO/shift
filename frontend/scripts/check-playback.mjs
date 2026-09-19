@@ -17,7 +17,7 @@ const tracks = { car: {
 const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL, args: ['--use-gl=angle', '--use-angle=metal', '--ignore-gpu-blocklist'] })
 
 try {
-  for (const path of ['/world', '/']) {
+  for (const path of ['/world', '/', '/mapbox']) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
     const errors = []
     page.on('pageerror', (error) => {
@@ -36,7 +36,7 @@ try {
           submitted = true
           json = { ...run, status: 'queued' }
         } else {
-          json = path === '/' ? [run] : !submitted ? [] : [{ ...run, status: polls++ === 0 ? 'queued' : 'completed' }]
+          json = path !== '/world' ? [run] : !submitted ? [] : [{ ...run, status: polls++ === 0 ? 'queued' : 'completed' }]
         }
       } else {
         const resource = pathname.split('/').at(-1)
@@ -45,9 +45,6 @@ try {
       }
       await route.fulfill({ json })
     })
-    await page.route('https://tiles.openfreemap.org/styles/positron', (route) => route.fulfill({ json: {
-      version: 8, sources: {}, layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#cfd8de' } }],
-    } }))
     await page.goto(`${base}${path}`)
     await expect(page.getByRole('button', { name: 'Pause simulation', exact: true })).toBeEnabled({ timeout: 120000 })
     await expect(page.getByRole('button', { name: '1×', exact: true })).toHaveAttribute('aria-pressed', 'true')
@@ -92,8 +89,17 @@ try {
     await expect(page.locator('.scenario-drawer')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Compare', exact: true })).toHaveCount(0)
     await page.locator('.scenario-drawer').getByRole('button', { name: 'Close', exact: true }).click()
-    if (path === '/world') {
-      assert.ok(submitted, 'A fresh scenario should automatically prepare its first run')
+    await expect(page.getByRole('navigation', { name: 'Camera', exact: true })).toHaveCount(0)
+    if (path === '/mapbox' && await page.locator('.map-notice').isVisible()) {
+      await expect(page.locator('.map-notice')).toContainText('Connect Mapbox to load the 3D city')
+      await expect(page.locator('.world canvas')).toHaveCount(0)
+      assert.deepEqual(errors, [])
+      console.log('/mapbox: playback, removed controls, and missing-token notice passed; configured map rendering requires a token')
+      await page.close()
+      continue
+    }
+    if (path !== '/mapbox') {
+      if (path === '/world') assert.ok(submitted, 'A fresh scenario should automatically prepare its first run')
       await page.waitForFunction(() => !!window.__cityshift?.babylon, null, { timeout: 120000 })
       await expect.poll(() => page.evaluate(() => window.__cityshift.babylon.simT)).toBeGreaterThan(1)
       await expect.poll(() => page.evaluate(() => window.__cityshift.babylon.traffic.stats.cars)).toBeGreaterThan(0)
@@ -101,7 +107,6 @@ try {
       const frames = await page.evaluate(() => window.__cityshift.stats.layerRebuilds)
       await expect.poll(() => page.evaluate(() => window.__cityshift.stats.layerRebuilds)).toBeGreaterThan(frames)
     }
-    await expect(page.getByRole('navigation', { name: 'Camera', exact: true })).toHaveCount(0)
     await expect.poll(() => page.evaluate(() => window.__cityshift.map()?.cameraLocked)).toBe(true)
     const cameraPose = () => page.evaluate(() => {
       const map = window.__cityshift.map()

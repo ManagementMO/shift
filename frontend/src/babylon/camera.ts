@@ -21,12 +21,12 @@ export interface Pose {
 }
 
 /** Downtown / waterfront hero: lake in the lower third, skyline rising toward the top of the frame. */
-function cityPose(world: WorldData): Pose {
+export function cityPose(world: WorldData): Pose {
   const cn = world.landmarks.find((l) => l.kind === 'cn_tower')
   const union = world.landmarks.find((l) => l.kind === 'union_station')
-  const tx = cn && union ? (cn.x + union.x) / 2 : 400
-  const tz = cn && union ? (cn.z + union.z) / 2 - 40 : -520
-  return { target: [tx, tz], radius: 1650, heading: 22, elevation: 34 }
+  if (cn && union) return { target: [(cn.x + union.x) / 2, (cn.z + union.z) / 2 - 40], radius: 1650, heading: 22, elevation: 34 }
+  const [x0, z0, x1, z1] = world.crs.bounds_world
+  return { target: [(x0 + x1) / 2, (z0 + z1) / 2], radius: Math.max(450, Math.min(8500, Math.hypot(x1 - x0, z1 - z0) * 0.7)), heading: 22, elevation: 38 }
 }
 
 function fixedCityPose(world: WorldData, aspect: number, fov: number): Pose {

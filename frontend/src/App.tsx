@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { useStore } from './store'
-import WorldMap from './world/WorldMap'
+import type { Renderer } from './types'
 import TopStrip from './shell/TopStrip'
 import SimDock from './shell/SimDock'
 import ToolRail from './shell/ToolRail'
@@ -10,12 +10,11 @@ import SwarmLens from './shell/SwarmLens'
 import ScenarioDrawer from './shell/ScenarioDrawer'
 import './App.css'
 
-// Babylon miniature Toronto (`/world`); loaded only when that renderer is chosen so `/` keeps its Mapbox bundle.
 const WorldBabylon = lazy(() => import('./babylon/WorldBabylon'))
+const WorldMap = lazy(() => import('./world/WorldMap'))
 
-export type Renderer = 'mapbox' | 'babylon'
-
-export default function App({ renderer = 'mapbox' }: { renderer?: Renderer }) {
+export default function App({ renderer = 'babylon' }: { renderer?: Renderer }) {
+  const World = renderer === 'mapbox' ? WorldMap : WorldBabylon
   const boot = useStore((s) => s.boot)
   const error = useStore((s) => s.error)
   const setError = useStore((s) => s.setError)
@@ -44,13 +43,9 @@ export default function App({ renderer = 'mapbox' }: { renderer?: Renderer }) {
   return (
     <div className="shell">
       <div className="worlds">
-        {renderer === 'babylon' ? (
-          <Suspense fallback={null}>
-            <WorldBabylon runId={primaryRunId} side="solo" />
-          </Suspense>
-        ) : (
-          <WorldMap runId={primaryRunId} side="solo" />
-        )}
+        <Suspense fallback={null}>
+          <World runId={primaryRunId} side="solo" />
+        </Suspense>
       </div>
 
       <TopStrip onOpenScenarios={() => setDrawer((d) => !d)} />
@@ -58,7 +53,7 @@ export default function App({ renderer = 'mapbox' }: { renderer?: Renderer }) {
 
       <ToolRail />
       <ToolPanel />
-      <SwarmLens />
+      <SwarmLens renderer={renderer} />
       <AgentBubble />
 
       <div className="bottom">

@@ -23,6 +23,34 @@ const allFront = (b: Batch): boolean => {
   return b.indices.length > 0
 }
 
+describe('Batch texture coordinates', () => {
+  it('maps wall metres to repeatable facade modules without stretching', () => {
+    const b = new Batch([8, 12.8])
+    b.walls([0, 0, 24, 0, 24, 10, 0, 10], undefined, 0, 38.4, [1, 1, 1])
+    expect(b.uvs.length).toBe(b.vertexCount * 2)
+    for (const [i, value] of [0, 0, 3, 0, 3, 3, 0, 3].entries()) expect(b.uvs[i]).toBeCloseTo(value)
+  })
+
+  it('uses consistent world-space surface UVs across adjacent batches', () => {
+    const a = new Batch([4, 4])
+    const b = new Batch([4, 4])
+    a.polygon([0, 0, 8, 0, 8, 8, 0, 8], undefined, 1, [1, 1, 1])
+    b.polygon([8, 0, 16, 0, 16, 8, 8, 8], undefined, 1, [1, 1, 1])
+    expect(a.uvs.slice(2, 4)).toEqual(b.uvs.slice(0, 2))
+    expect(a.uvs.every(Number.isFinite)).toBe(true)
+  })
+
+  it('provides finite UVs for every geometry primitive', () => {
+    const b = new Batch()
+    b.extrude([0, 0, 8, 0, 8, 8, 0, 8], undefined, 0, 10, [1, 1, 1], [1, 1, 1])
+    b.ribbon([0, 0, 8, 0, 12, 4], 3, 0, [1, 1, 1])
+    b.disc(0, 0, 2, 0, [1, 1, 1])
+    b.lathe(0, 0, [[2, 0], [1, 5]], [1, 1, 1])
+    expect(b.uvs.length).toBe(b.vertexCount * 2)
+    expect(b.uvs.every(Number.isFinite)).toBe(true)
+  })
+})
+
 const CCW = [0, 0, 20, 0, 20, 10, 0, 10]
 const CW = [0, 0, 0, 10, 20, 10, 20, 0]
 

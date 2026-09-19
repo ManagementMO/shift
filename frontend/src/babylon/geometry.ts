@@ -14,17 +14,24 @@ export class Batch {
   positions: number[] = []
   normals: number[] = []
   colors: number[] = []
+  uvs: number[] = []
   indices: number[] = []
+  readonly textureMetres: readonly [number, number]
+
+  constructor(textureMetres: readonly [number, number] = [8, 8]) {
+    this.textureMetres = textureMetres
+  }
 
   get vertexCount(): number {
     return this.positions.length / 3
   }
 
-  vertex(x: number, y: number, z: number, nx: number, ny: number, nz: number, c: RGB): number {
+  vertex(x: number, y: number, z: number, nx: number, ny: number, nz: number, c: RGB, u = x / this.textureMetres[0], v = z / this.textureMetres[1]): number {
     const i = this.positions.length / 3
     this.positions.push(x, y, z)
     this.normals.push(nx, ny, nz)
     this.colors.push(c[0], c[1], c[2], 1)
+    this.uvs.push(u, v)
     return i
   }
 
@@ -41,10 +48,11 @@ export class Batch {
   }
 
   /** Vertical walls around a ring (and its holes) from y0 to y1, flat-shaded, outward normals. */
-  walls(ring: Flat, holes: Flat[] | undefined, y0: number, y1: number, c: RGB, shade = 0.85): void {
-    const outward = signedArea(ring) > 0 ? 1 : -1
+  walls(ring: Flat, holes: Flat[] | undefined, y0: number, y1: number, c: RGB, shade = 0.85, inward = false): void {
+    const side = inward ? -1 : 1
+    const outward = (signedArea(ring) > 0 ? 1 : -1) * side
     this.wallRing(ring, y0, y1, c, shade, outward)
-    if (holes) for (const h of holes) this.wallRing(h, y0, y1, c, shade, -(signedArea(h) > 0 ? 1 : -1))
+    if (holes) for (const h of holes) this.wallRing(h, y0, y1, c, shade, -(signedArea(h) > 0 ? 1 : -1) * side)
   }
 
   private wallRing(ring: Flat, y0: number, y1: number, c: RGB, shade: number, outward: number): void {
@@ -65,10 +73,12 @@ export class Batch {
       // light walls facing the sun a bit more than the others (sun from the south-west)
       const k = shade * (0.82 + 0.18 * Math.max(0, -nx * 0.6 - nz * 0.8))
       const cc: RGB = [c[0] * k, c[1] * k, c[2] * k]
-      const v0 = this.vertex(ax, y0, az, nx, 0, nz, cc)
-      const v1 = this.vertex(bx, y0, bz, nx, 0, nz, cc)
-      const v2 = this.vertex(bx, y1, bz, nx, 0, nz, cc)
-      const v3 = this.vertex(ax, y1, az, nx, 0, nz, cc)
+      const u = len / this.textureMetres[0]
+      const low = y0 / this.textureMetres[1], high = y1 / this.textureMetres[1]
+      const v0 = this.vertex(ax, y0, az, nx, 0, nz, cc, 0, low)
+      const v1 = this.vertex(bx, y0, bz, nx, 0, nz, cc, u, low)
+      const v2 = this.vertex(bx, y1, bz, nx, 0, nz, cc, u, high)
+      const v3 = this.vertex(ax, y1, az, nx, 0, nz, cc, 0, high)
       // Babylon front face: (v1-v0)x(v2-v0) points *against* the outward normal
       if (outward > 0) this.indices.push(v0, v1, v2, v0, v2, v3)
       else this.indices.push(v0, v2, v1, v0, v3, v2)
@@ -147,12 +157,12 @@ export class Batch {
     const rings: number[][] = []
     for (const [r, y] of profile) {
       const ring: number[] = []
-      for (let i = 0; i < segments; i++) {
+      for (let i = 0; i <= segments; i++) {
         const a = (i / segments) * Math.PI * 2
         const nx = Math.cos(a)
         const nz = Math.sin(a)
         const k = shade * (0.8 + 0.2 * Math.max(0, -nx * 0.6 - nz * 0.8))
-        ring.push(this.vertex(x + nx * r, y, z + nz * r, nx, 0, nz, [c[0] * k, c[1] * k, c[2] * k]))
+        ring.push(this.vertex(x + nx * r, y, z + nz * r, nx, 0, nz, [c[0] * k, c[1] * k, c[2] * k], (a * r) / this.textureMetres[0], y / this.textureMetres[1]))
       }
       rings.push(ring)
     }
@@ -160,7 +170,7 @@ export class Batch {
       const a = rings[j]
       const b = rings[j + 1]
       for (let i = 0; i < segments; i++) {
-        const i2 = (i + 1) % segments
+        const i2 = i + 1
         this.indices.push(a[i], a[i2], b[i], a[i2], b[i2], b[i])
       }
     }

@@ -24,7 +24,7 @@ const scenario: ScenarioSpec = {
   },
 }
 const plan: PlanWithValidation = {
-  plan: { plan_id: 'baseline', name: 'Baseline', family: 'none', duties: [], authored_by: 'system', rationale: '', assumptions: [], parent_plan_id: null },
+  plan: { plan_id: 'baseline', name: 'Baseline', family: 'none', duties: [], authored_by: 'baseline', rationale: '', assumptions: [], parent_plan_id: null },
   validation: { plan_id: 'baseline', valid: true, issues: [] },
 }
 const run: SimulationRun = {
