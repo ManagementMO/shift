@@ -264,8 +264,15 @@
 /* The prompt and resident playback share one bottom-centred stack in normal flow. */
 .gp-shell .gp-population-dock { width: 100%; min-width: 0; pointer-events: auto; }
 .gp-shell .gp-population-dock .population-dock { background: linear-gradient(145deg, #547a96d9, #183e59e6); border: 1px solid #dcf1ff70; border-radius: 15px; backdrop-filter: blur(18px) saturate(1.2); box-shadow: inset 0 1px 1px #f0f9ff33, 0 5px 20px #0f2e4826; color: #f5faff; }
-.gp-shell[data-population-active] .god-chrome__dock { display: none; }
 .gp-shell[data-population-active] { --gp-resident-panel-bottom: calc(var(--gp-edge) + 232px); }
+@media (max-width: 1400px) {
+  .gp-shell[data-population-active] .god-chrome__status { display: none; }
+}
+@media (max-width: 1100px) {
+  .gp-shell[data-population-active] { --gp-resident-panel-bottom: calc(var(--gp-edge) + 292px); }
+  .gp-shell[data-population-active] .god-chrome__command-zone { bottom: calc(var(--gp-edge) + 60px); }
+  .gp-shell[data-population-active] .god-chrome__dock { bottom: var(--gp-edge); left: var(--gp-edge); transform: none; }
+}
 .gp-shell[data-population-active] .gp-utility-panel { max-height: calc(100dvh - var(--gp-panel-top) - var(--gp-resident-panel-bottom)); }
 .gp-shell .resident-details { position: absolute; top: 126px; right: 22px; bottom: 96px; margin: 0; width: min(420px, calc(100vw - 132px)); z-index: 56; pointer-events: auto; }
 .gp-shell[data-population-active] .resident-details { position: fixed; top: var(--gp-panel-top); right: var(--gp-edge); bottom: var(--gp-resident-panel-bottom); width: var(--gp-panel-width); height: auto; max-height: none; min-height: 0; align-self: auto; }

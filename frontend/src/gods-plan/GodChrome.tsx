@@ -20,7 +20,7 @@ const tools: { value: GodTool; icon: string; label: string }[] = [
   { value: 'layers', icon: 'layers', label: 'Map layers' },
 ]
 
-export default function GodChrome({ activeTab, openTab = null, activeTool, timeLabel, weatherLabel, temperatureLabel, weatherNote, statusLabel, playing, speed, speeds = [], ready = true, command, commandBusy = false, recordingControls, onTab, onTool, onHome, onCommandChange, onCommand, onTogglePlay, onSpeed }: GodHUDProps) {
+export default function GodChrome({ activeTab, openTab = null, activeTool, weatherLabel, temperatureLabel, weatherNote, statusLabel, playing, speed, speeds = [], ready = true, command, commandBusy = false, recordingControls, onTab, onTool, onHome, onCommandChange, onCommand, onTogglePlay, onSpeed }: GodHUDProps) {
   const selectedTab = openTab ?? activeTab
 
   function submitCommand(event: FormEvent<HTMLFormElement>) {
@@ -57,8 +57,7 @@ export default function GodChrome({ activeTab, openTab = null, activeTool, timeL
         ))}
       </GlassSurface>
 
-      <GlassSurface tone="dark" className="god-chrome__weather" role="group" aria-label="Simulation time and weather" title={weatherNote}>
-        <span className="god-chrome__time">{timeLabel}</span>
+      <GlassSurface tone="dark" className="god-chrome__weather" role="group" aria-label="Weather" title={weatherNote}>
         <GodIcon name={weatherLabel === 'Clear' ? 'sun' : 'cloud'} size={20} className="god-chrome__sun" />
         <span className="god-chrome__weather-label">{weatherLabel}</span>
         <span className="god-chrome__temperature">{temperatureLabel}</span>
