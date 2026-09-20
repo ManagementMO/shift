@@ -1,501 +1,241 @@
-# Inspiration
+# God’s Plan: A Living Multi-Agent City Simulator
 
-We started with a fairly serious question:
+**Live demo → [agentsamong.us](https://www.agentsamong.us)**
 
-> **What would it look like if AI agents lived within a city simulation?**
+![God's Plan globe entry screen with city selection and simulation settings](docs/assets/gods-plan-globe.png)
 
-Most city simulators reduce people to statistics - population, traffic, happiness, demand. You can watch a neighborhood become congested or a station become overcrowded, but the people themselves are mostly abstract.
+## 💡 Inspiration
 
-Most AI systems have the opposite problem. They can reason, converse, plan, and react, but usually only from the outside. You ask a model what *should* happen, it gives you an answer, and that is where the world ends.
+City simulators are great at modeling systems like traffic, population, and infrastructure, but the people inside them are usually just numbers following predefined behavior.
 
-We wanted to connect those two ideas.
+At the same time, modern AI agents can reason, communicate, use tools, and make decisions - but usually inside isolated chats or workflows.
 
-**What if the people inside the simulation could actually think?**
+We asked ourselves:
 
-What if they could:
+> **What if the people inside a city simulator could actually think?**
 
-* perceive what was happening around them
-* form their own opinions
-* talk to one another
-* trust some people more than others
-* make decisions based on what *they* know
-* and then physically act on those decisions inside the world
+We wanted to build a city where residents could perceive what was happening around them, talk to each other, form relationships, make decisions based on their own knowledge, and physically act on those decisions.
 
-That started with fairly practical scenarios: evacuations, transit failures, road closures, emergency response, and resource allocation.
+That started with serious scenarios like transit failures, evacuations, and emergency response.
 
-But once we had a system where agents could react to arbitrary changes in the world, it became hard not to ask increasingly stupid questions.
+Then we realized the same system could answer much less responsible questions too.
 
-> “What if a tornado hits downtown during rush hour?”
+So we added natural-language world control, tornadoes, earthquakes, riots, orbital strikes, and whatever else we could throw at the city.
 
-> “What if every bridge suddenly closes?”
-
-> “What if two groups are given conflicting orders?”
-
-> “What if we just orbital strike this intersection?”
-
-So we added earthquakes, tornadoes, riots, orbital strikes, and a natural-language interface that lets you describe scenarios directly to the city.
-
-God’s Plan ended up somewhere between a **multi-agent simulation platform** and a **god game**.
-
-That turned out to be exactly what we wanted.
+God’s Plan became a mix of a **multi-agent simulation platform and a god game**.
 
 ---
 
-# What it does
+## 🌎 What it does
 
-God’s Plan is a living city populated by **thousands of autonomous residents**.
+**God’s Plan** is a 3D city simulation populated by thousands of autonomous AI residents.
 
-Each resident exists as an individual agent with its own:
+Each resident has its own:
 
-**context → observations → goals → relationships → allegiances → internal state**
+> **observations → goals → relationships → allegiances → internal state**
 
-They can move around the city, talk to other residents, enter vehicles, use tools, fight, flee, cooperate, follow others, and respond to events as they unfold.
+Agents can move through the world, communicate, drive vehicles, use tools, cooperate, fight, flee, and react to events around them.
 
-The important part is that **they are not all following one central script**.
+### 🤖 Multi-Agent Swarms
 
-An agent only knows what it has access to.
+Residents can belong to larger **swarms** representing groups such as civilians, emergency responders, police, transit operators, or custom factions.
 
-Someone standing beside an accident may understand what happened immediately. Someone five blocks away might only hear about it from another resident. Another agent might receive an instruction from its group and act before either of them.
+Different swarms can be powered by different models - including **GPT, Claude, Gemini, and Grok** - while existing inside the same environment.
 
-That means two residents can experience the same city very differently.
+Instead of comparing models by asking each one the same prompt, we let their decisions **interact inside a shared world**.
 
-We built a **dynamic relationship and allegiance system** around this. Agents can belong to groups, develop sentiment toward other agents or factions, trust certain sources more than others, and let those relationships influence what they do next.
+### 💬 Natural-Language Simulation
 
-A resident might take the obvious evacuation route.
+Users can change the world simply by describing what they want to happen.
 
-Another might turn around because somebody they care about is still behind.
+> “Evacuate downtown.”
 
-A third may ignore both of them because their group has been ordered to secure the area.
+> “A magnitude 7 earthquake hits Toronto.”
 
-None of those decisions need to come from a single central controller.
+God’s Plan translates those instructions into simulation events or swarm objectives, then lets the agents decide how to respond.
 
-## Swarms
+### 👤 Inspect Any Resident
 
-Agents can also operate as part of larger **swarms** with shared responsibilities or objectives.
+Every resident can be inspected individually.
 
-A swarm might represent:
+Users can see what an agent knows, what it is thinking about, who it trusts, which groups it belongs to, and what it plans to do next.
 
-* civilians trying to evacuate
-* emergency responders
-* police
-* hostile groups
-* transportation operators
-* rescue teams
-* or essentially any population we define
+From far away, you see a crowd moving through the city.
 
-Different swarms can be backed by different model providers - **GPT, Claude, Gemini, Grok, and others** - while still existing inside the exact same simulated world.
-
-So rather than asking four models the same question in four separate chat windows, we can put them into the same environment and let their decisions affect one another.
-
-> **One model's decision becomes another model's problem.**
-
-The swarm gives agents higher-level direction, but the individuals inside it still respond to their own local circumstances.
-
-That distinction became very important to us.
-
-**The swarm has a goal.
-The agent still has a life.**
-
-## Talk directly to the world
-
-You interact with God’s Plan through natural language.
-
-You can type:
-
-> “Evacuate everyone north of downtown.”
-
-or:
-
-> “Police should secure the bridge while civilians move west.”
-
-or:
-
-> “A magnitude 7 earthquake just hit the city.”
-
-The system translates that instruction into objectives, events, or changes to the simulation, and then lets the agents respond.
-
-You are not manually selecting every resident and telling them where to walk.
-
-You change the situation.
-
-**The city figures out what happens next.**
-
-## Click into anyone
-
-One of our favorite features is that at any point, you can click into an individual resident.
-
-From above, they might just look like one person in a crowd of hundreds.
-
-Click them and you can inspect things like:
-
-> **What do they currently know?**
-> What are they thinking about?
-> Who do they trust?
-> What groups are they aligned with?
-> How do they feel about what is happening?
-> What are they trying to do next?
-
-That made the large-scale behavior of the simulation much more interesting to us.
-
-You might look at the city and wonder why a crowd is moving the “wrong” direction.
-
-Then you click into one of them and discover that somebody told the group a bridge was blocked.
-
-Or that they are following somebody they trust.
-
-Or that one resident is trying to get back to someone who was left behind.
-
-From far away, it looks like crowd movement.
-
-Up close, it is thousands of small decisions colliding.
+Click into one person and you can understand **why that crowd formed in the first place**.
 
 ---
 
-# How we built it
+## 🛠️ How We Built It
 
-At the center of God’s Plan is a fairly simple idea:
+God’s Plan is built around a simple agent loop:
 
 > **Perceive → Think → Act → Observe → React**
 
 The complexity comes from running that loop across a large shared world.
 
-## 1. Perceive
+```mermaid
+flowchart TB
+    subgraph Browser["Browser"]
+        UI["React + TypeScript + Zustand<br/>Babylon.js city · replay · lenses"]
+    end
 
-Agents do not receive omniscient access to the entire simulation.
+    subgraph Backend["FastAPI backend · Python"]
+        SVC["Scenario service<br/>Pydantic contracts"]
+        AGENTS["openJiuwen specialists<br/>evidence · demand · planner"]
+        VALIDATORS["Deterministic validators<br/>fleet · stops · windows · routes"]
+        EVIDENCE["Evidence retrieval<br/>frozen, hashed bundles"]
+        LIVE["Live city sessions<br/>SUMO worker + TraCI"]
+    end
 
-They are given a bounded view of what is relevant to them:
+    SUMO[("SUMO traffic simulation")]
+    ATLAS[("MongoDB Atlas<br/>scenarios · plans · runs · investigations")]
+    ELASTIC[("Elasticsearch<br/>city notice corpus")]
+    MODELS["Model providers<br/>OpenAI-compatible · Baseten · Backboard"]
+    R2[("Cloudflare R2<br/>replay export")]
 
-* nearby agents
-* visible events
-* objects they can interact with
-* messages they have received
-* their current location
-* group objectives
-* relationships and allegiances
-* relevant memories and recent events
+    UI <-->|"/api"| SVC
+    SVC --> AGENTS
+    AGENTS --> MODELS
+    AGENTS --> EVIDENCE
+    EVIDENCE --> ELASTIC
+    AGENTS -->|"candidate plans"| VALIDATORS
+    VALIDATORS -->|"accepted plans"| SUMO
+    LIVE --> SUMO
+    SUMO -->|"recorded journeys + metrics"| SVC
+    SVC --> ATLAS
+    SVC --> R2
+    SVC -->|"replay data"| UI
+```
 
-This means an agent's decisions depend on what **that agent** knows, not what the simulation knows globally.
+### 🧠 The Agent System
 
-## 2. Think
+Agents are only given information available to them: nearby residents, visible events, messages, memories, relationships, and swarm objectives.
 
-The model reasons over that context together with the agent's goals, state, and relationships.
+The model reasons over that context and chooses from a set of structured tools:
 
-For example:
+> **move → inspect → communicate → follow → drive → interact → attack → defend**
 
-> “The evacuation route is blocked.”
+This separation is important.
 
-> “My group is moving east.”
+An agent can decide:
 
-> “Someone I trust is still behind me.”
+> “I should take that car and leave.”
 
-> “There is a vehicle nearby.”
+But the model cannot simply declare that it succeeded.
 
-Different agents can reach completely different conclusions from the same event because they have different information and priorities.
+The car has to exist, the agent has to reach it, and the road ahead still has to be accessible.
 
-## 3. Act
+**The model provides the intention. The simulation determines the result.**
 
-Models do not directly modify the world.
+### 🕸️ Social Simulation
 
-Instead, they select from a structured set of tools exposed by the simulation.
+We maintain a **dynamic social graph** across the population containing relationships, group membership, allegiance, trust, sentiment, and shared history.
 
-Depending on the agent and situation, those actions can include things like:
+Those relationships feed back into future decisions, meaning two agents in the same situation can behave differently depending on who they know and what they have experienced.
 
-**move → inspect → communicate → follow → enter vehicle → drive → interact → attack → defend**
+Swarms provide higher-level objectives, while individual agents still make their own local decisions.
 
-This boundary is important.
+### 🏙️ The City
 
-A model can decide:
+Our backend is built with **Python, FastAPI, and Pydantic**, which structure agent state, events, actions, scenarios, and simulation data.
 
-> “I should take that car and get out of here.”
+We use **SUMO + TraCI** for transportation simulation, while the frontend uses **React, TypeScript, Zustand, and Babylon.js** to render the city in 3D.
 
-But it cannot simply declare:
-
-> “I escaped.”
-
-There has to actually be a car.
-
-The agent has to reach it.
-
-It has to enter successfully.
-
-The route ahead still has to exist.
-
-And if someone else took the car first, that becomes part of the next decision.
-
-**The model provides intention.
-The simulation provides reality.**
-
-## 4. Observe and react
-
-After acting, agents receive the result back from the world.
-
-Plans can fail.
-
-Conditions can change.
-
-Other agents can interfere.
-
-The tornado that was nowhere near you thirty seconds ago may now be blocking the route you planned to use.
-
-The agent then reasons again using the updated state.
-
-That gives us a continuing feedback loop instead of a one-shot prompt.
+The environment combines real street geography with Toronto building data, allowing agent decisions and city events to affect an actual shared world rather than an abstract grid.
 
 ---
 
-## Social state
+## 🚧 Challenges We Overcame
 
-Alongside the physical world, we maintain a **dynamic social graph** across the population.
+### 1. Giving Agents Freedom Without Giving Them Magic
 
-Agents can have changing:
+Language models are perfectly happy to say:
 
-* relationships
-* group membership
-* allegiance
-* trust
-* sentiment
-* shared history
+> “I get in the car and drive away.”
 
-These variables become additional inputs into future decisions.
+A simulation has to care whether the car exists, whether somebody else is using it, whether the agent can reach it, and whether the destination is still accessible.
 
-So the “best” action for an agent is not always the geometrically shortest route or globally optimal plan.
+We built a structured tool layer that lets agents reason freely while ensuring their actions still obey the physical state of the simulation.
 
-Their behavior can also depend on **who is asking, who is nearby, and what has happened between them before**.
+### 2. Scaling Beyond a Handful of Agents
 
-At a higher level, swarms provide shared context and objectives while preserving the local decision-making of their individual agents.
+Thousands of residents cannot continuously call an expensive language model just to decide whether to keep walking.
 
-That gives us two interacting scales:
+We had to separate:
 
-> **Swarm-level coordination**
-> ↓
-> **Individual agent decisions**
-> ↓
-> **World consequences**
-> ↓
-> **New information for the swarm**
+> **when an agent needs to think → what can remain deterministic → what state persists → what events trigger new reasoning**
 
----
+This let us keep a large population active without treating every simulation step as an LLM request.
 
-## The simulation underneath it
+### 3. Making Agents Actually Feel Different
 
-The rest of God’s Plan ties that agent layer into an actual city.
+If every resident receives the same information and goals, you end up with thousands of copies of the same person.
 
-Our backend is built around **Python, FastAPI, and Pydantic**, which we use to keep scenarios, agent state, actions, events, restrictions, and simulation data structured.
+We gave agents different information, relationships, priorities, histories, and positions in the world so their decisions could diverge naturally.
 
-For transportation, we use **SUMO + TraCI** so vehicles and routes are governed by an actual traffic simulation rather than arbitrary animation.
-
-The frontend is built with **React, TypeScript, Zustand, and Babylon.js**, rendering the world as an explorable 3D city.
-
-We combine real street geography with Toronto building data and custom geometry so the agents are operating inside a recognizable environment rather than an abstract grid.
-
-That also means events can affect the systems underneath the visuals.
-
-A destroyed road can become inaccessible.
-
-A blocked route can force replanning.
-
-A vehicle can actually be occupied.
-
-A crowd can genuinely accumulate because hundreds of agents independently chose the same place.
-
-The disasters are fun to watch, but they are much more interesting when the simulation actually has to live with them.
+The result is less predictable, but far more interesting.
 
 ---
 
-# Challenges we ran into
+## 🏆 Accomplishments That We're Proud Of
 
-## Giving agents freedom without giving them magic
+### City-Scale and Individual-Scale Simulation
 
-A language model can very easily say:
+God’s Plan works at two very different levels.
 
-> “I get into the car and drive across the city.”
+You can zoom out and watch thousands of residents form crowds, move through the city, coordinate, and react to changing conditions.
 
-A simulation has to care about everything hidden inside that sentence.
+Then you can click one resident and understand the individual decision behind that larger pattern.
 
-Is there a car nearby?
+### Natural Language as a World Interface
 
-Can the agent reach it?
-
-Is it already occupied?
-
-Can the agent use it?
-
-Is there a route to the destination?
-
-Did somebody destroy that route twenty seconds ago?
-
-A lot of our work became figuring out how to preserve the flexibility of language-model reasoning while forcing actions through the constraints of the simulated world.
-
----
-
-## Scaling beyond a handful of chatbots
-
-Thousands of autonomous residents create a very different problem from running five agents in a workflow.
-
-We obviously cannot have every resident continuously sending expensive model requests just to decide whether they should keep walking down the sidewalk.
-
-We had to think carefully about:
-
-**when an agent needs to think → what can remain deterministic → what state should persist → what events should wake an agent back up**
-
-That became one of the most interesting architectural problems in the project.
-
----
-
-## Making everyone feel different
-
-If a thousand residents receive the same information, have the same goals, and run the same prompt, you mostly get a thousand copies of one person.
-
-That was not what we wanted.
-
-Agents needed different information, relationships, priorities, positions in the world, and histories.
-
-Once those differences started influencing decisions, the population became much less predictable.
-
-It also became considerably harder to debug.
-
----
-
-## Making chaos affect more than the screen
-
-It is surprisingly easy to make a cool-looking tornado.
-
-It is harder to make everyone else care.
-
-We wanted events to feed back into the exact same state agents use when making decisions.
-
-A disaster should be able to affect:
-
-> roads → movement → access → information → behavior → group decisions
-
-Otherwise the city can visually experience the apocalypse while everyone calmly continues their morning commute.
-
----
-
-# Accomplishments that we're proud of
-
-The part we are most proud of is that God’s Plan works at **two completely different scales**.
-
-Zoom out and you can watch a whole city.
-
-You see crowds form, vehicles move, groups coordinate, routes collapse, and thousands of residents respond to the same evolving situation.
-
-Then you click one person.
-
-The simulation suddenly becomes much smaller.
-
-You can see what they know, what they are worried about, who they are aligned with, and why they are doing something that might look completely irrational from above.
-
-That changed what we wanted the project to be.
-
-We did not just want convincing crowd behavior.
-
-We wanted the large-scale behavior to come from decisions that still made sense when you inspected the individuals producing it.
-
-We're also proud that natural language became an interface to the **world itself**.
+We are especially proud that natural language controls the **simulation itself**, rather than just another chatbot.
 
 Instead of asking:
 
-> “What might happen if downtown lost power?”
+> “What would happen if downtown lost power?”
 
-you can tell God’s Plan:
+you can tell the city:
 
 > “Downtown just lost power.”
 
-And then let the simulation answer.
+and watch the agents deal with it.
 
-Underneath that is a system connecting model reasoning, tools, relationships, group behavior, geographic data, transportation simulation, dynamic events, and 3D visualization.
+### A Shared World for Different AI Models
 
-Our original transportation architecture already treated AI output as a proposal that still had to survive structured validation and actual simulation rather than accepting the model's prediction as reality.
+Rather than running agents in isolated conversations, we put them into the same environment, where one group's decisions can directly affect what another group sees and does next.
 
-We carried that same principle into the agents themselves.
-
-**They can decide what they want to do.
-They still have to live in the world afterward.**
+That makes the interaction between agents as important as the intelligence of any individual model.
 
 ---
 
-# What we learned
+## 🎓 What We Learned
 
-The biggest thing we learned was how much more interesting multi-agent systems become once their agents genuinely share an environment.
+The biggest thing we learned is that multi-agent systems become much more interesting when agents **share consequences**.
 
-If you ask GPT, Claude, Gemini, and Grok the same question independently, you get four different answers.
+One agent can make a perfectly reasonable decision that changes the environment for everyone else. Hundreds of individually sensible choices can create congestion, panic, or unexpected coordination without any agent explicitly planning that outcome.
 
-That can be useful.
+Those emergent behaviors became some of the most interesting parts of God’s Plan.
 
-But it becomes a very different experiment when:
+We also learned that the boundary between AI reasoning and simulation matters enormously. Agents are much more believable when they can make their own decisions but still have to obey the world they live in.
 
-> Claude makes a decision
-> ↓
-> that changes the environment
-> ↓
-> which changes what GPT sees
-> ↓
-> which causes another group to react
-> ↓
-> which changes the situation again
-
-At that point, the interesting thing is no longer the response from any individual model.
-
-It is the **interaction between them**.
-
-We also learned that individually reasonable behavior can create very unreasonable collective outcomes.
-
-Nobody has to decide to create a traffic jam.
-
-Hundreds of agents can independently choose the same sensible route and create one.
-
-Nobody has to decide to cause panic.
-
-Information spreading through residents, changing relationships, and local observations can create something that looks surprisingly similar.
-
-Those emergent outcomes became some of the most interesting moments in the project precisely because we did not directly script them.
-
-And on the less serious side, we learned that giving people a detailed city simulation and an unrestricted text box does not encourage responsible urban planning for very long.
-
-That was roughly how the orbital strike happened.
+And finally, giving users both an unrestricted text box and an orbital-strike button does not encourage responsible urban planning for very long.
 
 ---
 
-# What's next for God’s Plan
+## 🗺️ What's Next for God’s Plan
 
-The part we want to push furthest is **persistent social behavior**.
+We want to deepen the parts of the simulation that make the agents feel persistent.
 
-Right now, agents can exist inside groups and maintain relationships and sentiment.
+- **Long-Term Memory:** Let experiences continue influencing agents over longer simulations.
+- **Richer Social Dynamics:** Allow relationships, beliefs, trust, and reputation to evolve.
+- **Emergent Groups:** Let agents form alliances, choose leaders, disagree, and split apart organically.
+- **More Expressive World Control:** Expand the natural-language interface so increasingly complex scenarios can be created without manually configuring the simulation.
 
-We want those structures to become increasingly organic over time.
+Ultimately, we want God’s Plan to be a world where AI agents are not merely reasoning *about* a simulation from the outside.
 
-Instead of spawning a predefined faction, agents could:
-
-**meet → cooperate → form a group → choose leadership → develop loyalties → disagree → split apart**
-
-We want memory, beliefs, reputation, and relationships to accumulate across longer simulations so that what happened an hour ago can still matter later.
-
-We also want the natural-language interface to become much more expressive.
-
-The long-term idea is that almost any experiment should begin with:
-
-> **“What if...?”**
-
-What if the subway shuts down after a concert?
-
-What if every bridge closes?
-
-What if half the city loses power?
-
-What if two groups disagree about how an evacuation should happen?
-
-What if one district is coordinated by Claude and another by GPT?
-
-What if all of that is happening and then a tornado arrives?
-
-Some of those questions have legitimate applications in transportation, emergency planning, crowd behavior, and multi-agent research.
-
-Some are mostly an excuse to watch a tiny city descend into chaos.
-
-The same underlying system makes both interesting.
-
-God’s Plan started because we wanted to see what would happen if AI agents stopped reasoning about a world from the outside and instead had to exist **inside one** - surrounded by other agents, incomplete information, physical constraints, relationships, and the consequences of their own decisions.
+They have to **live inside it**.
 
 ---
 
