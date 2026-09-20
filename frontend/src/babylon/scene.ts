@@ -116,7 +116,8 @@ export class WorldScene {
     this.city.chunks.push(...streets)
     this.city.shadowCasters.push(...streets.filter(m => m.name.startsWith('street-trees-')))
     // Placeholder countryside past the pack: grassland hills, the lake carried on, main roads to the horizon.
-    this.terrain = buildTerrain(scene, world, this.city.materials, { cells: balanced ? 96 : 176, treeLimit: balanced ? 500 : 1500 })
+    const reservedTrees = [...this.city.treePositions.map(t => ({ ...t, y: world.surfaces ? Y.road : Y.green })), ...streets.treePositions]
+    this.terrain = buildTerrain(scene, world, this.city.materials, { cells: balanced ? 96 : 176, treeLimit: balanced ? 500 : 1500, reservedTrees })
 
     // --- camera
     const cam = new ArcRotateCamera('cam', -1.95, 0.98, 1500, new Vector3(380, 0, -520), scene)

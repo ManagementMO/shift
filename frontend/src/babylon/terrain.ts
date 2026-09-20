@@ -34,6 +34,7 @@ export interface TerrainOptions {
   slope: number
   roadLimit: number
   treeLimit: number
+  reservedTrees?: readonly TreePlacement[]
 }
 
 export const TERRAIN_DEFAULTS: TerrainOptions = {
@@ -693,6 +694,7 @@ export function buildTerrain(scene: Scene, world: WorldData, materials: CityMate
   meshes.push(land)
 
   // coarse cells: the countryside is a 30 km box, and these trees are only ever seen from afar
+  for (const t of o.reservedTrees ?? []) farm.placements.reserve(t.x, t.z, TREE_RADIUS * t.scale + 0.1, t.y ?? shape.plateY, (t.y ?? shape.plateY) + TREE_HEIGHT * t.scale)
   const cropped = (x: number, z: number, radius: number) => farm.tinted.has(parcelKey(x, z)) || farm.obstacles.intersectsCircle(x, z, radius)
   const trees = buildVegetation(scene, [...countryTrees(shape, roads, o.treeLimit, cropped, farm.placements), ...farm.trees], foliage, 0, 3000)
   for (const tree of trees) {

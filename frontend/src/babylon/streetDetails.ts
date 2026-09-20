@@ -8,7 +8,7 @@ import { RoadIndex } from './roadIndex'
 import { buildVegetation } from './vegetation'
 import type { WorldData } from './worldData'
 
-export function buildStreetDetails(scene: Scene, world: WorldData, parkTrees: TreePlacement[] = []): Mesh[] {
+export function buildStreetDetails(scene: Scene, world: WorldData, parkTrees: TreePlacement[] = []): Mesh[] & { treePositions: TreePlacement[] } {
   const focus = world.landmarks.find(l => l.kind === 'cn_tower') ?? world.venue
   const ground = world.surfaces ? Y.road : Y.path
   const nearby = (x: number, z: number) => Math.hypot(x - focus.x, z - focus.z) < 1550
@@ -81,7 +81,7 @@ export function buildStreetDetails(scene: Scene, world: WorldData, parkTrees: Tr
           if (h>0.3) {
             const scale = 0.8 + h * 0.35
             if (!offRoad(x, z, 0.5) || !reserve(x, z, TREE_RADIUS * scale + 0.2, TREE_HEIGHT * scale)) continue
-            trees.push({x,z,scale,shade:h})
+            trees.push({x,z,y:ground,scale,shade:h})
             box(b.stone,x,z,1.35,1.35,ground,0.08,[0.4,0.42,0.34])
           } else {
             if (!offRoad(x, z, 0.25) || !reserve(x, z, 1.45, 6.9)) continue
@@ -161,5 +161,5 @@ export function buildStreetDetails(scene: Scene, world: WorldData, parkTrees: Tr
   }
   const foliage=vertexColorMaterial('street-foliage',scene,0.015)
   for(const mesh of buildVegetation(scene,trees,foliage,ground)) { mesh.name=`street-${mesh.name}`; meshes.push(mesh) }
-  return meshes
+  return Object.assign(meshes, { treePositions: trees })
 }
