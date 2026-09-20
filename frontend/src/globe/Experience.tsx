@@ -116,7 +116,7 @@ export default function Experience({ initialCity }: { initialCity: boolean }) {
       {mounted && <div className="city-experience" aria-hidden={phase !== 'city'} inert={phase !== 'city'} style={{ opacity: visiblePhase === 'city' || visiblePhase === 'flight' ? 1 : 0 }}>
         <App active={phase === 'city'} onGlobe={() => globe()} onWorldReady={worldReady} onWorldError={worldError} />
       </div>}
-      {visiblePhase !== 'city' && <Suspense fallback={<div className="orbital-boot">Concrete Consequences <span>Loading globe…</span></div>}>
+      {visiblePhase !== 'city' && <Suspense fallback={<div className="orbital-boot">God's Plan <span>Loading globe…</span></div>}>
         <Globe phase={visiblePhase} selected={selected} error={rendererError ?? apiError} onSelect={select} onReveal={reveal} onComplete={complete} onCancel={() => globe(false)} />
       </Suspense>}
     </>
