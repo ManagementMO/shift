@@ -245,6 +245,31 @@ describe('Placeholder countryside', () => {
     engine.dispose()
   })
 
+  it('reserves existing city trees before placing countryside trees across the pack boundary', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const materials = new CityMaterials(scene, 512)
+    const w = world()
+    w.roads = []
+    w.far_bounds = [-1800, -1800, 1800, 1800]
+    w.far_water = []
+    const shape = terrainShape(w, { cells: 24 })
+    const existing = countryTrees(shape, [], 1)[0]
+    expect(existing).toBeDefined()
+    const options = { cells: 24, treeLimit: 40, reservedTrees: [existing] }
+    const terrain = buildTerrain(scene, w, materials, options)
+    const matrices = terrain.meshes.filter(m => m.name.startsWith('country-trees-') && m.name.endsWith('-near')).flatMap(m => m.thinInstanceGetWorldMatrices())
+    expect(matrices.length).toBeGreaterThan(10)
+    for (const matrix of matrices) {
+      const p = matrix.getTranslation(), scale = Math.abs(matrix.m[5])
+      expect(Math.hypot(p.x - existing.x, p.z - existing.z)).toBeGreaterThanOrEqual(TREE_RADIUS * (existing.scale + scale))
+    }
+    terrain.dispose()
+    materials.dispose()
+    scene.dispose()
+    engine.dispose()
+  })
+
   it('builds a heightfield the camera ray hits at the placeholder height, and the plate edge is pinned to the grid', () => {
     const engine = new NullEngine()
     const scene = new Scene(engine)
