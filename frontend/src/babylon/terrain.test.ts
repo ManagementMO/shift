@@ -8,7 +8,7 @@ import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 import { Y } from './city'
 import { boundaryDistance, pointInRing, TREE_RADIUS } from './details'
 import { CityMaterials } from './materials'
-import { boxDistance, buildTerrain, countryTrees, farmland, farmParcels, horizonRoads, parcelKey, rollingNoise, terrainShape, terrainVertexData } from './terrain'
+import { boxDistance, buildTerrain, countryTrees, farmland, farmParcels, FRINGE_DENSE, FRINGE_REACH, fringeBlocks, horizonRoads, parcelKey, rollingNoise, terrainShape, terrainVertexData } from './terrain'
 import type { WorldData, WorldRoad } from './worldData'
 
 const segDist = ([x, z]: [number, number], [ax, az, bx, bz]: number[]): number => {
@@ -16,6 +16,8 @@ const segDist = ([x, z]: [number, number], [ax, az, bx, bz]: number[]): number =
   const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)))
   return Math.hypot(x - ax - t * dx, z - az - t * dz)
 }
+const centre = (ring: [number, number][]): [number, number] => [ring.reduce((s, p) => s + p[0], 0) / ring.length, ring.reduce((s, p) => s + p[1], 0) / ring.length]
+const signedAreaOf = (ring: [number, number][]): number => ring.reduce((a, [x, z], i) => a + x * ring[(i + 1) % ring.length][1] - ring[(i + 1) % ring.length][0] * z, 0) / 2
 
 const world = (): WorldData => ({
   version: 1, pack_id: 'fixture', network_fingerprint: 'fixture',
@@ -268,6 +270,141 @@ describe('Placeholder countryside', () => {
     materials.dispose()
     scene.dispose()
     engine.dispose()
+  })
+
+  describe('suburban fringe', () => {
+    /** A mapped core of small buildings around the origin, compiled surfaces over the plate: a 400 m park north of the
+     *  core, a river across the east, roads as asphalt, and everything else meadow (with the core's bare ground). */
+    const fringeWorld = (): WorldData => {
+      const w = world()
+      const buildings: WorldData['buildings'] = []
+      for (let x = -420; x <= 420; x += 60) for (let z = -420; z <= 420; z += 60) {
+        buildings.push({ id: `b${x}:${z}`, ring: [x, z, x + 20, z, x + 20, z + 15, x, z + 15], h: 9, cat: 'residential' })
+      }
+      w.buildings = buildings
+      const park = { ring: [-300, 600, 300, 600, 300, 1000, -300, 1000] }
+      const river = { ring: [1200, -1000, 1260, -1000, 1260, 1000, 1200, 1000] }
+      w.water = [river]
+      // the compiled meadow stops at the lake shore (z = -1000) like the real plate does
+      const ring = [-1600, -1000, 1600, -1000, 1600, 1600, -1600, 1600]
+      w.surfaces = {
+        ground: [{ ring: [-500, -500, 500, -500, 500, 500, -500, 500] }], grass: [park], sand: [], pavement: [], asphalt: [], rail: [],
+        meadow: [{ ring, holes: [[-500, -500, 500, -500, 500, 500, -500, 500], park.ring, river.ring] }],
+      }
+      return w
+    }
+
+    it('lays blocks on the bare land around the mapped city, off water, parks, roads and buildings, and fades them out with distance', () => {
+      const w = fringeWorld()
+      const shape = terrainShape(w)
+      const roads = horizonRoads(w.roads, w.crs.bounds_world, shape.farBounds)
+      const blocks = fringeBlocks(shape, roads, w)
+      expect(blocks.length).toBeGreaterThan(200)
+      const inPark = (x: number, z: number) => x > -300 && x < 300 && z > 600 && z < 1000
+      const inRiver = (x: number, z: number) => x > 1200 && x < 1260 && z > -1000 && z < 1000
+      const lots = blocks.flatMap((b) => b.lots)
+      expect(lots.length).toBeGreaterThan(1000)
+      for (const b of blocks) {
+        const [cx, cz] = centre(b.tiles[0])
+        expect(boxDistance(shape.farBounds, cx, cz)).toBeLessThan(-300)
+        expect(inPark(cx, cz)).toBe(false)
+        expect(boundaryDistance(cx, cz, w.water[0].ring)).toBeGreaterThanOrEqual(60)
+        // every piece is a positively wound polygon on land
+        for (const piece of [...b.tiles, ...b.slabs]) {
+          expect(signedAreaOf(piece)).toBeGreaterThan(0)
+          for (const [x, z] of piece) expect(shape.inWater(x, z)).toBe(false)
+        }
+      }
+      // the suburb climbs off the flat plate into the hills, and its blocks come in several characters and heights
+      expect(blocks.some((b) => boxDistance(shape.plate, ...centre(b.tiles[0])) > 100)).toBe(true)
+      expect(new Set(blocks.map((b) => b.kind)).size).toBeGreaterThanOrEqual(3)
+      expect(Math.max(...lots.map((l) => l.h))).toBeGreaterThan(40)
+      expect(Math.min(...lots.map((l) => l.h))).toBeLessThan(9)
+      const offending = lots.filter((lot) => {
+        for (let i = 0; i < lot.ring.length; i += 2) {
+          const x = lot.ring[i], z = lot.ring[i + 1]
+          // the horizon motorway is [0, 990 → 5000] with a 12 m width: lots keep well clear of it
+          if (inPark(x, z) || inRiver(x, z) || (z > 990 && Math.abs(x) <= 6 + 12) || lot.h < 4) return true
+          // never on a mapped building (all of which sit inside the 500 m core)
+          if (Math.abs(x) < 500 && Math.abs(z) < 500 && w.buildings.some((b) => pointInRing(x, z, b.ring))) return true
+        }
+        return false
+      })
+      expect(offending).toEqual([])
+      // fully built beside the city, thinning out toward the farmland: the outer band covers more ground yet holds fewer blocks
+      const dense = blocks.filter((b) => b.distance < FRINGE_DENSE).length, fading = blocks.filter((b) => b.distance > (FRINGE_DENSE + FRINGE_REACH) / 2).length
+      expect(dense).toBeGreaterThan(fading * 3)
+      expect(fading).toBeGreaterThan(0)
+      expect(blocks.every((b) => b.distance < FRINGE_REACH)).toBe(true)
+      // the same world always gives the same fringe
+      const again = fringeBlocks(shape, roads, w)
+      expect(again.length).toBe(blocks.length)
+      expect(JSON.stringify(again.map((b) => [b.i, b.j, b.lots.length, b.tiles.length]))).toBe(JSON.stringify(blocks.map((b) => [b.i, b.j, b.lots.length, b.tiles.length])))
+      expect(again[5].lots[0]?.ring).toEqual(blocks[5].lots[0]?.ring)
+    }, 20000)
+
+    it('only fills the ring outside the pack when a pack has no compiled surfaces', () => {
+      const w = fringeWorld()
+      delete w.surfaces
+      const shape = terrainShape(w)
+      const blocks = fringeBlocks(shape, [], w)
+      expect(blocks.length).toBeGreaterThan(10)
+      for (const b of blocks) for (const piece of b.tiles) for (const [x, z] of piece) expect(boxDistance(shape.pack, x, z)).toBeGreaterThanOrEqual(-0.01)
+    })
+
+    it('draws the blocks as chunked meshes on the terrain, keeps trees, fields and farmsteads off them, and can be switched off', () => {
+      const engine = new NullEngine()
+      const scene = new Scene(engine)
+      const materials = new CityMaterials(scene, 512)
+      const w = fringeWorld()
+      const terrain = buildTerrain(scene, w, materials, { cells: 24, treeLimit: 300 })
+      try {
+        const fringe = terrain.meshes.filter((m) => m.name.startsWith('fringe-'))
+        expect(fringe.some((m) => m.name.endsWith('-asphalt'))).toBe(true)
+        expect(fringe.some((m) => m.name.endsWith('-concrete'))).toBe(true)
+        expect(fringe.some((m) => m.name.endsWith('-roof'))).toBe(true)
+        // chunks inside the pack share the city's shadow map; only the taller buildings cast into it
+        expect(terrain.shadowCasters.length).toBeGreaterThan(0)
+        for (const m of terrain.shadowCasters) {
+          expect(m.receiveShadows).toBe(true)
+          expect(m.name.includes('-low-')).toBe(false)
+        }
+        const blocks = fringeBlocks(terrain.shape, horizonRoads(w.roads, w.crs.bounds_world, terrain.shape.farBounds), w)
+        const tiles = blocks.flatMap((b) => b.tiles.map((t) => t.flat()))
+        const onTile = (x: number, z: number) => tiles.some((tile) => pointInRing(x, z, tile))
+        const matrices = terrain.meshes.filter((m) => m.name.startsWith('country-trees-') && m.name.endsWith('-near')).flatMap((m) => m.thinInstanceGetWorldMatrices())
+        expect(matrices.length).toBeGreaterThan(10)
+        for (const matrix of matrices) {
+          const p = matrix.getTranslation()
+          expect(onTile(p.x, p.z)).toBe(false)
+        }
+        for (const name of ['fields', 'farmsteads']) {
+          const mesh = terrain.meshes.find((m) => m.name === name)!
+          const p = mesh.getVerticesData('position')!
+          for (let i = 0; i < p.length; i += 3 * Math.max(1, Math.floor(p.length / 3 / 400))) expect(onTile(p[i], p[i + 2]), name).toBe(false)
+        }
+        // out on the hills a street sits just above the surface and the countryside beneath it is gone
+        const hill = blocks.find((b) => boxDistance(terrain.shape.plate, ...centre(b.tiles[0])) > 200 && b.tiles[0].length === 4)!
+        const [hx, hz] = centre(hill.tiles[0])
+        const land = terrain.meshes.find((m) => m.name === 'countryside')!
+        const ray = new Ray(new Vector3(hx, 500, hz), new Vector3(0, -1, 0), 1000)
+        expect(ray.intersectsMesh(land).hit).toBe(false)
+        const street = fringe.filter((m) => m.name.endsWith('-asphalt')).map((m) => ray.intersectsMesh(m)).find((hit) => hit.hit)!
+        expect(street).toBeDefined()
+        expect(street.pickedPoint!.y - terrain.shape.surface(hx, hz)).toBeGreaterThan(0.01)
+        expect(street.pickedPoint!.y - terrain.shape.surface(hx, hz)).toBeLessThan(0.5)
+        expect(terrain.shape.surface(hx, hz)).toBeGreaterThan(terrain.shape.plateY)
+      } finally {
+        terrain.dispose()
+      }
+      const bare = buildTerrain(scene, w, materials, { cells: 24, treeLimit: 0, fringe: false })
+      expect(bare.meshes.some((m) => m.name.startsWith('fringe-'))).toBe(false)
+      expect(bare.shadowCasters).toHaveLength(0)
+      bare.dispose()
+      materials.dispose()
+      scene.dispose()
+      engine.dispose()
+    }, 20000)
   })
 
   it('builds a heightfield the camera ray hits at the placeholder height, and the plate edge is pinned to the grid', () => {

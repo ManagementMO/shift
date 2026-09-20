@@ -183,7 +183,7 @@ export class WorldScene {
         const dz = Math.max(box.minimumWorld.z - p.z, 0, p.z - box.maximumWorld.z)
         return dx * dx + dz * dz < (balanced ? 650 : 1000) ** 2
       }
-      for (const m of this.city.shadowCasters) sg.addShadowCaster(m, false)
+      for (const m of [...this.city.shadowCasters, ...this.terrain.shadowCasters]) sg.addShadowCaster(m, false)
       this.shadows = sg
       if (balanced) {
         sg.getShadowMap()!.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE
