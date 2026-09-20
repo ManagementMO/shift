@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { defaultPopulationSpec, populationCostLimit, populationScaleReason, populationUnavailableReason } from '../populationControls'
+import { defaultPopulationSpec, populationCostLimit, populationCountLimit, populationDefinitionReason, populationUnavailableReason } from '../populationControls'
 import { useStore } from '../store'
+import { usePopulationStimuli } from '../populationStimuli'
 import { clock, PLAYBACK_SPEEDS } from '../world/playback'
 import { fmt } from '../util'
 import PopulationLens from './PopulationLens'
 import PopulationRunActions from './PopulationRunActions'
 import PopulationRunControl from './PopulationRunControl'
+import PopulationEvents from './PopulationEvents'
 import './population.css'
 
 export default function PopulationPanel() {
@@ -25,38 +27,59 @@ export default function PopulationPanel() {
   const error = useStore(s => s.error)
   const [count, setCount] = useState(12)
   const [seed, setSeed] = useState(7)
-  const [horizon, setHorizon] = useState(3600)
+  const [horizon, setHorizon] = useState(600)
   const [maxCost, setMaxCost] = useState(1)
+  const [chosenModels, setChosenModels] = useState<string[] | null>(null)
   const refreshStatus = useStore(s => s.refreshPopulationStatus)
   const refreshPopulations = useStore(s => s.refreshPopulations)
   const unavailable = populationUnavailableReason(status, statusError)
-  const gate = populationScaleReason(status, count)
+  const definitionReason = populationDefinitionReason(status, statusError)
+  const maxResidents = populationCountLimit(status)
+  const residentCount = Math.min(count, maxResidents)
+  const modelIds = (chosenModels ?? status?.models.map(brain => brain.model_id) ?? []).filter(id => status?.models.some(brain => brain.model_id === id))
 
   useEffect(() => { void refreshStatus(); void refreshPopulations() }, [refreshStatus, refreshPopulations])
+  useEffect(() => { usePopulationStimuli.getState().reset(definition?.population_id ?? null) }, [definition?.population_id])
 
   const create = () => {
     if (!status || !pack) return
-    void useStore.getState().createPopulation(defaultPopulationSpec(status, { count, seed, horizon, packId: pack.pack_id, maxCostUsd: maxCost }))
+    try {
+      void useStore.getState().createPopulation(defaultPopulationSpec(status, { count: residentCount, seed, horizon, packId: pack.pack_id, maxCostUsd: maxCost, modelIds }))
+    } catch (error) { useStore.getState().setError(String(error)) }
   }
   const saved = scenarios.filter(s => s.scenario_kind === 'population' && s.pack_id === pack?.pack_id)
 
   return <div className="tool population-panel">
     <div className="population-heading"><strong>JiuwenSwarm residents</strong><span className={`population-status ${unavailable ? 'unavailable' : 'available'}`}>{unavailable ? 'Not ready' : 'Runtime configured'}</span></div>
-    <p className="small dim">Persistent people with individual model sessions, needs, tasks, contacts, and measured SUMO journeys. This is distinct from the rule-driven street traffic.</p>
+    <p className="small dim">Native AI residents share a local district, with individual model sessions, needs, tasks, contacts, and measured SUMO journeys.</p>
+    <p className="small population-inspection-hint">Click a resident on the map or in the list to inspect their model, recorded decision summary, plan, messages, and outcomes. Summaries are not private chain-of-thought.</p>
     {unavailable && <div className="small warn" role="status">{unavailable}</div>}
-    <div className="small dim">Inference budget remaining: ${populationCostLimit(status).toFixed(2)}. Loading saved records never invokes models.</div>
+    <div className="small dim">Inference budget remaining: ${populationCostLimit(status).toFixed(2)}. Saved residents remain inspectable when execution is unavailable. Creating a swarm and inspecting it make no model calls.</div>
     <button className="ghostbtn" onClick={() => void refreshStatus()} disabled={busy}>Check native connection</button>
     <label>Saved population<select aria-label="Saved native population" value={active ? scenarioId ?? '' : ''} disabled={busy} onChange={e => { if (e.target.value) void useStore.getState().selectScenario(e.target.value) }}><option value="">Choose saved residents</option>{saved.map(s => <option key={s.scenario_id} value={s.scenario_id}>{s.label}</option>)}</select></label>
+    {active && definition && <PopulationEvents />}
     {active && <PopulationLens />}
-    <details open={!definition} className="population-create"><summary>Define a population</summary>
-      <label>Residents<input type="number" min={5} max={300} value={count} onChange={e => setCount(Number(e.target.value))} /></label>
+    {definition && <section className="population-current small" aria-label="Current native population">
+      <strong>{definition.profiles.length} residents · {definition.spec.brains.every(brain => brain.control_mode === 'jiuwenswarm') ? 'Native JiuwenSwarm definition' : 'Archived rules definition'}</strong>
+      <div>{definition.spec.brains.map(brain => `${brain.model_family} (${brain.api_provider})`).join(' · ')}</div>
+      <div className="dim">District anchor radius {definition.spec.district_radius_m} m · {replay ? 'recorded execution available' : 'definition only; execution starts separately'}</div>
+    </section>}
+    <details open={!definition} className="population-create"><summary>Create a native swarm</summary>
+      <label>Residents<input aria-label="Native resident count" type="number" min={5} max={maxResidents} value={residentCount} onChange={e => setCount(Number(e.target.value))} /></label>
+      <div className="small dim">Up to {maxResidents} native residents under the current runtime gate. Start with a short run, then inspect individual decisions.</div>
       <label>Seed<input type="number" min={0} step={1} value={seed} onChange={e => setSeed(Number(e.target.value))} /></label>
       <label>Duration<select value={horizon} onChange={e => setHorizon(Number(e.target.value))}><option value={600}>10 simulated minutes</option><option value={1800}>30 simulated minutes</option><option value={3600}>One simulated hour</option></select></label>
       <label>Run budget (USD)<input aria-label="Run budget in USD" type="number" min={0.01} max={20} step={0.01} value={maxCost} onChange={e => setMaxCost(Number(e.target.value))} /></label>
       <div className="small dim">Effective cap: ${Math.min(maxCost || 0, populationCostLimit(status)).toFixed(2)}; bounded by the remaining session budget.</div>
-      <details><summary>Configured brains ({status?.models.length ?? 0})</summary>{status?.models.map(brain => <div className="population-record small" key={brain.model_id}><b>{brain.model_family}</b><div>{brain.model_id}</div><div className="dim">{brain.api_provider} · {brain.control_mode}</div></div>)}</details>
-      {gate && <p className="small warn">{gate}</p>}
-      <button className="primary" onClick={create} disabled={!!unavailable || busy || !Number.isInteger(count) || count < 5 || count > 300 || !Number.isSafeInteger(seed) || !Number.isFinite(maxCost) || maxCost <= 0 || maxCost > 20}>Define residents (no model calls)</button>
+      <fieldset className="population-brain-options"><legend>Resident brains · choose models</legend>{status?.models.map(brain => <label className="population-brain-option" key={brain.model_id}>
+        <input type="checkbox" checked={modelIds.includes(brain.model_id)} disabled={busy || brain.control_mode !== 'jiuwenswarm'} onChange={event => setChosenModels(event.target.checked ? [...modelIds, brain.model_id] : modelIds.filter(id => id !== brain.model_id))} />
+        <span><b>{brain.model_family}</b><span>{brain.model_id}</span><span className="dim">{brain.api_provider} · {brain.control_mode}</span></span>
+      </label>)}</fieldset>
+      <div className="small dim">Selected brains are distributed across residents. The inspector shows the actual model used for each recorded turn.</div>
+      {definitionReason && <p className="small warn">{definitionReason}</p>}
+      {!modelIds.length && <p className="small warn">Choose at least one native brain.</p>}
+      <button className="primary" onClick={create} disabled={!!definitionReason || !modelIds.length || busy || !Number.isInteger(residentCount) || residentCount < 5 || residentCount > maxResidents || !Number.isSafeInteger(seed) || !Number.isFinite(maxCost) || maxCost <= 0 || maxCost > 20}>Create swarm (no model calls)</button>
+      <div className="small dim">After creation, use Start new society run to authorize model execution within the displayed cap.</div>
     </details>
     {active && definition && <PopulationRunControl />}
     {active && <div className="population-runs">{runs.map(run => <section key={run.run_id} className="population-run-record">
@@ -74,6 +97,5 @@ export default function PopulationPanel() {
       <p className="small dim">Playback only. Execution pause and resume are separate controls above.</p>
     </section>}
     {error && <div className="small bad" role="alert">{error}</div>}
-    {active && <button className="ghostbtn" onClick={() => void useStore.getState().leavePopulation()} disabled={busy}>Return to street simulation</button>}
   </div>
 }

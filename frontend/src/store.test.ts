@@ -5,6 +5,7 @@ import { clock } from './world/playback'
 import { residentViewAt } from './population'
 import { buildIndex } from './replay'
 import { shouldPollRuns } from './populationLifecycle'
+import { usePopulationStimuli } from './populationStimuli'
 import type { CityPack, RunStatus, ScenarioSpec } from './types'
 
 const initial = useStore.getState()
@@ -104,6 +105,7 @@ beforeEach(() => {
   useStore.setState({ ...initial, pack, scenarios: [scenario()], populationStatus: populationStatus() }, true)
   clock.pause()
   clock.seek(0)
+  usePopulationStimuli.getState().reset(null)
 })
 
 afterEach(() => {
@@ -167,7 +169,7 @@ describe('population store boundaries', () => {
   })
 
   it('uses only the explicit population endpoint and reuses its idempotency key after a failed submission', async () => {
-    const requests: Record<string, string>[] = []
+    const requests: Record<string, unknown>[] = []
     const queued = run({ run_kind: 'population', population_id: 'population', status: 'queued', progress: 0 })
     const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input)
@@ -182,15 +184,21 @@ describe('population store boundaries', () => {
     })
     vi.stubGlobal('fetch', fetcher)
     useStore.setState({ scenarioId: 'scenario', populationDefinition: populationArtifact().definition })
+    const stimulus = { stimulus_id: 'before-start', kind: 'announcement' as const, text: 'Visit the shop.', duration_s: 600 }
+    usePopulationStimuli.setState({ populationId: 'population', pending: [stimulus] })
     await useStore.getState().submitPopulationRun()
     expect(useStore.getState().error).toContain('Submission response lost')
+    expect(usePopulationStimuli.getState().pending).toEqual([stimulus])
     await Promise.all([useStore.getState().submitPopulationRun(), useStore.getState().submitPopulationRun()])
     expect(requests).toHaveLength(2)
     expect(requests[0]).toEqual(requests[1])
-    expect(Object.keys(requests[0]).sort()).toEqual(['idempotency_key', 'population_id'])
+    expect(Object.keys(requests[0]).sort()).toEqual(['idempotency_key', 'population_id', 'stimuli'])
+    expect(requests[0].stimuli).toEqual([stimulus])
     expect(requests[0].population_id).toBe('population')
     expect(useStore.getState().runs[0].run_kind).toBe('population')
     expect(useStore.getState().populationSubmitting).toBe(false)
+    expect(useStore.getState().primaryRunId).toBe('pop-run')
+    expect(usePopulationStimuli.getState().pending).toEqual([])
   })
 
   it('opens a paused run after a fresh frontend load without resuming or invoking cognition', async () => {
