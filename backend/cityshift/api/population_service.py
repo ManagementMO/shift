@@ -6,6 +6,7 @@ import secrets
 import tempfile
 import threading
 from pathlib import Path
+from typing import Any
 
 from cityshift.agents.population_bridge import ScopedCityBridge
 from cityshift.agents.population_client import NativePopulationClient, SwarmUnavailable
@@ -72,7 +73,7 @@ class PopulationService:
             reason = "The pinned isolated JiuwenSwarm environment is not installed."
         elif not configured:
             reason = "Configure OPENROUTER_API_KEY and enable CITYSHIFT_POPULATION_LIVE=1, then restart the backend."
-        budget = {"session_limit_microdollars": None, "blocked": True}
+        budget: dict[str, Any] = {"session_limit_microdollars": None, "blocked": True}
         try:
             gateway = get_population_gateway()
             # Provider-capped mode needs a current key balance before admission.
