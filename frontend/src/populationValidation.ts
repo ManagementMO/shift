@@ -49,7 +49,7 @@ const taskKind = enumeration('delivery', 'visit')
 const brain = shape({ model_family: text, model_id: text, api_provider: text, config_ref: pattern(/^[a-zA-Z0-9_.-]+$/), control_mode: enumeration('jiuwenswarm', 'rules'), color: nullable(pattern(/^#[0-9a-fA-F]{6}$/)) })
 const budgetFields = {
   max_concurrency: number(1, 16, true), max_iterations: number(1, 8, true), decision_timeout_s: number(1, 180, true), max_calls: number(0, 10000, true),
-  max_tokens: number(0, 20000000, true), max_output_tokens: number(128, 2048, true), max_cost_usd: number(0, 20), requests_per_minute: number(1, 120, true), tokens_per_minute: number(1, 500000, true),
+  max_tokens: number(0, 20000000, true), max_output_tokens: number(128, 2048, true), max_cost_usd: number(0, 20), requests_per_minute: number(1, 120, true), tokens_per_minute: number(1, 20000000, true),
 }
 const spec = shape({
   generator_version: enumeration('society-v1'), rules_version: enumeration('service-ledger-v1'), pack_id: pattern(/^[a-zA-Z0-9_-]+$/), seed: number(-Infinity, Infinity, true),
