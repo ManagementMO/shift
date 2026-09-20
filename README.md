@@ -2,7 +2,9 @@
 
 **Live demo → [agentsamong.us](https://www.agentsamong.us)**
 
-![God's Plan globe entry screen with city selection and simulation settings](docs/assets/gods-plan-globe.png)
+![God's Plan — live Toronto city with CN Tower and Rogers Centre](docs/assets/gods-plan-city.png)
+
+![God's Plan — globe entry with city selection and simulation settings](docs/assets/gods-plan-home.png)
 
 ## 💡 Inspiration
 
@@ -241,45 +243,47 @@ They have to **live inside it**.
 
 ## 🧩 How we used the sponsor platforms
 
-### Huawei · openJiuwen — the multi-agent backbone
+### Huawei · openJiuwen — specialists with bounded tools
 
-openJiuwen is how our specialists actually exist. Each one is a ReAct agent with an `AgentCard` and a set of bounded tools registered through `ability_manager`, and every tool is read-only: an evidence analyst, a demand analyst, and a planner that can inspect the city and propose a plan but **cannot write a measured outcome or mutate a scenario**.
+Our investigation pipeline uses openJiuwen ReAct agents for evidence analysis, demand analysis, and planning. Each specialist has an `AgentCard` and narrowly scoped, read-only tools registered through `ability_manager`. Analyst findings become planner context; proposed plans then pass through deterministic validation with a bounded repair attempt.
 
-The only way an agent influences the world is by proposing something that deterministic validators and the simulator then accept or reject.
+What we liked was the clear boundary between a model's reasoning and its available tools. Specialists can inspect the scenario and propose changes, but cannot invent measured outcomes. Separately, the live city's deterministic proximity-gossip system uses message fields compatible with openJiuwen's `MessageEnvelope`; it is not an LLM call for every resident or every simulation step.
 
-In the live city, agent-to-agent messages are emitted in openJiuwen's `MessageEnvelope` shape — message id, sender, recipient, topic, session, metadata — so a news-propagation record can be handed to a team runtime unchanged.
+### Elasticsearch — evidence with provenance
 
-### Elasticsearch — the agents' context layer, with a receipt for every claim
+We implemented per-city indexing and `multi_match` queries over notice titles and bodies, with title weighting and fuzzy matching. Retrieved claims become **frozen, content-hashed evidence bundles** with source identifiers, effective windows, and unresolved mappings. If Elasticsearch is unavailable, retrieval uses an explicitly labeled local fallback.
 
-The planner is not allowed to browse. It gets a **frozen, content-hashed evidence bundle**: claims with source ids, effective windows, and a status of `confirmed`, `pending`, or `superseded`.
+This makes retrieval inspectable rather than hiding it inside a prompt. Our current corpus consists of labeled scenario fixtures with preassigned `confirmed`, `pending`, and `superseded` statuses, not a live municipal feed. Real notice ingestion is the next extension.
 
-We index each city's notice corpus and query it with `multi_match` over title and body with fuzziness, then record which engine answered — `elasticsearch` or an explicitly labeled local fallback. Nothing silently pretends to be Elasticsearch.
+### Rox · Best AI Agent — why the challenge fits
 
-The unresolved list is the most important part: when a corridor mapping or effective window is missing, the bundle says so instead of letting the model fill the gap with confidence.
+Rox is a challenge we are targeting, not an SDK in our stack. Its focus on acting under incomplete and conflicting information matches our design: the analyst distinguishes an earlier lane-closure notice from its replacement, while the planner must satisfy fleet limits, valid stops, service windows, route reachability, and vehicle continuity.
 
-### Rox — agents that operate on messy data and still take real action
+A rejected plan receives concrete validation feedback instead of being accepted because its explanation sounds convincing. The live simulation also models local awareness and information spreading between neighbors. These are useful foundations for the challenge; the evidence-conflict demonstration currently uses fixtures rather than messy, independently ingested real-world documents.
 
-Our evidence layer is explicitly allowed to contradict itself. A superseded lane closure sits alongside the confirmed full closure that replaced it, and the analyst has to say which one actually constrains routing.
+### OpenAI models via OpenRouter — turning reasoning into testable plans
 
-The plan then has to survive deterministic validators — fleet limits, allowed stops, service windows, route reachability, vehicle continuity — with one bounded repair round if it fails.
+Our project handoff records a Toronto investigation using `openai/gpt-4o-mini` through **OpenRouter**, which produced two validated candidate plans and a subsequent SUMO run. The model helped summarize evidence and formulate shuttle assignments; deterministic code and SUMO remained responsible for feasibility and outcomes.
 
-The live city adds the other half: residents act on **partial information**, so a witness knows immediately while someone two blocks away hears about it one hop later, or never. Decisions get made under real uncertainty, and the simulation shows what that costs.
+The OpenAI-compatible interface let us reuse the same agent code across hosted and local endpoints. In our documented local-model experiment, the strict-JSON planning step timed out; the hosted run completed. This is a specific development observation, not a general model benchmark or a claim of direct OpenAI API usage.
 
-### OpenAI — the reasoning behind the plans
+### Backboard — a tested provider bridge
 
-The agent team runs on OpenAI models through an OpenAI-compatible client. Our documented Toronto investigation ran `openai/gpt-4o-mini`, producing two candidate plans that both passed validation.
+We built an adapter between openJiuwen's chat-completions interface and Backboard's thread API. Tool results continue the thread that issued them through `/threads/tool-outputs`, using a tool-call-to-thread mapping; a local `/llm/v1` shim exposes the compatible interface to the framework.
 
-That strict-JSON step is exactly where a 7B local model falls over and a hosted model does not — and it decides whether the agents produce any plan at all.
+The useful architectural feature is continuity across tool calls without changing the agent layer. Memory is explicitly disabled rather than used as hidden simulation state. The adapter has mocked unit tests; the documented live attempt was blocked by account credits, so we do not claim a completed live Backboard investigation.
 
-### Backboard — a real adapter, not a checkbox
+### MongoDB Atlas — durable experiment records
 
-Our agent framework only speaks `/v1/chat/completions`; Backboard speaks threads. So we wrote the translation properly: chat requests become threads, tool results continue the **same** thread via `/threads/tool-outputs`, a tool-call→thread map keeps multi-step tool use coherent, and a local `/llm/v1` shim lets openJiuwen's OpenAI client talk to Backboard unchanged.
+We implemented Atlas-backed storage for scenarios and demand, plans and validations, run status, evidence, and investigations. Related scenario/demand and plan/validation data are stored together so they cannot be partially persisted. Large city packs and replay artifacts remain on disk.
 
-Memory is off by design — every call is self-contained, exactly like a stateless completion, so a thread never becomes hidden state the simulation cannot see.
+The document model fits our nested Pydantic records well. We added document-size checks, duplicate-write protection, and an explicit offline JSON mode rather than silently switching storage when Atlas fails. Storage tests use an in-memory MongoDB mock, not the live database.
 
-### Cognition · Devin — the engineer on the delivery path
+### Cognition · Devin — engineering and delivery assistance
 
-Devin worked on this repository as an engineering teammate, taking the work that sits between "it runs on my machine" and "you can open it": the Vercel deployment and its SPA routing config, the God's Plan README and the architecture diagram in it, wiring the live domain, and filing the submission itself.
+We used Devin to inspect the codebase, run verification, configure and deploy the Vercel frontend, add SPA routing, prepare the architecture documentation, and update our Devpost submission. Devin also attached the custom domain to Vercel and checked its DNS configuration after the records were updated.
+
+The valuable part was moving between code, CLI tooling, and browser workflows while checking the result. A concrete example is the deployment path: the frontend was deployed, deep links were checked, and browser inspection exposed the missing backend connection rather than treating an HTTP 200 as proof that the whole simulator worked.
 
 ---
 
