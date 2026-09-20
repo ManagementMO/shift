@@ -53,6 +53,8 @@ const HALO_COLOR: RGB = [0.96, 0.54, 0.12]
 /** The hover ring is the same orange but thinner, so it reads as "can be opened" next to the selected halo. */
 const HOVER_COLOR: RGB = HALO_COLOR
 const HALO_RADIUS: Record<Kind, number> = { bus: 8.5, car: 3.6, person: 1.6, bicycle: 2.2, delivery: 4.2, truck: 6 }
+/** CPU picking follows the centre of the actual drawn body, including presentation scale and LOD. */
+const BODY_PICK_HEIGHT: Record<Kind, number> = { bus: 1.8, car: 0.7, person: 0.9, bicycle: 0.9, delivery: 1.2, truck: 1.6 }
 /** Hover ring radius as a fraction of the orbit radius, so it stays a few pixels wide from the city camera. */
 const HOVER_MIN_RADIUS = 0.006
 
@@ -198,7 +200,7 @@ class InstanceSet {
   }
 }
 
-type PresencePose = { id: string; kind: Kind; px: number; py: number; pz: number; yaw: number; seen: boolean }
+type PresencePose = { id: string; kind: Kind; px: number; py: number; pz: number; yaw: number; pickHeight: number; seen: boolean }
 
 function cargoSet(scene: Scene, name: string, width: number, height: number, length: number, shadows: ShadowGenerator | null): InstanceSet {
   return new InstanceSet(scene, name, (b) => {
@@ -220,6 +222,7 @@ interface Entity {
   px: number
   py: number
   pz: number
+  pickHeight: number
   seen: boolean
 }
 
@@ -357,10 +360,10 @@ export class Traffic {
       let e = this.liveEntities.get(meta.id)
       if (!e) {
         const color = kind === 'bus' ? BUS_RED : kind === 'car' ? CAR_PALETTE[Math.floor(hash01(meta.id) * CAR_PALETTE.length)] : STATE_RGB.walking
-        e = { id: meta.id, kind, color, yaw: 0, px: 0, py: 0, pz: 0, seen: false, speed, state, flags }
+        e = { id: meta.id, kind, color, yaw: 0, px: 0, py: 0, pz: 0, pickHeight: 0, seen: false, speed, state, flags }
         this.liveEntities.set(meta.id, e)
       }
-      e.px = x; e.pz = z; e.py = kind === 'person' ? Y.path : Y.road
+      e.px = x; e.pz = z; e.py = kind === 'person' ? this.pathY : Y.road
       e.yaw = heading * Math.PI / 180; e.seen = true; e.speed = speed; e.state = state; e.flags = flags
       const selected = e.id === this.selectedId
       const hovered = e.id === this.hoverId
@@ -371,6 +374,7 @@ export class Traffic {
         if (!selected && !hovered && (view.radius >= 900 || lodFor(Math.hypot(x - view.x, view.y, z - view.z), view.radius) === 'marker')) set = 'marker'
       }
       const scale = set === 'marker' ? scales.marker : scales[kind]
+      e.pickHeight = (set === 'marker' ? 1.6 : BODY_PICK_HEIGHT[kind]) * scale
       if (awareLevel(flags)) {
         alerted++
         color = alertTint(flags, color)
@@ -406,7 +410,7 @@ export class Traffic {
       counts[kind]++
       const color: RGB =
         kind === 'bus' ? BUS_RED : kind === 'car' ? CAR_PALETTE[Math.floor(hash01(id) * CAR_PALETTE.length)] : STATE_COLORS.walking.map((v) => v / 255) as RGB
-      this.entities.push({ id, ix, kind, color, yaw: 0, px: 0, py: 0, pz: 0, seen: false })
+      this.entities.push({ id, ix, kind, color, yaw: 0, px: 0, py: 0, pz: 0, pickHeight: 0, seen: false })
     }
     this.sets.bus.reserve(counts.bus)
     this.sets.car.reserve(counts.car)
@@ -481,6 +485,7 @@ export class Traffic {
         if (!isSel && !isHov && lodFor(d, view.radius) === 'marker') set = 'marker'
       }
       const scale = set === 'marker' ? scales.marker : scales[e.kind]
+      e.pickHeight = (set === 'marker' ? 1.6 : BODY_PICK_HEIGHT[e.kind]) * scale
       if (isSel) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, HALO_RADIUS[e.kind] * scale)
       else if (isHov) this.sets.hover.set(n.hover++, x, Y.junction + 0.12, z, 0, HOVER_COLOR, Math.max(HALO_RADIUS[e.kind] * scale * 1.25, view.radius * HOVER_MIN_RADIUS))
       else if (dim && rx.bundle.run.run_kind !== 'population') color = mix(color, PALETTE.pavement, 0.72)
@@ -490,11 +495,14 @@ export class Traffic {
     if (rx.population) for (const presence of stationaryPresenceAt(rx.population, t)) {
       const [x, z] = this.frame.lonLatToWorld(presence.lon, presence.lat)
       const isSel = presence.id === sel
-      let color = trafficColorAt(rx, presence.id, t, [0.5, 0.5, 0.5])
-      if (isSel) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, 3.3)
-      else if (dim && rx.bundle.run.run_kind !== 'population') color = mix(color, PALETTE.pavement, 0.72)
-      this.sets.presence.set(n.presence++, x, Y.path, z, 0, color)
-      this.abstractPoses.push({ id: presence.id, kind: 'person', px: x, py: Y.path, pz: z, yaw: 0, seen: true })
+      const isHov = presence.id === hov && !isSel
+      const color = trafficColorAt(rx, presence.id, t, [0.5, 0.5, 0.5])
+      const scale = scales.person
+      const haloY = Math.max(this.pathY, Y.junction) + 0.12
+      if (isSel) this.sets.halo.set(n.halo++, x, haloY, z, 0, HALO_COLOR, 3.3 * scale)
+      else if (isHov) this.sets.hover.set(n.hover++, x, haloY, z, 0, HOVER_COLOR, Math.max(3.3 * scale, view.radius * HOVER_MIN_RADIUS))
+      this.sets.presence.set(n.presence++, x, this.pathY, z, 0, color, scale)
+      this.abstractPoses.push({ id: presence.id, kind: 'person', px: x, py: this.pathY, pz: z, yaw: 0, pickHeight: 0.08 * scale, seen: true })
     }
     const live = activeReleases(this.releases, t)
     this.sets.pulse.reserve(live.length)
@@ -529,7 +537,7 @@ export class Traffic {
     let bestD = tol * tol
     for (const e of this.live ? this.liveEntities.values() : [...this.entities, ...this.abstractPoses]) {
       if (!e.seen) continue
-      const p = project(e.px, e.py + (e.kind === 'bus' ? 1.8 : e.kind === 'car' ? 0.7 : 0.9) * (e.kind === 'person' ? this.agentScale : vehicleScale(this.agentScale)), e.pz)
+      const p = project(e.px, e.py + e.pickHeight, e.pz)
       const d = (p.x - sx) * (p.x - sx) + (p.y - sy) * (p.y - sy)
       if (d < bestD) {
         bestD = d
