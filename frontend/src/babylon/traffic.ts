@@ -11,7 +11,7 @@ import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import type { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator'
 import type { Scene } from '@babylonjs/core/scene'
 
-import { personStateAt, STATE_COLORS, type PersonState, type ReplayIndex, type TrackIndex } from '../replay'
+import { MAX_GAP_S, personStateAt, STATE_COLORS, type PersonState, type ReplayIndex, type TrackIndex } from '../replay'
 import { NEUTRAL_BRAIN_COLOR, populationColorAt, populationTrackVisible, stationaryPresenceAt } from '../population'
 import type { EntityTrack } from '../types'
 import { awareLevel, FLAG_FRESH } from '../live/flags'
@@ -217,8 +217,9 @@ interface Entity {
   ix: TrackIndex
   kind: Kind
   color: RGB
+  headings: number[] | null
   yaw: number
-  /** last world position, used for pedestrian heading (SUMO reports angle 0 for persons) */
+  /** Last drawn world position, used for picking and following. */
   px: number
   py: number
   pz: number
@@ -226,8 +227,23 @@ interface Entity {
   seen: boolean
 }
 
-type LiveEntity = Omit<Entity, 'ix'> & { speed: number; state: number; flags: number }
+type LiveEntity = Omit<Entity, 'ix' | 'headings'> & { speed: number; state: number; flags: number }
 const LIVE_STATES: PersonState[] = ['not_departed', 'walking', 'waiting', 'riding', 'driving', 'arrived', 'unroutable']
+
+/** SUMO persons often report angle zero. Use recorded travel, independent of playback/seek direction. */
+function pedestrianHeadings(ix: TrackIndex, frame: WorldFrame): number[] {
+  let yaw = 0
+  return ix.track.samples.map((sample, i, samples) => {
+    if (i === 0 || ix.breakSet.has(i) || sample[0] - samples[i - 1][0] > MAX_GAP_S) yaw = sample[3] * Math.PI / 180
+    const next = samples[i + 1]
+    if (next && !ix.breakSet.has(i + 1) && next[0] > sample[0] && next[0] - sample[0] <= MAX_GAP_S) {
+      const [x, z] = frame.lonLatToWorld(sample[1], sample[2])
+      const [nx, nz] = frame.lonLatToWorld(next[1], next[2])
+      if ((nx - x) ** 2 + (nz - z) ** 2 > 0.01) yaw = Math.atan2(nx - x, nz - z)
+    }
+    return yaw
+  })
+}
 
 export interface Picked {
   kind: Kind
@@ -410,7 +426,7 @@ export class Traffic {
       counts[kind]++
       const color: RGB =
         kind === 'bus' ? BUS_RED : kind === 'car' ? CAR_PALETTE[Math.floor(hash01(id) * CAR_PALETTE.length)] : STATE_COLORS.walking.map((v) => v / 255) as RGB
-      this.entities.push({ id, ix, kind, color, yaw: 0, px: 0, py: 0, pz: 0, pickHeight: 0, seen: false })
+      this.entities.push({ id, ix, kind, color, headings: kind === 'person' ? pedestrianHeadings(ix, this.frame) : null, yaw: 0, px: 0, py: 0, pz: 0, pickHeight: 0, seen: false })
     }
     this.sets.bus.reserve(counts.bus)
     this.sets.car.reserve(counts.car)
@@ -462,16 +478,7 @@ export class Traffic {
         color = stateColor(state)
       }
       const [x, z] = this.frame.lonLatToWorld(r.lon, r.lat)
-      if (e.kind === 'person') {
-        // SUMO reports angle 0 for pedestrians: face the direction of measured travel, keep facing when still.
-        if (e.seen) {
-          const dx = x - e.px
-          const dz = z - e.pz
-          if (dx * dx + dz * dz > 0.01) e.yaw = Math.atan2(dx, dz)
-        }
-      } else {
-        e.yaw = (r.angle * Math.PI) / 180
-      }
+      e.yaw = e.headings?.[r.i] ?? (r.angle * Math.PI) / 180
       e.px = x
       e.py = y
       e.pz = z

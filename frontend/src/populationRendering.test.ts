@@ -188,6 +188,31 @@ describe('population render paths', () => {
     } finally { traffic.dispose(); scene.dispose(); engine.dispose() }
   })
 
+  it('keeps pedestrian heading deterministic when scrubbing backwards and never faces across a track break', () => {
+    const engine = new NullEngine(), scene = new Scene(engine)
+    const traffic = new Traffic(scene, frame, null)
+    const data = bundle()
+    const track = data.tracks['bike-body']
+    track.kind = 'person'
+    track.samples = [[10, -79.38, 43.64, 0, 1], [11, -79.379, 43.64, 0, 1], [12, -79.379, 43.641, 0, 0], [20, -79.37, 43.65, 0, 0]]
+    track.breaks = [3]
+    try {
+      traffic.setReplay(buildIndex(data))
+      traffic.update(10.25, near)
+      const east = traffic.poseOf('bike-body')!.yaw
+      expect(east).toBeCloseTo(Math.PI / 2, 1)
+      traffic.update(11.25, near)
+      const north = traffic.poseOf('bike-body')!.yaw
+      expect(north).toBeCloseTo(0, 1)
+      traffic.update(10.25, near)
+      expect(traffic.poseOf('bike-body')!.yaw).toBe(east)
+      traffic.update(12.25, near)
+      expect(traffic.poseOf('bike-body')!.yaw).toBe(north)
+      traffic.update(20, near)
+      expect(traffic.poseOf('bike-body')!.yaw).toBe(0)
+    } finally { traffic.dispose(); scene.dispose(); engine.dispose() }
+  })
+
   it('accepts explicit bicycle/delivery/truck road permissions without aliasing to car', () => {
     const road = (id: string, mode: WorldRoad['allow'][number]): WorldRoad => ({ id, allow: [mode], shape: [0, 0, 100, 0], w: 3, type: 'road', kind: 'road', prio: 1, speed: 10, from: 'a', to: 'b' })
     const roads = [road('bike', 'bicycle'), road('van', 'delivery'), road('heavy', 'truck')]
