@@ -21,6 +21,7 @@ import { citizenName, intensityPower, powerIntensity } from './data'
 import { useGodVisuals } from './state'
 import type { Hazard } from '../live/types'
 import { AGENT_DEMO_LOCKED, AGENT_UNAVAILABLE_MESSAGE } from './demo'
+import { cityCommand } from './commands'
 import type { GodEventDraft, GodEventKind, GodEventStatus, GodTab, GodTool, GodCitizen } from './model'
 import './city.css'
 
@@ -65,6 +66,7 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
   const fresh = crowd ?? { travelers: session?.config.initial_population ?? DEFAULT_LIVE_CONFIG.initial_population, buses: session?.config.fleet_size ?? DEFAULT_LIVE_CONFIG.fleet_size }
   const scope = `${pack?.pack_id ?? ''}:${session?.session_id ?? ''}`
   useEffect(() => { useGodVisuals.getState().setScope(scope) }, [scope])
+  useEffect(() => { world?.plane.clear() }, [world, scope, active])
   useEffect(() => {
     if (!active) return
     const before = document.title
@@ -88,7 +90,7 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
   const open = (next: Panel) => { cancel(); useStore.getState().select(null); useStore.getState().setTool(null); setNotice(null); setPanel(next) }
   const openTool = (next: ToolId) => { cancel(); useStore.getState().select(null); useStore.getState().setTool(next); setPanel('tools'); setNotice(null) }
   const selectEvent = (kind: GodEventKind) => {
-    if (kind === 'normal') { useGodVisuals.getState().clear(); close(); return }
+    if (kind === 'normal') { useGodVisuals.getState().clear(); world?.plane.clear(); close(); return }
     // road closures and developments are live city tools, reached from the Events menu
     if (kind === 'closure') { openTool('closure'); return }
     if (kind === 'development') { openTool('development'); return }
@@ -96,17 +98,18 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
   }
   const commandAction = (text: string) => {
     setCommand(text)
-    if (AGENT_DEMO_LOCKED && /\b(ai|agents?|swarms?|evacuat\w*|rescue|police|responders?|dispatch|patrol|secure|protect|guide|message)\b/i.test(text)) open('agents')
-    else if (/tornado/i.test(text)) selectEvent('tornado')
-    else if (/storm|lightning|thunder/i.test(text)) selectEvent('storm')
-    else if (/rain|downpour/i.test(text)) selectEvent('rain')
-    else if (/flood/i.test(text)) selectEvent('flood')
-    else if (/fire|blaze/i.test(text)) selectEvent('wildfire')
-    else if (/weather|temperature|cold|heat/i.test(text)) openTool('temperature')
-    else if (/population|people|crowd/i.test(text)) openTool('population')
-    else if (/build|apartment|park|office|development/i.test(text)) openTool('development')
-    else if (/road|close|traffic|bus|transit|gardiner/i.test(text)) openTool('closure')
-    else if (AGENT_DEMO_LOCKED) open('agents')
+    const action = cityCommand(text, AGENT_DEMO_LOCKED)
+    if (action === 'plane') {
+      if (!world) { setNotice('Wait for the city to finish loading, then send the plane again.'); return }
+      close()
+      display.set({ shadows: true })
+      const pose = world.plane.start(world.camera.pose, world.engine.getAspectRatio(world.camera.cam))
+      useStore.getState().setCameraMode('city')
+      world.camera.flyTo(pose, 900, 'city')
+      setNotice(null)
+    } else if (action === 'agents') open('agents')
+    else if (action === 'tornado' || action === 'storm' || action === 'rain' || action === 'flood' || action === 'wildfire') selectEvent(action)
+    else if (action !== 'unsupported') openTool(action)
     else setNotice('Choose a city tool to configure and apply this change. Free-form group objectives are not connected yet.')
   }
   const onTab = (tab: GodTab) => open(tab === 'live' ? 'none' : tab)
