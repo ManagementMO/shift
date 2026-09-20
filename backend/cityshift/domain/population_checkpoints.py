@@ -19,7 +19,8 @@ CHECKPOINT_VERSION = "population-checkpoint-1"
 CHECKPOINT_ID = re.compile(r"cp_[a-f0-9]{32}\Z")
 RULE_FILES = (
     "contracts.py", "domain/population.py", "domain/society.py", "domain/population_checkpoint_state.py",
-    "domain/population_checkpoints.py", "domain/population_runs.py",
+    "domain/population_checkpoints.py", "domain/population_runs.py", "domain/population_stimuli.py",
+    "domain/population_admission.py",
     "agents/population_baseline.py", "agents/population_client.py", "agents/population_bridge.py", "transport/population.py",
 )
 

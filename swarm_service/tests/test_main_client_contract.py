@@ -5,11 +5,14 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from cityshift_swarm.contracts import ResidentDecision
+from cityshift_swarm.contracts import MAX_RESIDENTS, ResidentDecision, RunRequest
 
 
 @pytest.mark.parametrize("tokens", [1_000_001, 20_000_000])
-def test_actual_main_client_transmits_exact_declared_budget_to_local_admission_double(tmp_path, monkeypatch, tokens):
+@pytest.mark.parametrize("count", [5, 100])
+def test_actual_main_client_transmits_exact_declared_budget_to_local_admission_double(
+    tmp_path, monkeypatch, tokens, count,
+):
     monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "backend"))
     from cityshift.agents import population_client
@@ -18,13 +21,13 @@ def test_actual_main_client_transmits_exact_declared_budget_to_local_admission_d
     brain = BrainAssignment(model_family="test-double", model_id="test-local-model", api_provider="local",
                             config_ref="local-wire-contract-test", control_mode="jiuwenswarm")
     population = SimpleNamespace(
-        spec=PopulationSpec(count=5, brains=[brain], budget=PopulationBudget(max_tokens=tokens, max_iterations=6)),
+        spec=PopulationSpec(count=count, brains=[brain], budget=PopulationBudget(max_tokens=tokens, max_iterations=6)),
         profiles=[ResidentProfile(resident_id=f"test-resident-{index}", name="Synthetic resident",
                                   persona="Local admission-double fixture.", roles=["customer"], preferences={},
                                   home_anchor_id="test-home", household_id="test-household",
                                   available_classes=["pedestrian"])
-                  for index in range(5)],
-        assignments={f"test-resident-{index}": brain for index in range(5)},
+                  for index in range(count)],
+        assignments={f"test-resident-{index}": brain for index in range(count)},
     )
     project = tmp_path / "local-client-fixture"
     python = project / ".venv" / "bin" / "python"
@@ -54,9 +57,10 @@ def test_actual_main_client_transmits_exact_declared_budget_to_local_admission_d
     def local_admission_double(request):
         assert request.url.host == "127.0.0.1"
         if request.url.path == "/health":
-            return httpx.Response(200, json={"verified": True, "native_available": True, "max_residents": 20,
+            return httpx.Response(200, json={"verified": True, "native_available": True, "max_residents": MAX_RESIDENTS,
                                             "test_double": True, "model_execution_verified": False})
         if request.url.path == "/runs":
+            assert len(RunRequest.model_validate_json(request.content).residents) == count
             admitted.append(json.loads(request.content))
             return httpx.Response(201, json={"run_id": "local-wire-test", "generation": 0})
         assert request.url.path == "/runs/local-wire-test/stop"

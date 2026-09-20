@@ -22,6 +22,7 @@ from cityshift_swarm.checkpointing import (
     verify_complete_native_journal,
 )
 from cityshift_swarm.contracts import (
+    MAX_RESIDENTS,
     CheckpointBoundary,
     CheckpointResponse,
     DecisionRequest,
@@ -142,7 +143,7 @@ class NativeHost:
             "workflow_sha256": hashlib.sha256(WORKFLOW_PATH.read_bytes()).hexdigest(),
             "model_execution_verified": False,
             "max_active_runs": 1,
-            "max_residents": 20,
+            "max_residents": MAX_RESIDENTS,
             "tls_verification": True,
             "restart_policy": "sealed_coordinated_checkpoint_only",
             "resident_context": {

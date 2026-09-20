@@ -100,9 +100,16 @@ const metrics = shape({
   outstanding_needs: num, outstanding_commitments: num, accepted_actions: num, rejected_actions: num, decision_source_counts: dict(num), memory_entries: num, delivered_messages: num,
   completed_trips: num, failed_trips: num, calls: num, tokens: num, cost_usd: num, reserved_cost_usd: num, artifact_bytes: num, wall_time_s: num, warnings: strings,
 })
+const stimulus = shape({
+  stimulus_id: pattern(/^[a-zA-Z0-9_.:-]+$/), kind: enumeration('incident', 'temperature', 'announcement'), text,
+  lon: optional(nullable(number(-180, 180))), lat: optional(nullable(number(-90, 90))), radius_m: optional(nullable(number(1, 5000))),
+  hazard: optional(nullable(enumeration('crash', 'fire', 'flood', 'tornado', 'gas_leak', 'rain', 'storm'))),
+  temperature_c: optional(nullable(number(-100, 100))), duration_s: number(30, 14400, true),
+})
 const artifact = shape({
   version: enumeration('population-1'), run_id: text, attempt_id: text, definition, states: list(shape({ t: uint, state })), tasks: list(shape({ t: uint, task })),
   decisions: list(decision), messages: list(message), events: list(event), mobility_bindings: list(mobility), swarm_bindings: list(swarm), metrics,
+  stimuli: optional(list(shape({ stimulus, applied_s: uint, resident_ids: strings }))),
 })
 
 function checkDefinition(d: PopulationDefinition): void {
@@ -153,8 +160,9 @@ export function parsePopulationArtifact(value: unknown): PopulationArtifact {
 export function parsePopulationStatus(value: unknown): PopulationStatus {
   shape({
     available: bool, reason: optionalText, models: list(brain),
-    budget: shape({ session_limit_microdollars: uint, accounted_microdollars: optional(uint), remaining_microdollars: optional(uint), request_count: optional(uint), blocked: bool }),
+    budget: shape({ session_limit_microdollars: nullable(uint), accounted_microdollars: optional(uint), remaining_microdollars: optional(uint), request_count: optional(uint), blocked: bool }),
     native_proof_required: optional(bool), initial_scale_gate: optional(positive),
+    admission: optional(shape({ request_reservation_microdollars: dict(uint), max_output_tokens: positive })),
   })(value, 'population status')
   return value as PopulationStatus
 }

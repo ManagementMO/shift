@@ -16,6 +16,7 @@ import type {
   PopulationArtifact,
   PopulationPauseResponse,
   PopulationSpec,
+  PopulationStimulus,
   RunBundle,
   ScenarioSpec,
   ServicePlan,
@@ -65,7 +66,17 @@ export const api = {
   populationStatus: async () => parsePopulationStatus(await get<unknown>('/api/population/status', true)),
   createPopulation: (spec: PopulationSpec) => post<ScenarioSpec>('/api/population/scenarios', spec),
   populationDefinition: async (id: string) => parsePopulationDefinition(await get<unknown>(`/api/population/scenarios/${encodeURIComponent(id)}`)),
-  submitPopulationRun: (population_id: string, idempotency_key: string) => post<SimulationRun>('/api/population/runs', { population_id, idempotency_key }),
+  submitPopulationRun: (population_id: string, idempotency_key: string, stimuli: PopulationStimulus[] = []) => post<SimulationRun>('/api/population/runs', { population_id, idempotency_key, stimuli }),
+  sendPopulationStimulus: (rid: string, stimulus: PopulationStimulus) => post<unknown>(`/api/population/runs/${encodeURIComponent(rid)}/stimuli`, stimulus),
+  async populationSnapshot(run: SimulationRun): Promise<RunBundle | null> {
+    const response = await fetch(`${BASE}/api/population/runs/${encodeURIComponent(run.run_id)}/snapshot`, { cache: 'no-store' })
+    if (response.status === 404) return null
+    if (!response.ok) throw new Error(`Resident snapshot: ${response.status}`)
+    const bundle = await response.json() as RunBundle
+    bundle.population = parsePopulationArtifact(bundle.population)
+    if (bundle.run.run_id !== run.run_id || bundle.population.run_id !== run.run_id || bundle.population.definition.population_id !== run.population_id) throw new Error('Resident snapshot identity mismatch')
+    return bundle
+  },
   pausePopulationRun: (rid: string) => post<PopulationPauseResponse>(`/api/population/runs/${encodeURIComponent(rid)}/pause`, {}),
   resumePopulationRun: (rid: string) => post<SimulationRun>(`/api/population/runs/${encodeURIComponent(rid)}/resume`, {}),
   health: () => get<Health>('/api/health'),

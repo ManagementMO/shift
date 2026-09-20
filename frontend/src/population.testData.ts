@@ -4,7 +4,7 @@ export const claude: BrainAssignment = { model_family: 'Claude', model_id: 'clau
 export const openai: BrainAssignment = { ...claude, model_family: 'OpenAI', model_id: 'gpt-test', config_ref: 'openai' }
 
 export function populationStatus(): PopulationStatus {
-  return { available: true, reason: null, models: [claude, openai], budget: { session_limit_microdollars: 20000000, accounted_microdollars: 0, remaining_microdollars: 20000000, request_count: 0, blocked: false }, native_proof_required: true, initial_scale_gate: 20 }
+  return { available: true, reason: null, models: [claude, openai], budget: { session_limit_microdollars: null, accounted_microdollars: 0, remaining_microdollars: 40000000, request_count: 0, blocked: false }, native_proof_required: true, initial_scale_gate: 100 }
 }
 
 export function residentState(id = 'r1', extra: Partial<ResidentState> = {}): ResidentState {

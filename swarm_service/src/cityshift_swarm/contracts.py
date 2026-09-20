@@ -5,6 +5,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+MAX_RESIDENTS = 100
+
 Identifier = Annotated[str, Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")]
 TravelClass = Literal["pedestrian", "bicycle", "passenger", "delivery", "truck"]
 PopulationAction = Literal[
@@ -122,7 +124,7 @@ class CheckpointResponse(CheckpointBoundary):
 
 class RunRequest(Contract):
     run_id: Identifier
-    residents: list[Resident] = Field(min_length=1, max_length=20)
+    residents: list[Resident] = Field(min_length=1, max_length=MAX_RESIDENTS)
     models: list[ModelEndpoint] = Field(min_length=1, max_length=8)
     budget: Budget
     city_bridge_url: str = Field(min_length=1, max_length=300)

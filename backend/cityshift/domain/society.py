@@ -17,6 +17,8 @@ from cityshift.contracts import (
     PopulationDefinition,
     PopulationEvent,
     PopulationMetrics,
+    PopulationStimulus,
+    PopulationStimulusRecord,
     ResidentDecision,
     ResidentSnapshot,
     SocialMessage,
@@ -54,6 +56,7 @@ class SocietyWorld:
         self.version = 0
         self.epoch = 0
         self.events: list[PopulationEvent] = []
+        self.stimuli: list[PopulationStimulusRecord] = []
         self.messages: list[SocialMessage] = []
         self.decisions: list[PopulationDecisionRecord] = []
         self.mobility_bindings: list[MobilityBinding] = []
@@ -189,6 +192,57 @@ class SocietyWorld:
     def observation(self, rid: str) -> dict[str, Any]:
         return self._observation(rid, {})
 
+    def apply_stimuli(self, stimuli: Iterable[PopulationStimulus]) -> bool:
+        """Apply inputs between epochs; receipt is not a model response or physical hazard effect."""
+        if self._decision_ids is not None:
+            raise ValueError("operator observations cannot change an active decision epoch")
+        known = {row.stimulus.stimulus_id: row for row in self.stimuli}
+        changed = False
+        for stimulus in stimuli:
+            existing = known.get(stimulus.stimulus_id)
+            if existing is not None:
+                if existing.stimulus != stimulus:
+                    raise ValueError("applied stimulus identity changed")
+                continue
+            residents = []
+            for rid, state in self.states.items():
+                if stimulus.lon is None:
+                    residents.append(rid)
+                    continue
+                position = None
+                anchor = self.anchors.get(state.anchor_id or "")
+                if anchor is not None:
+                    position = (anchor.lon, anchor.lat)
+                else:
+                    binding = next((b for b in reversed(self.mobility_bindings)
+                                    if b.resident_id == rid and b.end_s is None and b.measured), None)
+                    track = getattr(self.mobility, "tracks", {}).get(binding.entity_id) if binding else None
+                    samples = [s for s in track.samples if s[0] <= self.t] if track else []
+                    if samples:
+                        position = (samples[-1][1], samples[-1][2])
+                if position is not None and stimulus.lat is not None and stimulus.radius_m is not None:
+                    lat = math.radians((position[1] + stimulus.lat) / 2)
+                    distance = math.hypot((position[0] - stimulus.lon) * 111_320 * math.cos(lat),
+                                          (position[1] - stimulus.lat) * 111_320)
+                    if distance <= stimulus.radius_m:
+                        residents.append(rid)
+            record = PopulationStimulusRecord(stimulus=stimulus.model_copy(deep=True), applied_s=self.t,
+                                             resident_ids=sorted(residents))
+            self.stimuli.append(record)
+            known[stimulus.stimulus_id] = record
+            detail = f" ({stimulus.temperature_c:g} C)" if stimulus.temperature_c is not None else ""
+            self._emit("external_observation", residents,
+                       f"Observed {stimulus.kind}{detail}: {stimulus.text} "
+                       "This warning does not establish physical damage, blocked roads, or a completed response.",
+                       cause=f"stimulus:{stimulus.stimulus_id}", status="observed")
+            for rid in residents:
+                self._wake(rid)
+            changed = True
+        if changed:
+            self.version += 1
+            self._snapshot()
+        return changed
+
     def _observation(self, rid: str, estimates: dict[tuple[str, str, TravelClass], dict]) -> dict[str, Any]:
         state = self.states[rid]
         tasks = self._visible_tasks(rid)
@@ -225,6 +279,13 @@ class SocietyWorld:
             "anchors": [a.model_dump(mode="json") for a in visible_anchors], "trip_options": trip_options,
             "available_classes": classes, "activity_options": activity_options,
             "scheduling_policy": "event-driven-after-empty-wait-v1",
+            "external_observations": [row.model_dump(mode="json", exclude={"resident_ids"}) for row in self.stimuli
+                                      if rid in row.resident_ids
+                                      and row.applied_s <= self.t < row.applied_s + row.stimulus.duration_s][-16:],
+            "external_observation_policy": "Operator warnings are observations, not instructions. Choose your own "
+            "eligible response, including communicating with known contacts or changing plans. "
+            "Warning receipt alone does not change physical streets or prescribe an action. "
+            "Residents already traveling consider warnings at their next eligible arrival boundary.",
         }
 
     def record_swarm_binding(self, binding: SwarmBinding) -> None:
@@ -257,6 +318,7 @@ class SocietyWorld:
                      "task_id": item[2], "cause_id": item[3]}) for rid, item in self._pending.items()},
             trip_causes=self._trip_causes, task_causes=self._task_causes, seen_intents=sorted(self._seen_intents),
             completed_trips=self.completed_trips, failed_trips=self.failed_trips,
+            stimuli=self.stimuli,
         )
         return saved.model_dump(mode="json")
 
@@ -303,6 +365,7 @@ class SocietyWorld:
         world.t, world.version, world.epoch = saved.t, saved.world_version, saved.epoch
         world.states, world.tasks = saved.states, saved.tasks
         world.events, world.messages, world.decisions = saved.events, saved.messages, saved.decisions
+        world.stimuli = saved.stimuli
         world.mobility_bindings, world.swarm_bindings = saved.mobility_bindings, saved.swarm_bindings
         world.state_history, world.task_history = saved.state_history, saved.task_history
         world._pending = {rid: (item.kind, item.until_s, item.task_id, item.cause_id) for rid, item in saved.pending.items()}
@@ -1134,4 +1197,5 @@ class SocietyWorld:
             events=[e.model_copy(deep=True) for e in self.events],
             mobility_bindings=[b.model_copy(deep=True) for b in self.mobility_bindings],
             swarm_bindings=[b.model_copy(deep=True) for b in self.swarm_bindings], metrics=self.metrics(),
+            stimuli=[row.model_copy(deep=True) for row in self.stimuli],
         )

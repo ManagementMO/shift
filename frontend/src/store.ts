@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { api } from './api'
 import { DEFAULT_HORIZON_S, developmentError as validateDevelopment, developmentKind, developmentPreset, validDevelopmentGeometry } from './development'
-import { enterCity, live } from './live/session'
+import { live } from './live/session'
 import { createPopulationSlice, type PopulationState } from './populationState'
 import { selectionForEntity } from './selection'
 import { clock } from './world/playback'
@@ -129,7 +129,7 @@ export const useStore = create<State>((set, get, store) => ({
       if (request !== packSelectionRequest) return
       set(loaded)
       performance.mark('boot:pack')
-      await enterCity(packId)
+      await get().enterNativePopulation(packId)
       performance.mark('boot:city')
     } catch (e) {
       if (request === packSelectionRequest) set({ error: String(e) })
@@ -144,7 +144,7 @@ export const useStore = create<State>((set, get, store) => ({
       if (request !== packSelectionRequest) return
       set({ ...loaded, selection: null, ghost: null, tool: null, cameraMode: 'city', picking: false, error: null, pendingDevelopmentFocus: null, ...EMPTY_DEVELOPMENT })
       cameraTo(cityPose(loaded.pack.pack_id, loaded.pack.center), 'city')
-      await enterCity(packId)
+      await get().enterNativePopulation(packId)
     } catch (e) {
       if (request === packSelectionRequest) set({ error: String(e) })
     }

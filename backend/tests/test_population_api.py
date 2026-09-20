@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -128,3 +129,33 @@ def test_brain_family_cannot_mislabel_a_reviewed_model(api_world):
     response = client.post("/api/population/scenarios", json=spec)
     assert response.status_code == 422
     assert "family/provider" in response.json()["detail"]
+
+
+def test_status_refreshes_provider_balance_before_admission_and_exposes_100_resident_limit(api_world, monkeypatch):
+    from cityshift.api import population_service
+
+    _, service = api_world
+    state = {"ready": False}
+
+    class ProviderBudgetGateway:
+        def readiness(self):
+            return state
+
+        async def preflight(self):
+            state["ready"] = True
+
+        def usage(self):
+            assert state["ready"], "Do not use an unverified replacement key's balance"
+            return {"session_limit_microdollars": None, "accounted_microdollars": 19_173_669,
+                    "remaining_microdollars": 40_000_000, "request_count": 1116, "blocked": False}
+
+    monkeypatch.setattr(population_service, "population_provider_config",
+                        lambda: SimpleNamespace(enabled=True, api_key="local-test-double"))
+    monkeypatch.setattr(population_service.NativePopulationClient, "installed", lambda: True)
+    monkeypatch.setattr(population_service, "get_population_gateway", ProviderBudgetGateway)
+    status = service.status()
+    assert status["available"], status["reason"]
+    assert status["initial_scale_gate"] == 100
+    assert status["budget"]["session_limit_microdollars"] is None
+    assert status["budget"]["accounted_microdollars"] == 19_173_669
+    assert status["budget"]["remaining_microdollars"] == 40_000_000

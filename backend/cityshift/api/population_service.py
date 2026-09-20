@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import secrets
 import tempfile
 import threading
 from pathlib import Path
+from typing import Any
 
 from cityshift.agents.population_bridge import ScopedCityBridge
 from cityshift.agents.population_client import NativePopulationClient, SwarmUnavailable
@@ -16,13 +18,16 @@ from cityshift.contracts import (
     DemandSet,
     PopulationDefinition,
     PopulationSpec,
+    PopulationStimulus,
     RunStatus,
     ScenarioSpec,
     SimulationRun,
 )
 from cityshift.domain.population import district_anchors, generate_population
+from cityshift.domain.population_admission import admission_quotes
 from cityshift.domain.population_checkpoints import load_checkpoint
 from cityshift.domain.population_runs import execute_population_run, population_run_id
+from cityshift.domain.population_stimuli import enqueue_stimuli, read_stimuli
 from cityshift.domain.runs import RUN_ROOT
 from cityshift.providers import POPULATION_MODELS, population_provider_config
 from cityshift.transport.population import PopulationMobility
@@ -68,23 +73,41 @@ class PopulationService:
             reason = "The pinned isolated JiuwenSwarm environment is not installed."
         elif not configured:
             reason = "Configure OPENROUTER_API_KEY and enable CITYSHIFT_POPULATION_LIVE=1, then restart the backend."
-        budget = {"session_limit_microdollars": 20_000_000, "blocked": True}
+        budget: dict[str, Any] = {"session_limit_microdollars": None, "blocked": True}
         try:
             gateway = get_population_gateway()
+            # Provider-capped mode needs a current key balance before admission.
+            if installed and configured and not gateway.readiness()["ready"]:
+                asyncio.run(gateway.preflight())
             raw_budget = gateway.usage()
             budget = {key: raw_budget[key] for key in (
                 "session_limit_microdollars", "accounted_microdollars", "remaining_microdollars", "request_count", "blocked",
             )}
             if budget["blocked"] or budget["remaining_microdollars"] <= 0:
-                reason = "The persistent session inference budget is blocked or exhausted."
-            elif installed and configured and not gateway.readiness()["ready"]:
-                asyncio.run(gateway.preflight())
+                reason = "The inference budget is blocked or exhausted."
         except GatewayError as exc:
             reason = str(exc)
         models = [BrainAssignment(model_family=model.family, model_id=model.model_id, api_provider="openrouter",
                                   config_ref=model.family).model_dump(mode="json") for model in POPULATION_MODELS.values()]
+        quotes = admission_quotes(list(POPULATION_MODELS), 1024)
+        if reason is None and min(quotes.values()) > budget.get("remaining_microdollars", 0):
+            reason = (f"Remaining inference budget cannot reserve one reviewed model request "
+                      f"(minimum ${min(quotes.values()) / 1_000_000:.4f}). No inference was started.")
         return {"available": reason is None, "reason": reason, "models": models, "budget": budget,
-                "native_proof_required": True, "initial_scale_gate": 20}
+                "native_proof_required": True, "initial_scale_gate": 100,
+                "admission": {"request_reservation_microdollars": quotes, "max_output_tokens": 1024}}
+
+    @staticmethod
+    def check_admission(population: PopulationDefinition, status: dict) -> None:
+        limit = min(int(population.spec.budget.max_cost_usd * 1_000_000),
+                    status.get("budget", {}).get("remaining_microdollars", 0))
+        models = sorted({brain.model_id for brain in population.assignments.values()})
+        quotes = admission_quotes(models, population.spec.budget.max_output_tokens)
+        for model_id, quote in quotes.items():
+            if quote > limit:
+                raise SwarmUnavailable(f"{model_id} requires a ${quote / 1_000_000:.4f} reservation per request; "
+                                       f"the available run/inference cap is ${limit / 1_000_000:.4f}. "
+                                       "Select an affordable reviewed model or reduce its output cap. No inference was started.")
 
     def create(self, spec: PopulationSpec) -> ScenarioSpec:
         for brain in spec.brains:
@@ -112,8 +135,9 @@ class PopulationService:
             scenario_kind="population", population_id=population.population_id,
             constraints=ConstraintSet(fleet=[], horizon_s=spec.horizon_s, service_window_s=(0, spec.horizon_s),
                                       allowed_stop_ids=[], hard_max_fleet=0),
-            label=f"Toronto working society · {spec.count} persistent residents" if spec.pack_id == "toronto"
-            else f"{pack.name} working society · {spec.count} persistent residents",
+            label=(f"{'Toronto' if spec.pack_id == 'toronto' else pack.name} working society · "
+                   f"{spec.count} persistent residents · "
+                   f"{', '.join(dict.fromkeys(brain.model_family for brain in spec.brains))} · seed {spec.seed}"),
         )
         with self.owner.lock:
             self.owner.store.put_population(population)
@@ -132,28 +156,77 @@ class PopulationService:
             raise KeyError(population_id)
         return population
 
-    def submit(self, population_id: str, idempotency_key: str) -> SimulationRun:
+    def submit(self, population_id: str, idempotency_key: str,
+               stimuli: list[PopulationStimulus] | None = None) -> SimulationRun:
         population = self.population(population_id)
         pack = self.owner.pack(population.spec.pack_id)
         rid = population_run_id(population, idempotency_key)
         with self.owner.lock:
             existing = self.owner.store.get_run(rid)
             if existing is not None:
+                if stimuli:
+                    known = {row.stimulus_id: row for row in read_stimuli(RUN_ROOT, rid)}
+                    if any(known.get(row.stimulus_id) != row for row in stimuli):
+                        raise ValueError("existing run submission has different initial observations")
                 return existing
             if population.spec.brains[0].control_mode == "jiuwenswarm":
                 status = self.status()
                 if not status["available"]:
                     raise SwarmUnavailable(str(status["reason"]))
                 if population.spec.count > status["initial_scale_gate"]:
-                    raise SwarmUnavailable("The 12-resident native integration proof must pass before the scale gate is raised.")
+                    raise SwarmUnavailable(f"Native execution is limited to {status['initial_scale_gate']} residents.")
+                self.check_admission(population, status)
             run = SimulationRun(run_id=rid, scenario_id=population_id, population_id=population_id,
                                 run_kind="population", plan_id="service-ledger-v1", seed=population.spec.seed,
                                 status=RunStatus.queued)
+            if stimuli:
+                enqueue_stimuli(RUN_ROOT, rid, stimuli)
             self.owner.store.put_run(run)
             self.owner.cancel_flags[rid] = threading.Event()
             self.pause_flags[rid] = threading.Event()
         self._start_job(run, population, pack)
         return run
+
+    def queue_stimulus(self, run_id: str, stimulus: PopulationStimulus) -> dict:
+        with self.owner.lock:
+            run = self.owner.run(run_id)
+            if run.run_kind != "population" or run.status not in {RunStatus.queued, RunStatus.running, RunStatus.paused}:
+                raise ValueError("observations require a queued, running, or checkpoint-paused population run")
+            enqueue_stimuli(RUN_ROOT, run_id, [stimulus])
+        return {"run_id": run_id, "stimulus_id": stimulus.stimulus_id, "status": "queued",
+                "note": "Applied at the next execution boundary; paused runs require explicit Resume."}
+
+    def stimuli(self, run_id: str) -> dict:
+        run = self.owner.run(run_id)
+        if run.run_kind != "population":
+            raise ValueError("only population runs have resident observation inputs")
+        applied = []
+        try:
+            applied = self.snapshot(run_id).get("population", {}).get("stimuli", [])
+        except FileNotFoundError:
+            pass
+        consumed = {row["stimulus"]["stimulus_id"] for row in applied}
+        return {"run_id": run_id, "applied": applied,
+                "queued": [row.model_dump(mode="json") for row in read_stimuli(RUN_ROOT, run_id)
+                           if row.stimulus_id not in consumed]}
+
+    def snapshot(self, run_id: str) -> dict:
+        run = self.owner.run(run_id)
+        if run.run_kind != "population":
+            raise ValueError("only population runs publish resident snapshots")
+        directory = Path(run.run_dir) if run.run_dir else RUN_ROOT / run_id
+        path = directory / "snapshot.json"
+        if path.exists():
+            return json.loads(path.read_text())
+        if run.status in {RunStatus.queued, RunStatus.running}:
+            raise FileNotFoundError("first resident decision boundary is not yet published")
+        # Older sealed recordings predate the atomic endpoint and are immutable.
+        result = {"run": run.model_dump(mode="json")}
+        for name, filename in {"tracks": "tracks.json", "events": "events.json", "occupancy": "occupancy.json",
+                               "stopQueue": "stop_queue.json", "compile": "compile.json",
+                               "population": "population.json"}.items():
+            result[name] = json.loads((directory / filename).read_text())
+        return result
 
     def _start_job(self, run: SimulationRun, population: PopulationDefinition, pack, resume: bool = False) -> None:
         cancel, pause = self.owner.cancel_flags[run.run_id], self.pause_flags[run.run_id]
@@ -202,6 +275,7 @@ class PopulationService:
                 status = self.status()
                 if not status["available"] or population.spec.count > status["initial_scale_gate"]:
                     raise SwarmUnavailable(status["reason"] or "native scale gate is not satisfied")
+                self.check_admission(population, status)
             run.status = RunStatus.queued
             run.error = None
             self.owner.store.put_run(run)

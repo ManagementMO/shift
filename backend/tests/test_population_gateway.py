@@ -15,9 +15,11 @@ from fastapi import FastAPI
 
 from cityshift.agents.population_gateway import (
     DEFAULT_LEDGER_PATH,
+    MAX_REQUEST_BYTES,
     SESSION_CAP_MICRODOLLARS,
     GatewayError,
     PopulationGateway,
+    ReservationPending,
     RunLimits,
     get_population_gateway,
 )
@@ -125,6 +127,191 @@ def gateway_at(path: Path, fake: FakeOpenRouter, **kwargs: Any) -> PopulationGat
         transport=httpx.MockTransport(fake.handle),
         **kwargs,
     )
+
+
+def provider_gateway_at(path: Path, fake: FakeOpenRouter, *, adopt: bool = False,
+                        approved_40: bool = True) -> PopulationGateway:
+    return PopulationGateway(
+        config=PopulationProviderConfig(enabled=True, api_key=fake.expected_key,
+                                        provider_budget=True, adopt_provider_key=adopt,
+                                        approved_40_key_policy=approved_40),
+        ledger_path=path, transport=httpx.MockTransport(fake.handle),
+    )
+
+
+async def test_provider_budget_is_explicit_and_preserves_fixed_ledger_history(tmp_path):
+    fake = FakeOpenRouter()
+    path = tmp_path / "budget.sqlite3"
+    fixed = gateway_at(path, fake)
+    fixed.register_run("prior-run", [MODEL], token=LOCAL_SECRET)
+    await fixed.complete(LOCAL_SECRET, request_body())
+    # Simulate requests written before credential attribution was introduced.
+    with fixed._ledger._connection() as connection:
+        connection.execute("UPDATE requests SET credential_binding=NULL")
+        legacy = hashlib.sha256(("population-provider-cap:0:" + UPSTREAM_SECRET).encode()).hexdigest()
+        connection.execute("UPDATE provider_cap SET credential_binding=?", (legacy,))
+    enabled = provider_gateway_at(path, fake, approved_40=False)
+    await enabled.preflight()
+    usage = enabled.usage("prior-run")
+    assert usage["budget_mode"] == "provider"
+    assert usage["session_limit_microdollars"] is None
+    assert usage["remaining_microdollars"] == 20_000_000 - 8
+    assert usage["run_totals"]["calls"] == 1
+    assert usage["request_accounted_microdollars"] == 8
+    assert "credential_binding" not in usage["requests"][0]
+    restored_fixed = gateway_at(path, fake)
+    assert restored_fixed.usage()["session_limit_microdollars"] == 20_000_000
+    assert restored_fixed.usage()["request_accounted_microdollars"] == 8
+
+
+async def test_provider_policy_toggle_is_not_a_new_key_or_a_budget_refill(tmp_path):
+    fake = FakeOpenRouter()
+    path = tmp_path / "budget.sqlite3"
+    old = provider_gateway_at(path, fake, approved_40=False)
+    old.register_run("ongoing-run", [MODEL], token=LOCAL_SECRET)
+    fake.status = 500
+    with pytest.raises(GatewayError):
+        await old.complete(LOCAL_SECRET, request_body())
+    before = old.usage()
+    changed = provider_gateway_at(path, fake, approved_40=True, adopt=True)
+    await changed.preflight()
+    assert changed.usage()["remaining_microdollars"] == before["remaining_microdollars"]
+    assert changed.authenticate(LOCAL_SECRET)  # same key: tokens remain valid
+    fake.key_info = key_metadata(limit=40, limit_remaining=40)
+    with pytest.raises(GatewayError) as failure:
+        await changed.preflight()
+    assert failure.value.code == "provider_cap_changed"
+    assert changed.usage()["remaining_microdollars"] == before["remaining_microdollars"]
+
+
+async def test_provider_budget_can_exceed_twenty_but_still_reserves_under_verified_cap(tmp_path):
+    fake = FakeOpenRouter()
+    fake.key_info = key_metadata(limit=40, limit_remaining=40, include_byok_in_limit=False)
+    fake.status = 500
+    gateway = provider_gateway_at(tmp_path / "budget.sqlite3", fake)
+    assert (await gateway.preflight())["available_microdollars"] == 40_000_000
+    for index in range(4):
+        registration = gateway.register_run(f"run-{index}", [MODEL])
+        # Provider failures intentionally retain full reservations. These are
+        # mock HTTP requests, not evidence of live inference.
+        results = await asyncio.gather(
+            *(gateway.complete(registration.token, request_body()) for _ in range(10)),
+            return_exceptions=True,
+        )
+        assert all(isinstance(result, GatewayError) for result in results)
+        assert gateway.usage(f"run-{index}")["run_totals"]["accounted_microdollars"] <= 20_000_000
+    usage = gateway.usage()
+    assert 20_000_000 < usage["accounted_microdollars"] <= 40_000_000
+    assert usage["remaining_microdollars"] < gateway.quote(registration.token, request_body()).ceiling_microdollars
+    assert usage["session_limit_microdollars"] is None
+
+
+async def test_provider_budget_rotation_preserves_holds_run_limits_and_inflight_accounting(tmp_path):
+    fake = FakeOpenRouter()
+    fake.key_info = key_metadata(limit=40, usage=3, limit_remaining=37)
+    path = tmp_path / "budget.sqlite3"
+    old = provider_gateway_at(path, fake, adopt=True)
+    await old.preflight()
+    old.register_run("ongoing-run", [MODEL], token=LOCAL_SECRET, limits=RunLimits(max_calls=1))
+    scope = old.authenticate(LOCAL_SECRET)
+    quote = old.quote(LOCAL_SECRET, request_body())
+    pending = old._ledger.reserve(scope, quote, old._clock(), old._provider_binding())
+    held = old.usage()["accounted_microdollars"]
+
+    fake.expected_key = "replacement-fake-key"
+    fake.key_info = key_metadata(limit=40, limit_remaining=39, usage=1)
+    replacement = provider_gateway_at(path, fake, adopt=True)
+    assert (await replacement.preflight())["available_microdollars"] == 39_000_000
+    usage = replacement.usage("ongoing-run")
+    assert usage["accounted_microdollars"] == held + 1_000_000
+    assert usage["provider_usage_hold_microdollars"] == 4_000_000
+    assert usage["run_totals"]["calls"] == 1
+    with pytest.raises(GatewayError, match="registered"):
+        replacement.authenticate(LOCAL_SECRET)
+    registration = replacement.register_run("ongoing-run", [MODEL], limits=RunLimits(max_calls=1))
+    with pytest.raises(GatewayError) as exhausted:
+        await replacement.complete(registration.token, request_body())
+    assert exhausted.value.code == "run_limit_exceeded"
+    # An old request may finish after rotation; settlement cannot consume or
+    # replenish the replacement key's balance, and all audit history remains.
+    old._ledger.settle(pending, quote, completion(), 1, True)
+    assert replacement.usage()["remaining_microdollars"] == 39_000_000
+    assert replacement.usage()["accounted_microdollars"] == 4_000_008
+    assert provider_gateway_at(path, fake).usage()["provider_usage_hold_microdollars"] == 4_000_000
+
+    fake.expected_key = UPSTREAM_SECRET
+    fake.key_info = key_metadata(limit=40, usage=3, limit_remaining=37)
+    with pytest.raises(GatewayError) as retired:
+        await old.preflight()
+    assert retired.value.code == "provider_cap_changed"
+    assert replacement.readiness()["ready"]  # stale workers cannot invalidate the new credential
+    assert not fake.posts
+
+
+@pytest.mark.parametrize("provider_budget,adopt", [(False, True), (True, False)])
+async def test_provider_key_rotation_requires_both_explicit_opt_ins(tmp_path, provider_budget, adopt):
+    fake = FakeOpenRouter()
+    path = tmp_path / "budget.sqlite3"
+    first = gateway_at(path, fake)
+    await first.preflight()
+    fake.expected_key = "replacement-fake-key"
+    second = PopulationGateway(
+        config=PopulationProviderConfig(enabled=True, api_key=fake.expected_key,
+                                        provider_budget=provider_budget, adopt_provider_key=adopt),
+        ledger_path=path, transport=httpx.MockTransport(fake.handle),
+    )
+    with pytest.raises(GatewayError) as failure:
+        await second.preflight()
+    assert failure.value.code == "provider_cap_changed"
+    assert not fake.posts
+
+
+async def test_provider_mode_never_waives_run_ceiling_or_accounting_violation(tmp_path):
+    fake = FakeOpenRouter()
+    fake.key_info = key_metadata(limit=40, limit_remaining=40)
+    path = tmp_path / "budget.sqlite3"
+    gateway = provider_gateway_at(path, fake)
+    with pytest.raises(GatewayError):
+        gateway.register_run("oversized-run", [MODEL], limits=RunLimits(max_cost_microdollars=20_000_001))
+    gateway.register_run("bad-run", [MODEL], token=LOCAL_SECRET)
+    fake.output = completion(provider="wrong-provider")
+    with pytest.raises(GatewayError) as failure:
+        await gateway.complete(LOCAL_SECRET, request_body())
+    assert failure.value.code == "accounting_violation"
+    fake.expected_key = "replacement-fake-key"
+    replacement = provider_gateway_at(path, fake, adopt=True)
+    with pytest.raises(GatewayError) as blocked:
+        await replacement.preflight()
+    assert blocked.value.code == "accounting_violation"
+    assert replacement.usage()["blocked"]
+    assert replacement.usage()["request_count"] == 1
+
+
+@pytest.mark.parametrize("updates", [
+    {"limit_reset": "daily"}, {"byok_usage": 0.001}, {"limit": None},
+    {"is_management_key": True}, {"limit_remaining": 41}, {"limit": 41, "limit_remaining": 41},
+])
+async def test_provider_budget_still_rejects_unbounded_or_unsupported_provider_policy(tmp_path, updates):
+    fake = FakeOpenRouter()
+    fake.key_info = key_metadata(**({"limit": 40, "limit_remaining": 40} | updates))
+    gateway = provider_gateway_at(tmp_path / "budget.sqlite3", fake, adopt=True)
+    with pytest.raises(GatewayError) as failure:
+        await gateway.preflight()
+    assert failure.value.code == "provider_cap_unverified"
+    assert not fake.posts
+
+
+def test_provider_budget_and_replacement_opt_ins_are_exact(monkeypatch):
+    for name in ("CITYSHIFT_POPULATION_PROVIDER_BUDGET", "CITYSHIFT_POPULATION_ADOPT_PROVIDER_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    assert not population_provider_config().provider_budget
+    assert not population_provider_config().adopt_provider_key
+    monkeypatch.setenv("CITYSHIFT_POPULATION_PROVIDER_BUDGET", "1")
+    monkeypatch.setenv("CITYSHIFT_POPULATION_ADOPT_PROVIDER_KEY", "true")
+    assert population_provider_config().provider_budget
+    assert not population_provider_config().adopt_provider_key
+    monkeypatch.setenv("CITYSHIFT_POPULATION_ADOPT_PROVIDER_KEY", "1")
+    assert population_provider_config().adopt_provider_key
 
 
 @pytest.fixture
@@ -424,7 +611,7 @@ async def test_rate_tokens_do_not_refund_early_and_expire_by_window(tmp_path: Pa
     {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}]},
     {"tools": [{"type": "web_search"}]},
     {"tools": [{"type": "function", "function": {"name": "shell", "parameters": {}}}]},
-    {"messages": [{"role": "user", "content": "x" * 65537}]},
+    {"messages": [{"role": "user", "content": "x" * (MAX_REQUEST_BYTES + 1)}]},
 ])
 async def test_unsafe_or_unbounded_requests_rejected_without_network(setup_gateway: Any, extra: dict) -> None:
     gateway, fake = setup_gateway
@@ -444,6 +631,206 @@ async def test_output_cap_default_and_tool_formatting_in_ceiling(setup_gateway: 
     await gateway.complete(LOCAL_SECRET, body)
     sent = json.loads(fake.posts[0].content)
     assert sent["max_tokens"] == 512 and sent["tools"] == tools
+
+
+@pytest.mark.parametrize("content,copies", [("x" * 17971, 3), ("x" * 102400, 1), ("界" * 17000, 1)])
+async def test_native_retry_payloads_fit_without_reducing_full_context_reservation(tmp_path, content, copies):
+    fake = FakeOpenRouter()
+    model = "anthropic/claude-haiku-4.5"
+    fake.output = completion(model=model, provider=POPULATION_MODELS[model].endpoint_provider)
+    gateway = gateway_at(tmp_path / "payload.sqlite3", fake)
+    registration = gateway.register_run("payload-run", [model], limits=RunLimits(max_output_tokens=1024))
+    small = gateway.quote(registration.token, request_body(model=model))
+    body = request_body(model=model, messages=[{"role": "user", "content": content} for _ in range(copies)])
+    encoded = json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    assert 54000 < len(encoded) < MAX_REQUEST_BYTES
+    quote = gateway.quote(registration.token, body)
+    assert quote.input_tokens == small.input_tokens == POPULATION_MODELS[model].context_length
+    assert quote.ceiling_microdollars == small.ceiling_microdollars
+    # Exercise both HTTP byte guards and model admission with a mock provider;
+    # this proves request handling, not native or paid model execution.
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_population_gateway] = lambda: gateway
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+        response = await client.post("/api/population/model/v1/chat/completions", content=encoded,
+            headers={"Authorization": f"Bearer {registration.token}", "Content-Type": "application/json"})
+    assert response.status_code == 200
+    assert len(fake.posts) == 1
+    assert json.loads(fake.posts[0].content)["messages"] == body["messages"]
+
+
+def test_native_payload_byte_boundary_and_legacy_run_limit_are_preserved(tmp_path):
+    fake = FakeOpenRouter()
+    gateway = gateway_at(tmp_path / "payload.sqlite3", fake)
+    model = "anthropic/claude-haiku-4.5"
+    token = gateway.register_run("new-payload-run", [model]).token
+    body = request_body(model=model, messages=[{"role": "user", "content": ""}])
+    overhead = len(json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode())
+    body["messages"][0]["content"] = "x" * (MAX_REQUEST_BYTES - overhead)
+    assert gateway.quote(token, body).input_tokens == POPULATION_MODELS[model].context_length
+    body["messages"][0]["content"] += "x"
+    with pytest.raises(GatewayError) as oversized:
+        gateway.quote(token, body)
+    assert oversized.value.code == "payload_too_large"
+
+    legacy = gateway.register_run("legacy-payload-run", [model], limits=RunLimits(max_request_bytes=65536))
+    with pytest.raises(GatewayError) as legacy_limit:
+        gateway.quote(legacy.token, request_body(model=model, messages=[{"role": "user", "content": "x" * 70000}]))
+    assert legacy_limit.value.code == "payload_too_large"
+    with pytest.raises(GatewayError) as immutable:
+        gateway.register_run("legacy-payload-run", [model], token=legacy.token)
+    assert immutable.value.code == "run_conflict"
+    assert not fake.gets and not fake.posts
+
+
+def test_context_ceiling_includes_message_and_tool_framing_below_byte_limit(tmp_path):
+    fake = FakeOpenRouter()
+    gateway = gateway_at(tmp_path / "payload.sqlite3", fake)
+    model = "anthropic/claude-haiku-4.5"
+    tool_names = [f"lookup_{index}" for index in range(64)]
+    registration = gateway.register_run("framing-run", [model], allowed_tools=tool_names)
+    body = request_body(model=model, messages=[{"role": "user", "content": "x" * 750} for _ in range(128)],
+        tools=[{"type": "function", "function": {"name": name, "parameters": {}}} for name in tool_names])
+    encoded = json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    assert len(encoded) < MAX_REQUEST_BYTES
+    assert len(encoded) + 4096 + 256 * 128 + 1024 * 64 > POPULATION_MODELS[model].context_length
+    with pytest.raises(GatewayError) as too_much_context:
+        gateway.quote(registration.token, body)
+    assert too_much_context.value.code == "payload_too_large"
+    assert not fake.gets and not fake.posts
+
+
+async def test_large_payload_cannot_bypass_per_run_reservation_ceiling(tmp_path):
+    fake = FakeOpenRouter()
+    gateway = gateway_at(tmp_path / "payload.sqlite3", fake)
+    model = "anthropic/claude-haiku-4.5"
+    token = gateway.register_run("limited-payload-run", [model], limits=RunLimits(max_cost_microdollars=1)).token
+    with pytest.raises(GatewayError) as exhausted:
+        await gateway.complete(token, request_body(model=model, messages=[{"role": "user", "content": "x" * 102400}]))
+    assert exhausted.value.code == "run_limit_exceeded"
+    assert not fake.posts
+
+
+def cost_constrained_run(gateway, **overrides):
+    probe = gateway.register_run("reservation-probe", [MODEL])
+    quote = gateway.quote(probe.token, request_body())
+    limits = RunLimits(**({"max_cost_microdollars": quote.ceiling_microdollars + 100} | overrides))
+    return gateway.register_run("reservation-run", [MODEL], limits=limits), quote
+
+
+def observe_pending_reservation(monkeypatch, gateway):
+    pending = asyncio.Event()
+    original = gateway._ledger.reserve
+
+    def reserve(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        except ReservationPending:
+            pending.set()
+            raise
+
+    monkeypatch.setattr(gateway._ledger, "reserve", reserve)
+    return pending
+
+
+async def test_concurrent_followup_waits_for_same_run_settlement_and_refreshes_readiness(tmp_path, monkeypatch):
+    from cityshift.agents import population_gateway as module
+
+    fake = FakeOpenRouter()
+    started, release, refreshed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    posts = []
+
+    async def handle(request):
+        if request.method == "POST":
+            posts.append(request)
+            if len(posts) == 2:
+                started.set()
+                await release.wait()
+        response = await fake.handle(request)
+        if len(fake.key_gets) >= 4:
+            refreshed.set()
+        return response
+
+    gateway = PopulationGateway(config=PopulationProviderConfig(enabled=True, api_key=UPSTREAM_SECRET),
+        ledger_path=tmp_path / "wait.sqlite3", transport=httpx.MockTransport(handle))
+    registration, _ = cost_constrained_run(gateway)
+    # A completed initial turn has already spent money. The follow-up calls
+    # contend for enough remaining budget to reserve only one at a time.
+    await gateway.complete(registration.token, request_body())
+    monkeypatch.setattr(module, "KEY_READINESS_MAX_AGE_SECONDS", 0.2)
+    pending = observe_pending_reservation(monkeypatch, gateway)
+    first = asyncio.create_task(gateway.complete(registration.token, request_body()))
+    await asyncio.wait_for(started.wait(), 2)
+    second = asyncio.create_task(gateway.complete(registration.token, request_body()))
+    await asyncio.wait_for(pending.wait(), 2)
+    await asyncio.wait_for(refreshed.wait(), 2)
+    assert len(posts) == 2 and not second.done()
+    assert gateway.usage("reservation-run")["run_totals"]["calls"] == 2
+    release.set()
+    await asyncio.gather(first, second)
+    assert len(posts) == 3
+    usage = gateway.usage("reservation-run")
+    assert usage["run_totals"]["calls"] == 3
+    assert usage["run_totals"]["accounted_microdollars"] == 24
+    assert all(row["status"] == "succeeded" for row in usage["requests"])
+
+
+@pytest.mark.parametrize("stop", ["cancel", "deadline"])
+async def test_reservation_wait_cancellation_and_deadline_make_no_new_charge(tmp_path, monkeypatch, stop):
+    fake = FakeOpenRouter()
+    gateway = gateway_at(tmp_path / "wait.sqlite3", fake)
+    registration, quote = cost_constrained_run(gateway, request_timeout_seconds=1)
+    await gateway.preflight()
+    gateway._ledger.reserve(gateway.authenticate(registration.token), quote, gateway._clock(), gateway._provider_binding())
+    pending = observe_pending_reservation(monkeypatch, gateway)
+    task = asyncio.create_task(gateway.complete(registration.token, request_body()))
+    await asyncio.wait_for(pending.wait(), 2)
+    if stop == "cancel":
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        with pytest.raises(GatewayError) as failure:
+            await task
+        assert failure.value.code == "upstream_timeout"
+    usage = gateway.usage("reservation-run")
+    assert usage["run_totals"]["calls"] == 1
+    assert usage["run_totals"]["accounted_microdollars"] == quote.ceiling_microdollars
+    assert usage["requests"][0]["status"] == "reserved"
+    assert not fake.posts
+
+
+@pytest.mark.parametrize("constraint,expected", [
+    ("spent", "run_limit_exceeded"), ("upstream_timeout", "run_limit_exceeded"),
+    ("cancelled", "run_limit_exceeded"), ("calls", "run_limit_exceeded"),
+    ("tokens", "run_limit_exceeded"), ("rate", "rate_limit_exceeded"),
+])
+async def test_hard_limits_and_uncertain_holds_never_wait(tmp_path, monkeypatch, constraint, expected):
+    fake = FakeOpenRouter()
+    gateway = gateway_at(tmp_path / "wait.sqlite3", fake)
+    limits = {"max_calls": 1} if constraint == "calls" else {}
+    if constraint == "rate":
+        limits["requests_per_minute"] = 1
+    if constraint == "tokens":
+        limits["max_tokens"] = POPULATION_MODELS[MODEL].context_length + 512
+    registration, quote = cost_constrained_run(gateway, **limits)
+    await gateway.preflight()
+    request_id = gateway._ledger.reserve(gateway.authenticate(registration.token), quote,
+                                        gateway._clock(), gateway._provider_binding())
+    if constraint == "spent":
+        result = completion()
+        result["usage"]["cost"] = str(Decimal(quote.ceiling_microdollars) / 1_000_000)
+        gateway._ledger.settle(request_id, quote, result, 1, True)
+    elif constraint in {"upstream_timeout", "cancelled"}:
+        gateway._ledger.fail(request_id, constraint, 1)
+    pending = observe_pending_reservation(monkeypatch, gateway)
+    with pytest.raises(GatewayError) as failure:
+        await asyncio.wait_for(gateway.complete(registration.token, request_body()), 0.5)
+    assert failure.value.code == expected
+    assert not pending.is_set()
+    assert not fake.posts
+    assert gateway.usage("reservation-run")["run_totals"]["calls"] == 1
 
 
 @pytest.mark.asyncio
@@ -482,7 +869,7 @@ async def test_router_auth_size_errors_and_sse_tool_deltas(setup_gateway: Any) -
         response = await client.get(prefix + "/models", headers=headers)
         assert [entry["id"] for entry in response.json()["data"]] == [MODEL]
         response = await client.post(prefix + "/chat/completions", headers=headers,
-                                    content=b"x" * 65537)
+                                    content=b"x" * (MAX_REQUEST_BYTES + 1))
         assert response.status_code == 413
         response = await client.post(prefix + "/chat/completions", headers=headers,
                                     content=b'{"messages":NaN}')

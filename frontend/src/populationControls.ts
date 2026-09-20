@@ -14,13 +14,41 @@ export const DEFAULT_POPULATION_BUDGET: PopulationBudget = {
 
 export function populationCostLimit(status: PopulationStatus | null): number {
   if (!status || status.budget.blocked || status.budget.remaining_microdollars === undefined) return 0
-  return Math.max(0, Math.min(20, status.budget.session_limit_microdollars / 1_000_000, status.budget.remaining_microdollars / 1_000_000))
+  const remaining = status.budget.remaining_microdollars / 1_000_000
+  return Math.max(0, status.budget.session_limit_microdollars === null ? remaining : Math.min(status.budget.session_limit_microdollars / 1_000_000, remaining))
+}
+
+export function populationBudgetPolicy(status: PopulationStatus | null): string {
+  if (!status) return 'Waiting for the provider budget.'
+  return status.budget.session_limit_microdollars === null
+    ? 'No application session cap. Provider balance and key limits still apply, alongside the separate per-run cap.'
+    : `Application session cap: $${(status.budget.session_limit_microdollars / 1_000_000).toFixed(2)}. Provider limits and the separate per-run cap also apply.`
 }
 
 export function populationScaleReason(status: PopulationStatus | null, count: number): string | null {
-  return status?.initial_scale_gate !== undefined && count > status.initial_scale_gate
-    ? `Native execution is limited to ${status.initial_scale_gate} residents until the integration proof passes and the backend raises the scale gate. This definition can still be saved.`
+  return count > populationCountLimit(status)
+    ? `Native execution is limited to ${populationCountLimit(status)} residents by the configured runtime limit. Choose a smaller swarm or update the runtime configuration.`
     : null
+}
+
+export function populationCountLimit(status: PopulationStatus | null): number {
+  return Math.max(0, Math.min(300, status?.initial_scale_gate ?? 100))
+}
+
+/** Start with one reviewed model so the default cap can admit the native context reservation. */
+export function defaultPopulationModelIds(status: PopulationStatus | null): string[] {
+  const native = status?.models.filter(brain => brain.control_mode === 'jiuwenswarm') ?? []
+  const brain = native.find(model => model.model_family.toLowerCase() === 'claude') ?? native[0]
+  return brain ? [brain.model_id] : []
+}
+
+/** Definitions are deterministic. A spent inference budget does not prevent choosing brains or saving residents. */
+export function populationDefinitionReason(status: PopulationStatus | null, error: string | null = null): string | null {
+  if (error) return `Resident brain configuration unavailable: ${error}`
+  if (!status) return 'Loading configured resident brains…'
+  if (!status.models.length) return 'No resident brain models are configured.'
+  if (status.models.some(brain => brain.control_mode !== 'jiuwenswarm')) return 'Configured rules fixtures are not native JiuwenSwarm brains.'
+  return null
 }
 
 export function populationUnavailableReason(status: PopulationStatus | null, error: string | null = null): string | null {
@@ -33,21 +61,26 @@ export function populationUnavailableReason(status: PopulationStatus | null, err
   return null
 }
 
-export function defaultPopulationSpec(status: PopulationStatus, options: { count?: number; seed?: number; horizon?: number; packId?: string; maxCostUsd?: number } = {}): PopulationSpec {
-  const unavailable = populationUnavailableReason(status)
+export function defaultPopulationSpec(status: PopulationStatus, options: { count?: number; seed?: number; horizon?: number; packId?: string; maxCostUsd?: number; modelIds?: string[] } = {}): PopulationSpec {
+  const unavailable = populationDefinitionReason(status)
   if (unavailable) throw new Error(unavailable)
-  const cost = options.maxCostUsd ?? populationCostLimit(status)
+  const cost = options.maxCostUsd ?? 10
   if (!Number.isFinite(cost) || cost < 0) throw new Error('Population budget must be a finite non-negative amount.')
-  const count = options.count ?? 12
-  const horizon = options.horizon ?? 3600
+  const count = options.count ?? Math.min(100, populationCountLimit(status))
+  const horizon = options.horizon ?? 600
   const seed = options.seed ?? 7
   if (!Number.isInteger(count) || count < 5 || count > 300) throw new Error('Population count must be 5–300.')
+  if (count > populationCountLimit(status)) throw new Error(`Choose at most ${populationCountLimit(status)} residents within the configured runtime limit.`)
   if (!Number.isInteger(horizon) || horizon < 60 || horizon > 14400) throw new Error('Population horizon must be 60–14400 seconds.')
   if (!Number.isSafeInteger(seed)) throw new Error('Population seed must be an integer.')
+  const modelIds = options.modelIds ?? defaultPopulationModelIds(status)
+  if (!modelIds.length || modelIds.some(id => !status.models.some(brain => brain.model_id === id))) throw new Error('Choose at least one configured native brain model.')
+  const brains = status.models.filter(brain => modelIds.includes(brain.model_id))
   return {
     generator_version: 'society-v1', rules_version: 'service-ledger-v1', pack_id: options.packId ?? 'toronto', seed, count, horizon_s: horizon,
-    enabled_classes: ['pedestrian', 'bicycle', 'passenger', 'delivery', 'truck'], brains: status.models.map((brain) => ({ ...brain })),
-    budget: { ...DEFAULT_POPULATION_BUDGET, max_cost_usd: Math.min(populationCostLimit(status), cost) },
+    enabled_classes: ['pedestrian', 'bicycle', 'passenger', 'delivery', 'truck'], brains: brains.map((brain) => ({ ...brain })),
+    // A frozen definition is reusable; current session headroom is enforced at execution, not frozen forever.
+    budget: { ...DEFAULT_POPULATION_BUDGET, max_cost_usd: Math.min(20, cost) },
     recurring_need_s: 900, service_duration_s: 60, decision_interval_s: 30, district_radius_m: 700,
   }
 }

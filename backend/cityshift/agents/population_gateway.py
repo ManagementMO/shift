@@ -35,7 +35,7 @@ from cityshift.providers import (
 
 SESSION_CAP_MICRODOLLARS = 20_000_000
 DEFAULT_LEDGER_PATH = Path(__file__).resolve().parents[2] / "var" / "population" / "model-budget.sqlite3"
-MAX_REQUEST_BYTES = 65_536
+MAX_REQUEST_BYTES = 131_072
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_CATALOG_BYTES = 8_388_608
 MAX_KEY_METADATA_BYTES = 32_768
@@ -66,7 +66,7 @@ ERRORS = {
     "provider_cap_insufficient": (402, "The verified provider cap cannot cover the remaining session exposure."),
     "provider_cap_changed": (503, "Provider cap or credential continuity changed; no budget was restored."),
     "run_conflict": (409, "Population run registration or immutable limits conflict."),
-    "budget_exhausted": (402, "The persistent implementation-session model budget is exhausted."),
+    "budget_exhausted": (402, "The available persistent population model budget is exhausted."),
     "run_limit_exceeded": (429, "The population run call, token, or cost ceiling is exhausted."),
     "rate_limit_exceeded": (429, "The population model request or token rate quota is exhausted."),
     "ledger_unavailable": (503, "The persistent population budget ledger is unavailable."),
@@ -86,6 +86,13 @@ class GatewayError(RuntimeError):
 
     def public_error(self) -> dict[str, Any]:
         return {"error": {"message": str(self), "type": "population_gateway_error", "code": self.code}}
+
+
+class ReservationPending(GatewayError):
+    """Same-run in-flight cost holds may settle within the existing deadline."""
+
+    def __init__(self) -> None:
+        super().__init__("run_limit_exceeded")
 
 
 def _integer(value: Any, minimum: int = 0, maximum: int = 2**53) -> bool:
@@ -246,10 +253,13 @@ class ProviderCapSnapshot:
 
 
 class BudgetLedger:
-    def __init__(self, path: Path, limit_microdollars: int = SESSION_CAP_MICRODOLLARS):
+    def __init__(self, path: Path, limit_microdollars: int = SESSION_CAP_MICRODOLLARS, *,
+                 provider_budget: bool = False, adopt_provider_key: bool = False):
         if not _integer(limit_microdollars, 1, SESSION_CAP_MICRODOLLARS):
             raise GatewayError("invalid_request")
         self.path = path
+        self.provider_budget = provider_budget
+        self.adopt_provider_key = provider_budget and adopt_provider_key
         try:
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             with self._connection() as connection:
@@ -278,6 +288,8 @@ class BudgetLedger:
                 columns = {column["name"] for column in connection.execute("PRAGMA table_info(requests)")}
                 if "snapshot_sha256" not in columns:
                     connection.execute("ALTER TABLE requests ADD COLUMN snapshot_sha256 TEXT")
+                if "credential_binding" not in columns:
+                    connection.execute("ALTER TABLE requests ADD COLUMN credential_binding TEXT")
                 connection.execute("CREATE INDEX IF NOT EXISTS requests_run ON requests(run_hash, created_at)")
                 connection.execute("CREATE INDEX IF NOT EXISTS requests_time ON requests(created_at)")
                 connection.execute("""CREATE TABLE IF NOT EXISTS catalog (
@@ -293,6 +305,15 @@ class BudgetLedger:
                 if "byok_included_in_limit" not in columns:
                     connection.execute("ALTER TABLE provider_cap ADD COLUMN byok_included_in_limit INTEGER")
                 connection.execute("INSERT OR IGNORE INTO provider_cap(id, status) VALUES(1, 'provider_cap_unverified')")
+                connection.execute("""CREATE TABLE IF NOT EXISTS retired_provider_caps (
+                    credential_binding TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL,
+                    usage_hold_microdollars INTEGER NOT NULL, retired_at REAL NOT NULL
+                )""")
+                # Prior ledgers had exactly one credential. Attribute their durable
+                # reservations before any explicitly authorized key replacement.
+                connection.execute("""UPDATE requests SET credential_binding=(
+                    SELECT credential_binding FROM provider_cap WHERE id=1
+                ) WHERE credential_binding IS NULL""")
                 connection.execute(
                     "INSERT OR IGNORE INTO session(id, version, limit_microdollars) VALUES(1, 1, ?)",
                     (limit_microdollars,),
@@ -330,15 +351,23 @@ class BudgetLedger:
             if connection is not None:
                 connection.close()
 
-    @staticmethod
-    def _provider_readiness(connection: sqlite3.Connection, binding: str | None, now: float) -> dict[str, Any]:
+    def _provider_readiness(self, connection: sqlite3.Connection, binding: str | None, now: float) -> dict[str, Any]:
         cap = connection.execute("SELECT * FROM provider_cap WHERE id=1").fetchone()
         session = connection.execute("SELECT * FROM session WHERE id=1").fetchone()
         if cap is None or session is None:
             raise GatewayError("ledger_unavailable")
         accounted = connection.execute("SELECT COALESCE(SUM(accounted_microdollars), 0) FROM requests").fetchone()[0]
-        session_remaining = max(0, session["limit_microdollars"] - accounted - cap["usage_hold_microdollars"])
-        provider_available = max(0, (cap["remaining_microdollars"] or 0) - accounted)
+        retired_hold = connection.execute(
+            "SELECT COALESCE(SUM(usage_hold_microdollars), 0) FROM retired_provider_caps",
+        ).fetchone()[0]
+        current_accounted = connection.execute("""SELECT COALESCE(SUM(accounted_microdollars), 0)
+            FROM requests WHERE credential_binding=? OR credential_binding IS NULL""",
+            (cap["credential_binding"],)).fetchone()[0]
+        session_remaining = max(0, session["limit_microdollars"] - accounted
+                                - cap["usage_hold_microdollars"] - retired_hold)
+        provider_available = max(0, (cap["remaining_microdollars"] or 0) - current_accounted)
+        if self.provider_budget:
+            session_remaining = provider_available
         verified_at = cap["verified_at"]
         fresh = (math.isfinite(now) and verified_at is not None
                  and -1 <= now - verified_at <= KEY_READINESS_MAX_AGE_SECONDS)
@@ -370,6 +399,8 @@ class BudgetLedger:
             "provider_usage_microdollars": cap["usage_microdollars"],
             "provider_usage_hold_microdollars": cap["usage_hold_microdollars"],
             "request_accounted_microdollars": accounted,
+            "current_key_request_accounted_microdollars": current_accounted,
+            "budget_mode": "provider" if self.provider_budget else "session",
             "required_microdollars": session_remaining,
             "available_microdollars": min(session_remaining, provider_available),
             "non_renewing": True if current else None,
@@ -384,7 +415,8 @@ class BudgetLedger:
             connection.execute("BEGIN")
             return self._provider_readiness(connection, binding, now)
 
-    def record_provider_cap(self, snapshot: ProviderCapSnapshot, binding: str, now: float) -> None:
+    def record_provider_cap(self, snapshot: ProviderCapSnapshot, binding: str, now: float, *,
+                            legacy_bindings: tuple[str, ...] = ()) -> None:
         if not math.isfinite(now):
             raise GatewayError("provider_cap_unverified")
         with self._connection() as connection:
@@ -392,6 +424,28 @@ class BudgetLedger:
             previous = connection.execute("SELECT * FROM provider_cap WHERE id=1").fetchone()
             if previous is None:
                 raise GatewayError("ledger_unavailable")
+            # Legacy identity included a policy toggle. A verified same-key
+            # migration must preserve its holds, not count as key replacement.
+            if previous["credential_binding"] in legacy_bindings:
+                connection.execute("UPDATE requests SET credential_binding=? WHERE credential_binding=?",
+                                   (binding, previous["credential_binding"]))
+                connection.execute("UPDATE provider_cap SET credential_binding=? WHERE id=1", (binding,))
+                previous = connection.execute("SELECT * FROM provider_cap WHERE id=1").fetchone()
+            if previous["credential_binding"] is not None and previous["credential_binding"] != binding:
+                retired = connection.execute(
+                    "SELECT 1 FROM retired_provider_caps WHERE credential_binding=?", (binding,),
+                ).fetchone()
+                if not self.adopt_provider_key or retired is not None:
+                    raise GatewayError("provider_cap_changed")
+                connection.execute("INSERT INTO retired_provider_caps VALUES(?, ?, ?, ?)",
+                                   (previous["credential_binding"], _json(dict(previous)),
+                                    previous["usage_hold_microdollars"], now))
+                # Old native clients must re-register deliberately after rotation.
+                # Their in-flight reservations remain charged to the old key.
+                connection.execute("UPDATE runs SET token_hash=NULL")
+                connection.execute("""UPDATE provider_cap SET credential_binding=NULL,
+                    usage_hold_microdollars=0, verified_at=NULL WHERE id=1""")
+                previous = connection.execute("SELECT * FROM provider_cap WHERE id=1").fetchone()
             if previous["credential_binding"] is not None and (
                     previous["credential_binding"] != binding
                     or snapshot.limit_microdollars > previous["limit_microdollars"]
@@ -407,12 +461,13 @@ class BudgetLedger:
                  snapshot.usage_microdollars, snapshot.usage_microdollars, now, now, snapshot.expires_at,
                  int(snapshot.byok_included_in_limit)))
 
-    def provider_failure(self, code: str) -> None:
+    def provider_failure(self, code: str, binding: str | None = None) -> None:
         if code not in {"provider_cap_unverified", "provider_cap_changed", "unavailable"}:
             code = "provider_cap_unverified"
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute("UPDATE provider_cap SET status=? WHERE id=1", (code,))
+            connection.execute("""UPDATE provider_cap SET status=? WHERE id=1 AND
+                (? IS NULL OR credential_binding IS NULL OR credential_binding=?)""", (code, binding, binding))
 
     def register(self, scope: RunScope) -> None:
         models, tools, limits = _json(scope.model_ids), _json(sorted(scope.allowed_tools)), _json(asdict(scope.limits))
@@ -464,13 +519,12 @@ class BudgetLedger:
             if not readiness["ready"]:
                 raise GatewayError(readiness["code"])
             cost = readiness["request_accounted_microdollars"] + readiness["provider_usage_hold_microdollars"]
-            if (cost + quote.ceiling_microdollars > session["limit_microdollars"]
+            if ((not self.provider_budget and cost + quote.ceiling_microdollars > session["limit_microdollars"])
                     or quote.ceiling_microdollars > readiness["available_microdollars"]):
                 raise GatewayError("budget_exhausted")
             run = connection.execute("""SELECT COUNT(*), COALESCE(SUM(accounted_tokens), 0),
                 COALESCE(SUM(accounted_microdollars), 0) FROM requests WHERE run_hash=?""", (scope.run_hash,)).fetchone()
-            if (run[0] >= scope.limits.max_calls or run[1] + tokens > scope.limits.max_tokens
-                    or run[2] + quote.ceiling_microdollars > scope.limits.max_cost_microdollars):
+            if run[0] >= scope.limits.max_calls or run[1] + tokens > scope.limits.max_tokens:
                 raise GatewayError("run_limit_exceeded")
             now = max(now, session["last_time"])
             window = connection.execute("""SELECT COUNT(*),
@@ -484,14 +538,20 @@ class BudgetLedger:
                     or global_window[0] >= MAX_SESSION_REQUESTS_PER_MINUTE
                     or global_window[1] + tokens > MAX_SESSION_TOKENS_PER_MINUTE):
                 raise GatewayError("rate_limit_exceeded")
+            if run[2] + quote.ceiling_microdollars > scope.limits.max_cost_microdollars:
+                pending_cost = connection.execute("""SELECT COALESCE(SUM(accounted_microdollars), 0)
+                    FROM requests WHERE run_hash=? AND status='reserved'""", (scope.run_hash,)).fetchone()[0]
+                if pending_cost and run[2] - pending_cost + quote.ceiling_microdollars <= scope.limits.max_cost_microdollars:
+                    raise ReservationPending()
+                raise GatewayError("run_limit_exceeded")
             connection.execute("UPDATE session SET last_time=? WHERE id=1", (now,))
             connection.execute("""INSERT INTO requests(
                 request_id, run_hash, created_at, assigned_model, status, reserved_microdollars,
-                accounted_microdollars, reserved_input_tokens, reserved_output_tokens, accounted_tokens, snapshot_sha256
-                ) VALUES(?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?)""",
+                accounted_microdollars, reserved_input_tokens, reserved_output_tokens, accounted_tokens, snapshot_sha256,
+                credential_binding) VALUES(?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?, ?)""",
                 (request_id, scope.run_hash, now, quote.model_id, quote.ceiling_microdollars,
                  quote.ceiling_microdollars, quote.input_tokens, quote.output_tokens, tokens,
-                 POPULATION_MODELS[quote.model_id].provenance()["snapshot_sha256"]))
+                 POPULATION_MODELS[quote.model_id].provenance()["snapshot_sha256"], provider_binding))
         return request_id
 
     def fail(self, request_id: str, status: str, latency_ms: int) -> None:
@@ -578,10 +638,19 @@ class BudgetLedger:
             connection.execute("BEGIN")
             session = connection.execute("SELECT * FROM session WHERE id=1").fetchone()
             totals = connection.execute("SELECT COUNT(*), COALESCE(SUM(accounted_microdollars), 0) FROM requests").fetchone()
-            provider = connection.execute("SELECT usage_hold_microdollars FROM provider_cap WHERE id=1").fetchone()
+            provider = connection.execute("SELECT * FROM provider_cap WHERE id=1").fetchone()
             if session is None or provider is None:
                 raise GatewayError("ledger_unavailable")
-            accounted = totals[1] + provider[0]
+            retired_hold = connection.execute(
+                "SELECT COALESCE(SUM(usage_hold_microdollars), 0) FROM retired_provider_caps",
+            ).fetchone()[0]
+            provider_hold = provider["usage_hold_microdollars"] + retired_hold
+            accounted = totals[1] + provider_hold
+            current_accounted = connection.execute("""SELECT COALESCE(SUM(accounted_microdollars), 0)
+                FROM requests WHERE credential_binding=? OR credential_binding IS NULL""",
+                (provider["credential_binding"],)).fetchone()[0]
+            remaining = (max(0, (provider["remaining_microdollars"] or 0) - current_accounted)
+                         if self.provider_budget else max(0, session["limit_microdollars"] - accounted))
             where = "" if run_id is None else " WHERE run_hash=?"
             parameters = () if run_id is None else (_digest(run_id),)
             run_totals = connection.execute(
@@ -596,15 +665,17 @@ class BudgetLedger:
                 rows = connection.execute("SELECT * FROM requests WHERE run_hash=? ORDER BY created_at, request_id LIMIT 1000",
                                           (_digest(run_id),)).fetchall()
             return {
-                "session_limit_microdollars": session["limit_microdollars"],
+                "session_limit_microdollars": None if self.provider_budget else session["limit_microdollars"],
+                "budget_mode": "provider" if self.provider_budget else "session",
                 "accounted_microdollars": accounted,
                 "request_accounted_microdollars": totals[1],
-                "provider_usage_hold_microdollars": provider[0],
-                "remaining_microdollars": max(0, session["limit_microdollars"] - accounted),
+                "provider_usage_hold_microdollars": provider_hold,
+                "remaining_microdollars": remaining,
                 "request_count": totals[0], "blocked": bool(session["blocked"]),
                 "run_totals": dict(zip(("calls", "reported_tokens", "reported_cost_microdollars",
                                         "accounted_microdollars", "uncertain_requests"), run_totals, strict=True)),
-                "requests": [dict(row) for row in rows],
+                "requests": [{key: value for key, value in dict(row).items() if key != "credential_binding"}
+                             for row in rows],
                 "catalog": [json.loads(row[0]) for row in connection.execute(
                     "SELECT provenance_json FROM catalog ORDER BY snapshot_sha256")],
             }
@@ -751,7 +822,12 @@ def _normalize_request(scope: RunScope, body: dict[str, Any]) -> tuple[dict[str,
     if (not _integer(output, 1, min(scope.limits.max_output_tokens, model.max_completion_tokens))
             or any(item != output or type(item) is not int for item in outputs)):
         raise GatewayError("invalid_request")
-    payload_estimate = 4 * len(encoded) + 4096 + 256 * len(body["messages"]) + 1024 * len(declared_tools)
+    # Count every ASCII-escaped JSON byte as a token, plus bounded framing
+    # overhead. Escaping already expands Unicode; multiplying bytes by four
+    # again rejected ordinary native retry histories well below context size.
+    # Billing still reserves the entire model context, independently of this
+    # admission estimate, and verifies actual provider usage at settlement.
+    payload_estimate = len(encoded) + 4096 + 256 * len(body["messages"]) + 1024 * len(declared_tools)
     if payload_estimate + output > model.context_length:
         raise GatewayError("payload_too_large")
     input_tokens = max(model.context_length, payload_estimate)
@@ -826,7 +902,9 @@ class PopulationGateway:
         self._config = config if config is not None else population_provider_config()
         if transport is None and ledger_path.resolve() != DEFAULT_LEDGER_PATH.resolve():
             raise GatewayError("ledger_unavailable")
-        self._ledger = BudgetLedger(ledger_path, session_limit_microdollars)
+        self._ledger = BudgetLedger(ledger_path, session_limit_microdollars,
+                                    provider_budget=self._config.provider_budget,
+                                    adopt_provider_key=self._config.adopt_provider_key)
         self._transport = transport
         self._clock = clock
 
@@ -885,7 +963,7 @@ class PopulationGateway:
         return self._ledger.usage(run_id) | {"provider_cap": self.readiness()}
 
     def _provider_binding(self) -> str:
-        return _digest(f"population-provider-cap:{int(self._config.approved_40_key_policy)}:" + self._config.api_key)
+        return _digest("population-provider-key:" + self._config.api_key)
 
     def readiness(self) -> dict[str, Any]:
         try:
@@ -911,14 +989,14 @@ class PopulationGateway:
                 raise GatewayError(result["code"])
             return result
         except asyncio.CancelledError:
-            self._ledger.provider_failure("provider_cap_unverified")
+            self._ledger.provider_failure("provider_cap_unverified", self._provider_binding())
             raise
         except GatewayError as error:
             if error.code in {"provider_cap_unverified", "provider_cap_changed", "unavailable"}:
-                self._ledger.provider_failure(error.code)
+                self._ledger.provider_failure(error.code, self._provider_binding())
             raise GatewayError(error.code) from None
         except (httpx.HTTPError, OSError, ValueError, TypeError, KeyError, RuntimeError, InvalidOperation):
-            self._ledger.provider_failure("provider_cap_unverified")
+            self._ledger.provider_failure("provider_cap_unverified", self._provider_binding())
             raise GatewayError("provider_cap_unverified") from None
 
     async def _refresh_provider_cap(self, client: httpx.AsyncClient) -> None:
@@ -930,17 +1008,20 @@ class PopulationGateway:
                 }) as response:
                     data = await self._read_response(response, MAX_KEY_METADATA_BYTES)
             now = self._clock()
-            snapshot = ProviderCapSnapshot.from_response(data, now, approved_40_key_policy=self._config.approved_40_key_policy)
-            self._ledger.record_provider_cap(snapshot, self._provider_binding(), now)
+            snapshot = ProviderCapSnapshot.from_response(data, now,
+                approved_40_key_policy=self._config.approved_40_key_policy)
+            self._ledger.record_provider_cap(snapshot, self._provider_binding(), now, legacy_bindings=tuple(
+                _digest(f"population-provider-cap:{policy}:" + self._config.api_key) for policy in (0, 1)
+            ))
             return
         except asyncio.CancelledError:
-            self._ledger.provider_failure("provider_cap_unverified")
+            self._ledger.provider_failure("provider_cap_unverified", self._provider_binding())
             raise
         except GatewayError as error:
             code = error.code if error.code in {"provider_cap_changed", "ledger_unavailable"} else "provider_cap_unverified"
         except (httpx.HTTPError, OSError, ValueError, TypeError, KeyError, RuntimeError, InvalidOperation):
             code = "provider_cap_unverified"
-        self._ledger.provider_failure(code)
+        self._ledger.provider_failure(code, self._provider_binding())
         raise GatewayError(code) from None
 
     async def _read_response(self, response: httpx.Response, limit: int) -> dict[str, Any]:
@@ -1008,7 +1089,19 @@ class PopulationGateway:
                 async with self._http_client(scope.limits.request_timeout_seconds) as client:
                     await self._verify_catalog(client, POPULATION_MODELS[quote.model_id])
                     await self._refresh_provider_cap(client)
-                    request_id = self._ledger.reserve(scope, quote, self._clock(), self._provider_binding())
+                    refreshed = time.monotonic()
+                    while True:
+                        try:
+                            request_id = self._ledger.reserve(scope, quote, self._clock(), self._provider_binding())
+                            break
+                        except ReservationPending:
+                            # Waiting creates no request or provider charge. Only
+                            # the atomic reservation authorizes the single POST.
+                            # Hard caps, uncertain holds and rate limits never retry.
+                            await asyncio.sleep(0.05)
+                            if time.monotonic() - refreshed >= KEY_READINESS_MAX_AGE_SECONDS / 2:
+                                await self._refresh_provider_cap(client)
+                                refreshed = time.monotonic()
                     async with client.stream("POST", f"{POPULATION_OPENROUTER_BASE}/chat/completions",
                                              headers={"Authorization": f"Bearer {self._config.api_key}"},
                                              json=sent) as response:

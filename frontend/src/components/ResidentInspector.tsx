@@ -45,17 +45,9 @@ export default function ResidentInspector({ population, residentId, t, onSelect,
       <div className="row between">
         <h2><i className="brain-dot" style={{ background: color }} />{profile.name}</h2>
         <div className="row">{onFollow && <button className="tiny" onClick={onFollow}>Follow</button>}{onFrame && <button className="tiny" onClick={onFrame}>Frame</button>}<button className="tiny" onClick={onClose}>Close</button></div>
+        <span className="resident-scroll-hint">Scroll for decisions, memories and messages ↓</span>
       </div>
       <div className="dim">{profile.resident_id} · synthetic resident · {population.artifact ? `recorded at +${fmt(t)}` : 'initial definition, not executed'}</div>
-      <p>{profile.persona}</p>
-      <div className="wrap">{profile.roles.map((role) => <span className="pill" key={role}>{role.replaceAll('_', ' ')}</span>)}</div>
-      <div><b>{state?.activity ?? 'no state yet'}</b> · role {state?.role.replaceAll('_', ' ') ?? '—'} · mode {binding?.mode ?? state?.mobility_mode ?? '—'}{binding?.vehicle_class ? ` · ${binding.vehicle_class}` : ''}</div>
-      <div className="dim">
-        {binding?.ownership === 'abstract' ? `Abstract stationary presence at ${anchor?.name ?? binding.anchor_id}; not measured movement or an interior position.`
-          : binding?.ownership === 'shared' ? `Aboard shared vehicle ${binding.entity_id}; passenger identity does not color the vehicle.`
-            : binding?.measured ? `Measured mobility binding: ${binding.entity_id}` : 'No measured or abstract presence binding at this time.'}
-      </div>
-      {state?.destination_id && <div>intended destination: {population.anchors[state.destination_id]?.name ?? state.destination_id}</div>}
       <section className="resident-decision" aria-label="Latest recorded decision">
         <h2>{decision?.source === 'jiuwenswarm' ? 'Recorded generated summary' : 'Recorded decision summary'}</h2>
         <p className="resident-summary">{decision?.summary || 'No decision summary recorded by this time.'}</p>
@@ -79,6 +71,17 @@ export default function ResidentInspector({ population, residentId, t, onSelect,
         {view.outcomes.length > 0 && <details><summary>{view.outcomes.length} recorded outcomes · latest +{fmt(view.outcomes.at(-1)!.t)}</summary>{view.outcomes.map((event) => <div className="population-record" key={event.event_id}>+{fmt(event.t)} · {event.text}<div className="dim">observed · cause {event.cause_id ?? 'not recorded'}</div></div>)}</details>}
         {view.outcomes.length === 0 && <div className="dim">No observed outcome recorded yet. Acceptance alone is not completion.</div>}
       </section>
+      <details><summary>Persona and current activity</summary>
+      <p>{profile.persona}</p>
+      <div className="wrap">{profile.roles.map((role) => <span className="pill" key={role}>{role.replaceAll('_', ' ')}</span>)}</div>
+      <div><b>{state?.activity ?? 'no state yet'}</b> · role {state?.role.replaceAll('_', ' ') ?? '—'} · mode {binding?.mode ?? state?.mobility_mode ?? '—'}{binding?.vehicle_class ? ` · ${binding.vehicle_class}` : ''}</div>
+      <div className="dim">
+        {binding?.ownership === 'abstract' ? `Abstract stationary presence at ${anchor?.name ?? binding.anchor_id}; not measured movement or an interior position.`
+          : binding?.ownership === 'shared' ? `Aboard shared vehicle ${binding.entity_id}; passenger identity does not color the vehicle.`
+            : binding?.measured ? `Measured mobility binding: ${binding.entity_id}` : 'No measured or abstract presence binding at this time.'}
+      </div>
+      {state?.destination_id && <div>intended destination: {population.anchors[state.destination_id]?.name ?? state.destination_id}</div>}
+      </details>
       <section>
         <h2>Current recorded plan</h2>
         {(state?.plan ?? []).length ? <ol>{state!.plan.map((step, i) => <li key={i}>{step}</li>)}</ol> : <div className="dim">No current plan recorded.</div>}

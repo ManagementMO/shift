@@ -31,7 +31,7 @@ describe('explicit population lifecycle controls', () => {
   })
 
   it('disables gated resume and does not expose population actions on transport or canceled runs', () => {
-    const props = { resumeReason: 'Native execution is limited to 20 residents', onPause: () => {}, onResume: () => {}, onStop: () => {} }
+    const props = { resumeReason: 'Native execution is limited to 100 residents', onPause: () => {}, onResume: () => {}, onStop: () => {} }
     const html = renderToStaticMarkup(<PopulationRunActionsView run={paused} {...props} />)
     expect(html).toContain('disabled=""')
     expect(html).toContain(props.resumeReason)

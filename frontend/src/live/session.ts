@@ -18,7 +18,7 @@ export function useLive(): LiveViewState {
 }
 
 /** Default city: the live page's setup form values, so arriving from the globe needs no form. */
-export const DEFAULT_LIVE_CONFIG: Omit<LiveConfig, 'pack_id'> = { seed: 7, horizon_s: 3600, initial_population: 600, fleet_size: 2, temperature_c: 20, car_share: 0.35 }
+export const DEFAULT_LIVE_CONFIG: Omit<LiveConfig, 'pack_id'> = { seed: 7, horizon_s: 3600, initial_population: 0, fleet_size: 0, temperature_c: 20, car_share: 0.35 }
 
 /** A restore re-simulates the whole recording; beyond this much history a fresh city starts faster than waiting. */
 const QUICK_RESTORE_S = 120

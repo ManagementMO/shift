@@ -5,6 +5,7 @@ import { clock } from './world/playback'
 import { residentViewAt } from './population'
 import { buildIndex } from './replay'
 import { shouldPollRuns } from './populationLifecycle'
+import { usePopulationStimuli } from './populationStimuli'
 import type { CityPack, RunStatus, ScenarioSpec } from './types'
 
 const initial = useStore.getState()
@@ -104,6 +105,7 @@ beforeEach(() => {
   useStore.setState({ ...initial, pack, scenarios: [scenario()], populationStatus: populationStatus() }, true)
   clock.pause()
   clock.seek(0)
+  usePopulationStimuli.getState().reset(null)
 })
 
 afterEach(() => {
@@ -146,7 +148,7 @@ describe('population store boundaries', () => {
     expect(fetcher.mock.calls.some(([url]) => String(url).includes('/population'))).toBe(false)
   })
 
-  it('blocks native submission when JiuwenSwarm is unavailable or the scale gate has not been raised', async () => {
+  it('blocks native submission when JiuwenSwarm is unavailable or the configured resident limit is exceeded', async () => {
     const status = { ...populationStatus(), available: false, reason: 'Native JiuwenSwarm unavailable' }
     const fetcher = vi.fn(async () => Response.json(status))
     vi.stubGlobal('fetch', fetcher)
@@ -158,7 +160,7 @@ describe('population store boundaries', () => {
     fetcher.mockImplementation(async () => Response.json(populationStatus()))
     definition.spec.count = 240
     await useStore.getState().submitPopulationRun()
-    expect(useStore.getState().error).toMatch(/20 residents.*proof/)
+    expect(useStore.getState().error).toMatch(/100 residents.*runtime limit/)
     expect(fetcher).toHaveBeenCalledTimes(2)
     definition.spec.brains = [{ ...definition.spec.brains[0], control_mode: 'rules' }]
     await useStore.getState().submitPopulationRun()
@@ -167,7 +169,7 @@ describe('population store boundaries', () => {
   })
 
   it('uses only the explicit population endpoint and reuses its idempotency key after a failed submission', async () => {
-    const requests: Record<string, string>[] = []
+    const requests: Record<string, unknown>[] = []
     const queued = run({ run_kind: 'population', population_id: 'population', status: 'queued', progress: 0 })
     const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input)
@@ -182,15 +184,21 @@ describe('population store boundaries', () => {
     })
     vi.stubGlobal('fetch', fetcher)
     useStore.setState({ scenarioId: 'scenario', populationDefinition: populationArtifact().definition })
+    const stimulus = { stimulus_id: 'before-start', kind: 'announcement' as const, text: 'Visit the shop.', duration_s: 600 }
+    usePopulationStimuli.setState({ populationId: 'population', pending: [stimulus] })
     await useStore.getState().submitPopulationRun()
     expect(useStore.getState().error).toContain('Submission response lost')
+    expect(usePopulationStimuli.getState().pending).toEqual([stimulus])
     await Promise.all([useStore.getState().submitPopulationRun(), useStore.getState().submitPopulationRun()])
     expect(requests).toHaveLength(2)
     expect(requests[0]).toEqual(requests[1])
-    expect(Object.keys(requests[0]).sort()).toEqual(['idempotency_key', 'population_id'])
+    expect(Object.keys(requests[0]).sort()).toEqual(['idempotency_key', 'population_id', 'stimuli'])
+    expect(requests[0].stimuli).toEqual([stimulus])
     expect(requests[0].population_id).toBe('population')
     expect(useStore.getState().runs[0].run_kind).toBe('population')
     expect(useStore.getState().populationSubmitting).toBe(false)
+    expect(useStore.getState().primaryRunId).toBe('pop-run')
+    expect(usePopulationStimuli.getState().pending).toEqual([])
   })
 
   it('opens a paused run after a fresh frontend load without resuming or invoking cognition', async () => {
@@ -303,7 +311,7 @@ describe('population store boundaries', () => {
     const large = lifecycleServer('paused')
     useStore.setState({ populationDefinition: { ...populationArtifact().definition, spec: { ...populationArtifact().definition.spec, count: 240 } } })
     await useStore.getState().resumePopulationRun('pop-run')
-    expect(useStore.getState().error).toMatch(/20 residents.*proof/)
+    expect(useStore.getState().error).toMatch(/100 residents.*runtime limit/)
     expect(large.fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
   })
 
