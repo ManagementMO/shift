@@ -2,6 +2,8 @@ import { useId, useState } from 'react'
 import type { CSSProperties, KeyboardEvent } from 'react'
 import type { GodEventCategory, GodEventDraft, GodEventKind, GodEventStatus } from './model'
 import { EventGlyph, GodIcon } from './icons'
+import { LASER_DURATION, LASER_MAX_RADIUS, LASER_MIN_RADIUS, LASER_RADIUS_STEP } from '../babylon/orbitalLaserModel'
+import type { VisualLaserEvent } from './state'
 import { GlassButton, GlassIconButton, GlassPill, GlassSurface } from './ui'
 import './events.css'
 
@@ -77,7 +79,7 @@ const eventDefinitions: Record<GodEventKind, EventDefinition> = {
   normal: { label: 'Normal Conditions', description: 'Baseline city conditions', alert: 'City Conditions' },
   closure: { label: 'Road Closure', description: 'Close a street; barricades go up and traffic re-plans', alert: 'Road Closure' },
   development: { label: 'New Development', description: 'Place a building that adds real trips', alert: 'New Development' },
-  orbital: { label: 'Orbital Strike', description: 'High-impact scenario', alert: 'High-Impact Event' },
+  orbital: { label: 'Orbital Laser', description: 'Fire a green sky beam and clear its radius', alert: 'Orbital Laser' },
   tornado: { label: 'Tornado', description: 'Extreme weather event', alert: 'Severe Weather Event' },
   rain: { label: 'Heavy Rain', description: 'A downpour over one part of the city', alert: 'Weather Event' },
   storm: { label: 'Storm', description: 'Lightning and rain; streets inside close to traffic', alert: 'Severe Weather Event' },
@@ -98,12 +100,12 @@ const categories: {
   events: readonly GodEventKind[]
 }[] = [
   { id: 'natural', label: 'Natural Disasters', description: 'Weather and natural hazards', icon: 'cloud', events: ['rain', 'storm', 'flood', 'wildfire', 'tornado', 'earthquake'] },
-  { id: 'infrastructure', label: 'Infrastructure', description: 'Roads, buildings, power and transit', icon: 'bolt', events: ['closure', 'development', 'outage', 'transit'] },
+  { id: 'infrastructure', label: 'Infrastructure', description: 'Roads, buildings, power and transit', icon: 'bolt', events: ['closure', 'development', 'outage', 'transit', 'orbital'] },
   { id: 'social', label: 'Social Events', description: 'Crowds and civil unrest', icon: 'people', events: ['riot'] },
   { id: 'custom', label: 'Custom Event', description: 'Tell the city what happens...', icon: 'sparkles', events: [] },
 ]
 
-const referenceEvents: readonly GodEventKind[] = ['normal', 'closure', 'development', 'rain', 'storm', 'flood', 'wildfire', 'tornado', 'earthquake', 'outage', 'riot', 'transit', 'orbital']
+const referenceEvents: readonly GodEventKind[] = ['normal', 'closure', 'development', 'rain', 'storm', 'flood', 'wildfire', 'tornado', 'orbital', 'earthquake', 'outage', 'riot', 'transit']
 
 const eventIconNames: Record<GodEventKind, string> = {
   normal: 'sun',
@@ -285,10 +287,11 @@ export function EventMenu({
 export function EventConfigPanel({ draft, onChange, onPlace, onCancel, supported, placing = false, className }: EventConfigPanelProps) {
   const id = useId()
   const definition = eventDefinitions[draft.kind]
+  const orbital = draft.kind === 'orbital'
   const live = draft.kind === 'rain' || draft.kind === 'storm' || draft.kind === 'flood' || draft.kind === 'wildfire'
-  const radiusMin = draft.kind === 'tornado' ? 30 : live ? 40 : 25
-  const radiusMax = draft.kind === 'tornado' ? 240 : live ? 600 : 5000
-  const radiusStep = draft.kind === 'tornado' ? 5 : live ? 10 : 25
+  const radiusMin = orbital ? LASER_MIN_RADIUS : draft.kind === 'tornado' ? 30 : live ? 40 : 25
+  const radiusMax = orbital ? LASER_MAX_RADIUS : draft.kind === 'tornado' ? 240 : live ? 600 : 5000
+  const radiusStep = orbital ? LASER_RADIUS_STEP : draft.kind === 'tornado' ? 5 : live ? 10 : 25
   const durationMin = draft.kind === 'tornado' ? 100 : live ? 60 : 15
   const durationMax = draft.kind === 'tornado' ? 600 : live ? 1800 : 1800
 
@@ -299,7 +302,7 @@ export function EventConfigPanel({ draft, onChange, onPlace, onCancel, supported
   return (
     <GlassSurface
       tone="light"
-      className={classNames('gp-event-config gp-event-popover', className)}
+      className={classNames('gp-event-config gp-event-popover', orbital && 'gp-laser-config', className)}
       role="dialog"
       aria-labelledby={`${id}-title`}
       onKeyDown={(event) => dismissOnEscape(event, onCancel)}
@@ -322,7 +325,7 @@ export function EventConfigPanel({ draft, onChange, onPlace, onCancel, supported
             <input className="gp-event-range" id={`${id}-radius`} type="range" min={radiusMin} max={radiusMax} step={radiusStep} value={draft.radiusM} aria-valuetext={distance(draft.radiusM)} style={sliderStyle(draft.radiusM, radiusMin, radiusMax)} onChange={(event) => changeNumber('radiusM', event.currentTarget.valueAsNumber)} />
             <div className="gp-event-range-labels" aria-hidden="true"><span>{distance(radiusMin)}</span><span>{distance(radiusMax)}</span></div>
           </div>
-          <fieldset className="gp-event-field gp-event-power">
+          {!orbital && <><fieldset className="gp-event-field gp-event-power">
             <legend>Power</legend>
             <div className="gp-event-segments" aria-label="Event intensity">
               {intensities.map((intensity) => <GlassButton type="button" variant="ghost" key={intensity} aria-pressed={draft.intensity === intensity} onClick={() => onChange({ intensity })}>{intensity}</GlassButton>)}
@@ -337,19 +340,38 @@ export function EventConfigPanel({ draft, onChange, onPlace, onCancel, supported
             <input className="gp-event-range" id={`${id}-duration`} type="range" min={durationMin} max={durationMax} step={5} value={draft.durationS} aria-valuetext={`${draft.durationS} seconds`} style={sliderStyle(draft.durationS, durationMin, durationMax)} onChange={(event) => changeNumber('durationS', event.currentTarget.valueAsNumber)} />
             <div className="gp-event-range-labels" aria-hidden="true"><span>{duration(durationMin)}</span><span>{duration(draft.durationS)}</span><span>{duration(durationMax)}</span></div>
           </div>
-          <EventSwitch label="Auto-respond" checked={draft.autoRespond} disabled={!supported} onChange={(autoRespond) => onChange({ autoRespond })} />
+          <EventSwitch label="Auto-respond" checked={draft.autoRespond} disabled={!supported} onChange={(autoRespond) => onChange({ autoRespond })} /></>}
+          {orbital && <p className="gp-event-field-help">A {LASER_DURATION}-second green beam clears this part of the scene. Saved city and transport data stay unchanged. Normal Conditions restores the area.</p>}
         </div>
         <div className="gp-event-placement-hint" id={`${id}-hint`}>
           <GodIcon name="pin" size={21} />
-          <div><strong>{placing ? 'Choose a location on the map' : 'Place it anywhere in the city'}</strong><p>{supported ? 'Choose a spot on the map, then click to place your event.' : 'Preview placement only. Simulation effects are not connected.'}</p></div>
+          <div><strong>{orbital ? 'Choose your target' : placing ? 'Choose a location on the map' : 'Place it anywhere in the city'}</strong><p>{orbital ? 'Choose a radius, click a target on the map, then fire when ready.' : supported ? 'Choose a spot on the map, then click to place your event.' : 'Preview placement only. Simulation effects are not connected.'}</p></div>
         </div>
         <div className="gp-event-config-actions">
           <GlassButton type="button" variant="secondary" onClick={onCancel}>Cancel</GlassButton>
-          <GlassButton type="submit" variant="primary" aria-describedby={`${id}-hint`}><GodIcon name="pin" size={18} />{placing ? 'Choose location' : supported ? 'Place event' : 'Preview on map'}</GlassButton>
+          <GlassButton type="submit" variant="primary" disabled={placing} aria-describedby={`${id}-hint`}><GodIcon name="pin" size={18} />{orbital ? 'Choose target' : placing ? 'Choose location' : supported ? 'Place event' : 'Preview on map'}</GlassButton>
         </div>
       </form>
     </GlassSurface>
   )
+}
+
+export function OrbitalLaserPanel({ event, onClose, onRestore, onAgain }: {
+  event: VisualLaserEvent
+  onClose: () => void
+  onRestore: () => void
+  onAgain: () => void
+}) {
+  const { strike, impact } = event
+  return <GlassSurface className="gp-utility-panel gp-laser-result" role="dialog" aria-label="Orbital laser result" onKeyDown={event => dismissOnEscape(event, onClose)}>
+    <header><EventGlyph kind="orbital" size={28} /><h2>Orbital Laser</h2><GlassIconButton icon="close" label="Close laser details" onClick={onClose} /></header>
+    <div className="gp-utility-body">
+      <p className="gp-laser-status" role="status">{impact ? 'Strike complete — area cleared' : 'Firing from orbit…'}</p>
+      <div className="gp-facts"><span>Radius</span><b>{distance(strike.radius)}</b>{impact && <><span>Buildings cleared</span><b>{count(impact.buildings + impact.developments)}</b><span>People / vehicles cleared</span><b>{count(impact.entities)}</b></>}</div>
+      <p className="gp-panel-note">Local visual event. Transport keeps simulating; saved city data stays unchanged. Restore this strike or choose Normal Conditions to bring the scene back.</p>
+      <div className="gp-laser-actions"><GlassButton onClick={onRestore}>{impact ? 'Restore area' : 'Cancel strike'}</GlassButton><GlassButton variant="primary" disabled={!impact} onClick={onAgain}>Fire another</GlassButton></div>
+    </div>
+  </GlassSurface>
 }
 
 export function ActiveEventPanel({

@@ -38,6 +38,7 @@ import type { WorldData } from './worldData'
 import { buildStreetDetails } from './streetDetails'
 import { loadLandmarkModels } from './landmarkModels'
 import { StormSystem } from './tornado'
+import { OrbitalLaserSystem } from './orbitalLaser'
 import { PlaneFlyover, planeShadowHeight } from './plane'
 
 export interface WorldSceneOptions {
@@ -65,6 +66,7 @@ export class WorldScene {
   readonly buildings: BuildingIndex
   readonly traffic: Traffic
   readonly storm: StormSystem
+  readonly orbital: OrbitalLaserSystem
   readonly plane: PlaneFlyover
   readonly fill: HemisphericLight
   readonly assetsReady: Promise<void>
@@ -114,14 +116,18 @@ export class WorldScene {
     fill.specular = Color3.Black()
     fill.intensity = 0.42
 
-    // --- city
+    // --- city (each pass leaves a `scene:*` performance mark so slow builds can be read from the profiler)
+    performance.mark('scene:start')
     this.city = buildCity(scene, world, balanced ? 512 : 1024)
+    performance.mark('scene:city')
     const streets = buildStreetDetails(scene, world, this.city.treePositions)
     this.city.chunks.push(...streets)
     this.city.shadowCasters.push(...streets.filter(m => m.name.startsWith('street-trees-')))
+    performance.mark('scene:streets')
     // Placeholder countryside past the pack: grassland hills, the lake carried on, main roads to the horizon.
     const reservedTrees = [...this.city.treePositions.map(t => ({ ...t, y: world.surfaces ? Y.road : Y.green })), ...streets.treePositions]
     this.terrain = buildTerrain(scene, world, this.city.materials, { cells: balanced ? 96 : 176, treeLimit: balanced ? 500 : 1500, reservedTrees })
+    performance.mark('scene:terrain')
 
     // --- camera
     const cam = new ArcRotateCamera('cam', -1.95, 0.98, 1500, new Vector3(380, 0, -520), scene)
@@ -187,7 +193,7 @@ export class WorldScene {
         const dz = Math.max(box.minimumWorld.z - p.z, 0, p.z - box.maximumWorld.z)
         return dx * dx + dz * dz < (balanced ? 650 : 1000) ** 2
       }
-      for (const m of this.city.shadowCasters) sg.addShadowCaster(m, false)
+      for (const m of [...this.city.shadowCasters, ...this.terrain.shadowCasters]) sg.addShadowCaster(m, false)
       this.shadows = sg
       if (balanced) {
         sg.getShadowMap()!.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE
@@ -234,8 +240,10 @@ export class WorldScene {
     this.buildings = new BuildingIndex(world)
     this.traffic = new Traffic(scene, this.frame, balanced ? null : this.shadows, world.surfaces ? Y.road : Y.path)
     this.storm = new StormSystem(scene, this.frame, world, this.city, balanced ? null : this.shadows)
+    this.orbital = new OrbitalLaserSystem(scene, this.frame, this.city, this.buildings, this.traffic, () => this.invalidateShadows())
     this.plane = new PlaneFlyover(scene, this.shadows, world.crs.bounds_world, roofHeight)
     scene.onBeforeRenderObservable.add(() => {
+      this.orbital.update(performance.now() / 1000)
       const p = this.camera.cam.globalPosition
       this.traffic.update(this.simT, { x: p.x, y: p.y, z: p.z, radius: this.camera.cam.radius })
       this.storm.update(this.simT)
@@ -297,6 +305,7 @@ export class WorldScene {
     window.removeEventListener('resize', this.resize)
     this.engine.stopRenderLoop()
     this.camera.cancel()
+    this.orbital.dispose()
     this.plane.dispose()
     this.storm.dispose()
     this.traffic.dispose()

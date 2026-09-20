@@ -132,6 +132,7 @@ class InstanceSet {
     m.specularColor = new Color3(0.25, 0.25, 0.25)
     m.specularPower = 48
     mesh.material = m
+    mesh.metadata = { cityTraffic: true }
     mesh.isPickable = false
     mesh.alwaysSelectAsActiveMesh = true // instances span the city; skip per-mesh frustum culling
     mesh.doNotSyncBoundingInfo = true
@@ -281,6 +282,7 @@ export class Traffic {
   private rx: ReplayIndex | null = null
   private live: LiveTrafficSource | null = null
   private liveEntities = new Map<string, LiveEntity>()
+  private hiddenIds = new Set<string>()
   private scratch: Interp = { lon: 0, lat: 0, angle: 0, speed: 0, i: -1, k: 0 }
   private agentScale = 1
   stats: TrafficStats = { ...EMPTY_STATS }
@@ -339,6 +341,18 @@ export class Traffic {
     this.agentScale = Math.max(0.5, Math.min(4, scale))
   }
 
+  idsInCircle(x: number, z: number, radius: number): string[] {
+    return [...(this.live ? this.liveEntities.values() : this.entities)]
+      .filter(e => e.seen && !this.hiddenIds.has(e.id) && (e.px - x) ** 2 + (e.pz - z) ** 2 <= radius ** 2)
+      .map(e => e.id)
+  }
+
+  hideEntities(ids: Iterable<string>): void {
+    this.hiddenIds = new Set(ids)
+    if (this.selectedId && this.hiddenIds.has(this.selectedId)) this.selectedId = null
+    if (this.hoverId && this.hiddenIds.has(this.hoverId)) this.hoverId = null
+  }
+
   private figureSet(id: string, speed: number, state: number, t: number): FigureSet {
     return `person-${poseFor(speed, t, hash01(id) * 2, state)}`
   }
@@ -371,7 +385,7 @@ export class Traffic {
     const scales = this.scalesFor(view)
     const available = source.forEachAt(t, (index, x, z, heading, speed, kindCode, state, flags) => {
       const meta = source.entity(index)
-      if (!meta || (kindCode === 1 && (state === 0 || state === 3 || state === 5))) return
+      if (!meta || this.hiddenIds.has(meta.id) || (kindCode === 1 && (state === 0 || state === 3 || state === 5))) return
       const kind: Kind = kindCode === 3 ? 'bus' : kindCode === 2 ? 'car' : 'person'
       let e = this.liveEntities.get(meta.id)
       if (!e) {
@@ -463,7 +477,7 @@ export class Traffic {
     let people = 0
     for (const e of this.entities) {
       const r = interpAt(e.ix, t, s)
-      if (!r || (rx.population && !populationTrackVisible(rx.population, e.ix.track, t))) {
+      if (!r || this.hiddenIds.has(e.id) || (rx.population && !populationTrackVisible(rx.population, e.ix.track, t))) {
         e.seen = false
         continue
       }
@@ -529,6 +543,7 @@ export class Traffic {
 
   /** Last drawn world pose of an entity (for follow cameras / inspection); null if unknown or not visible. */
   poseOf(id: string): { x: number; z: number; yaw: number; kind: Kind; speed?: number; state?: number; flags?: number } | null {
+    if (this.hiddenIds.has(id)) return null
     const live = this.liveEntities.get(id)
     if (live) return live.seen ? { x: live.px, z: live.pz, yaw: live.yaw, kind: live.kind, speed: live.speed, state: live.state, flags: live.flags } : null
     const e = this.entities.find((v) => v.id === id) ?? this.abstractPoses.find((v) => v.id === id)
@@ -543,7 +558,7 @@ export class Traffic {
     let best: Picked | null = null
     let bestD = tol * tol
     for (const e of this.live ? this.liveEntities.values() : [...this.entities, ...this.abstractPoses]) {
-      if (!e.seen) continue
+      if (!e.seen || this.hiddenIds.has(e.id)) continue
       const p = project(e.px, e.py + e.pickHeight, e.pz)
       const d = (p.x - sx) * (p.x - sx) + (p.y - sy) * (p.y - sy)
       if (d < bestD) {

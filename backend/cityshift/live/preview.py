@@ -80,7 +80,7 @@ def preview(pack: CityPack, config: SessionConfig, state: dict, request: Interve
                 raise ValueError(f"unknown road {eid}") from None
             if edge.isSpecial() or not (edge.allows("bus") or edge.allows("passenger")):
                 raise ValueError("select a vehicle street, not a sidewalk or junction")
-        out.update(title=f"{'Close' if value.kind == 'close_road' else 'Reopen'} {len(set(value.edge_ids))} road segments", detail="Preserve sidewalks and original lane permissions. Vehicles without a detour remain accounted for.")
+        out.update(title=f"{'Close' if value.kind == 'close_road' else 'Reopen'} {len(set(value.edge_ids))} road segments", detail="Closed to cars, buses and walkers; everyone re-plans around it. Travelers without a detour remain accounted for.")
     elif isinstance(value, BusRouteChange):
         fleet = [f"bus_{chr(65 + i)}" if i < 26 else f"bus_{i + 1}" for i in range(config.fleet_size)]
         if value.bus_id not in fleet or value.bus_id in assigned:

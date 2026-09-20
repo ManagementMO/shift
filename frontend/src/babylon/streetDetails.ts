@@ -8,6 +8,17 @@ import { RoadIndex } from './roadIndex'
 import { buildVegetation } from './vegetation'
 import type { WorldData } from './worldData'
 
+function ringBounds(ring: number[]): [number, number, number, number] {
+  let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity
+  for (let i = 0; i + 1 < ring.length; i += 2) {
+    if (ring[i] < x0) x0 = ring[i]
+    if (ring[i] > x1) x1 = ring[i]
+    if (ring[i + 1] < z0) z0 = ring[i + 1]
+    if (ring[i + 1] > z1) z1 = ring[i + 1]
+  }
+  return [x0, z0, x1, z1]
+}
+
 export function buildStreetDetails(scene: Scene, world: WorldData, parkTrees: TreePlacement[] = []): Mesh[] & { treePositions: TreePlacement[] } {
   const focus = world.landmarks.find(l => l.kind === 'cn_tower') ?? world.venue
   const ground = world.surfaces ? Y.road : Y.path
@@ -26,7 +37,11 @@ export function buildStreetDetails(scene: Scene, world: WorldData, parkTrees: Tr
     : r.allow.includes('car') || r.allow.includes('bus') ? [r] : []) })
   const occupied = new PlacementGrid()
   for (const t of parkTrees) occupied.reserve(t.x, t.z, TREE_RADIUS * t.scale + 0.1, ground, ground + TREE_HEIGHT * t.scale)
-  const free = (x: number, z: number, clearance = 0.25, height = 8) => !buildings.overlapsCircle(x, z, clearance, ground, ground + height) && !world.water.some(w => {
+  // Water rings run to hundreds of vertices (the lake shore); a bounding box per polygon keeps the per-candidate
+  // check to a handful of comparisons instead of walking every shoreline segment for every sidewalk piece.
+  const water = world.water.map(w => ({ ...w, box: ringBounds(w.ring) }))
+  const free = (x: number, z: number, clearance = 0.25, height = 8) => !buildings.overlapsCircle(x, z, clearance, ground, ground + height) && !water.some(w => {
+    if (x < w.box[0] - clearance || x > w.box[2] + clearance || z < w.box[1] - clearance || z > w.box[3] + clearance) return false
     const hole = w.holes?.find(h => pointInRing(x, z, h))
     return hole ? boundaryDistance(x, z, hole) < clearance : pointInRing(x, z, w.ring) || boundaryDistance(x, z, w.ring) < clearance
   })

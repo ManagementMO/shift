@@ -39,8 +39,9 @@
   left: 50%;
   transform: translateX(-50%);
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  width: min(430px, 40vw);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  width: min(360px, 40vw);
   height: 38px;
   gap: 2px;
   padding: 3px;
@@ -164,7 +165,7 @@
 }
 
 @media (max-width: 900px) {
-  .god-chrome .god-chrome__tabs { top: calc(var(--gp-edge) + 44px); width: min(430px, calc(100% - 2 * var(--gp-edge))); }
+  .god-chrome .god-chrome__tabs { top: calc(var(--gp-edge) + 44px); width: min(360px, calc(100% - 2 * var(--gp-edge))); }
 }
 @media (max-width: 900px) {
   .god-chrome .god-chrome__dock { bottom: calc(var(--gp-edge) + 56px); left: 50%; transform: translateX(-50%); }

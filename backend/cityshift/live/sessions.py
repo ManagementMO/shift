@@ -13,7 +13,7 @@ from pathlib import Path
 
 from cityshift.contracts import CityPack
 from cityshift.domain.network import load_pack
-from cityshift.live.contracts import InterventionRequest, SessionConfig, temperature_response
+from cityshift.live.contracts import InterventionRequest, SessionConfig, stored_command, temperature_response
 from cityshift.live.engine import LiveEngine
 from cityshift.live.recording import CHUNK_SECONDS, COUNT_KEYS, FrameStore, atomic_json
 
@@ -114,7 +114,7 @@ class LiveSession:
                     metrics=engine.metrics(), fleet=engine.transit.fleet(), closed_edge_ids=sorted(engine.network.closed_edges),
                     incidents=engine.snapshot_incidents(), developments=engine.snapshot_developments(),
                 )
-            self._state.update(revision=len(self.commands), commands=[c.model_dump(mode="json") for c in self.commands])
+            self._state.update(revision=len(self.commands), commands=[c.stored() for c in self.commands])
             if status is not None:
                 self._state["status"] = status
             self._state["error"] = error
@@ -253,7 +253,7 @@ class LiveRegistry:
                 state = json.loads(path.read_text())
                 config = SessionConfig.model_validate(state["config"])
                 parent = self.get(state["parent_session_id"]) if state.get("parent_session_id") else None
-                history = [InterventionRequest.model_validate(c) for c in state["commands"]]
+                history = [InterventionRequest.model_validate(stored_command(c)) for c in state["commands"]]
                 session = LiveSession(session_id, self.pack_loader(config.pack_id), config, root, parent, state.get("fork_s"), history, state)
                 self.sessions[session_id] = session
                 return session
@@ -265,7 +265,7 @@ class LiveRegistry:
             receipt_key = f"{session_id}:{request.command_id}"
             previous = self.receipts.get(receipt_key)
             if previous:
-                if previous["request"] != request.model_dump(mode="json"):
+                if stored_command(previous["request"]) != request.stored():
                     raise ValueError("command id was already used for different inputs")
                 return self.get(previous["session_id"])
             parent = self.get(session_id)
@@ -283,7 +283,7 @@ class LiveRegistry:
                 session.wait_ready()
             local = request.model_copy(update={"expected_revision": len(session.commands)})
             session.apply(local)
-            self.receipts[receipt_key] = {"session_id": session.session_id, "request": request.model_dump(mode="json")}
+            self.receipts[receipt_key] = {"session_id": session.session_id, "request": request.stored()}
             atomic_json(self.root / "receipts.json", self.receipts)
             return session
 

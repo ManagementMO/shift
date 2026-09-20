@@ -7,7 +7,6 @@ import './chrome.css'
 const tabs: { value: GodTab; label: string }[] = [
   { value: 'live', label: 'Live' },
   { value: 'log', label: 'City log' },
-  { value: 'agents', label: 'Agents' },
   { value: 'events', label: 'Events' },
   { value: 'analytics', label: 'Analytics' },
 ]
@@ -15,7 +14,6 @@ const tabs: { value: GodTab; label: string }[] = [
 const tools: { value: GodTool; icon: string; label: string }[] = [
   { value: 'select', icon: 'cursor', label: 'Select objects' },
   { value: 'map', icon: 'map', label: 'Map' },
-  { value: 'people', icon: 'people', label: 'People and agent groups' },
   { value: 'population', icon: 'users', label: 'Population' },
   { value: 'events', icon: 'warning', label: 'Events' },
   { value: 'weather', icon: 'cloud', label: 'Weather' },

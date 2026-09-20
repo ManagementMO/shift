@@ -83,7 +83,7 @@ export function announcementFor(change: Intervention, at: number, id: string, se
   switch (change.kind) {
     case 'close_road': {
       const name = streetName(change.edge_ids, corridors)
-      return { id, at, source: 'Roads', title: `Road closure: ${name ?? plural(change.edge_ids.length, 'segment')}`, body: `${name ? `${name} is` : `${plural(change.edge_ids.length, 'road segment')} are`} closed to cars and buses until further notice. Barricades are in place; sidewalks stay open. Drivers are re-routing.` }
+      return { id, at, source: 'Roads', title: `Road closure: ${name ?? plural(change.edge_ids.length, 'segment')}`, body: `${name ? `${name} is` : `${plural(change.edge_ids.length, 'road segment')} are`} closed to cars, buses and pedestrians until further notice. Barricades are in place; everyone is re-routing around it.` }
     }
     case 'reopen_road': {
       const name = streetName(change.edge_ids, corridors)

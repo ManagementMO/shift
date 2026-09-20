@@ -115,11 +115,28 @@ Intervention = Annotated[
 ]
 
 
+# Computed convenience fields that a stored incident command carries; they are derived, so a stored command must
+# validate again without them being treated as unknown inputs.
+COMPUTED_INTERVENTION_FIELDS = {"effective_duration_s", "alarm_radius_m"}
+
+
+def stored_command(data: dict) -> dict:
+    """A persisted command as `InterventionRequest` input: derived fields dropped, nothing else touched."""
+    intervention = data.get("intervention")
+    if isinstance(intervention, dict) and COMPUTED_INTERVENTION_FIELDS & intervention.keys():
+        return {**data, "intervention": {k: v for k, v in intervention.items() if k not in COMPUTED_INTERVENTION_FIELDS}}
+    return data
+
+
 class InterventionRequest(InputModel):
     command_id: Identifier
     at_s: int = Field(ge=0, le=14400, strict=True)
     expected_revision: int = Field(ge=0, strict=True)
     intervention: Intervention
+
+    def stored(self) -> dict:
+        """The persisted form: what `model_validate` accepts back, with the derived incident fields left out."""
+        return stored_command(self.model_dump(mode="json"))
 
     @model_validator(mode="after")
     def validate_window(self):

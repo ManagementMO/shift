@@ -87,7 +87,7 @@ function AreaTool() {
 /**
  * Close a street in the running city. Pick a named street here (the camera flies to it) or click a drivable
  * segment on the map, then Apply: SUMO validates and applies the closure in one step. It stays closed until it is
- * reopened from the barricaded street's card. Sidewalks stay open.
+ * reopened from the barricaded street's card. Closed to everyone: walkers are re-planned around it too.
  */
 function ClosureTool() {
   const corridors = useStore((s) => s.corridors)

@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { WorldScene } from './scene'
+import { suspendCamera } from './placementControls'
 import { dragPlacement, driftTarget, headingLabel, pickTornadoGround, placementDirection, placementShortcut, POWER_NAMES, projectTornadoPoint, tornadoHeight, tornadoPower, tornadoRadius, type GroundPoint, type TornadoSettings } from './tornadoPlacement'
 
 export function TornadoGlyph({ size = 26 }: { size?: number }) {
@@ -8,26 +9,6 @@ export function TornadoGlyph({ size = 26 }: { size?: number }) {
 
 type Preview = { point: GroundPoint; edge: GroundPoint; radius: number; dragging: boolean; direction: [number, number]; mouse: [number, number] }
 type Drag = { point: GroundPoint; mouse: [number, number]; pointer: number; fallback: number; radius?: number }
-
-function suspendCamera(scene: WorldScene): () => void {
-  const canvas = scene.canvas, camera = scene.camera.cam
-  const cursor = canvas.style.cursor
-  const controls = camera.inputs.attachedToElement
-  const travel = scene.keys.enabled
-  scene.camera.cancel()
-  scene.keys.setEnabled(false)
-  camera.detachControl()
-  camera.inertialAlphaOffset = camera.inertialBetaOffset = camera.inertialRadiusOffset = 0
-  camera.inertialPanningX = camera.inertialPanningY = 0
-  canvas.style.cursor = 'crosshair'
-  return () => {
-    canvas.style.cursor = cursor
-    if (!scene.scene.isDisposed) {
-      scene.keys.setEnabled(travel)
-      if (controls && !scene.camera.fixed) camera.attachControl(false, true, 1)
-    }
-  }
-}
 
 export default function TornadoPlacement({ scene, armed, settings, onSettings, onCast, onCancel }: {
   scene: WorldScene | null

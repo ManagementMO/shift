@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -77,18 +78,30 @@ async def storage_error(_request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=503, content={"detail": detail})
 
 
+# A failed storage probe is remembered briefly: every attempt to reach an unreachable Atlas waits out the 5 s server
+# selection timeout, and the shell polls /api/health.
+_storage_failure: tuple[float, dict] | None = None
+STORAGE_FAILURE_TTL_S = 30.0
+
+
 def storage_status() -> dict:
+    global _storage_failure
     backend = storage_backend()
     configured = backend == "json" or bool(os.environ.get("MONGODB_URI") and os.environ.get("MONGODB_DATABASE"))
+    if _storage_failure and time.monotonic() - _storage_failure[0] < STORAGE_FAILURE_TTL_S:
+        return dict(_storage_failure[1])
     try:
         store = get_service().store
+        _storage_failure = None
         return {"backend": store.backend, "configured": True, "available": store.ping()}
     except (StorageUnavailable, PyMongoError) as exc:
-        return {
+        status = {
             "backend": backend if backend in {"mongodb", "json"} else "invalid",
             "configured": configured, "available": False,
             "message": str(exc) if isinstance(exc, StorageUnavailable) else STORAGE_UNAVAILABLE_MESSAGE,
         }
+        _storage_failure = (time.monotonic(), status)
+        return status
 
 
 # --- health / providers -----------------------------------------------------------------------
