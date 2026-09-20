@@ -112,6 +112,7 @@ class LiveSession:
                     temperature_c=engine.temperature_c, counts=engine.counts(), engine_version=engine.engine_version,
                     entity_count=len(engine.entities), mobility=temperature_response(engine.temperature_c).model_dump(),
                     metrics=engine.metrics(), fleet=engine.transit.fleet(), closed_edge_ids=sorted(engine.network.closed_edges),
+                    incidents=engine.snapshot_incidents(),
                 )
             self._state.update(revision=len(self.commands), commands=[c.model_dump(mode="json") for c in self.commands])
             if status is not None:

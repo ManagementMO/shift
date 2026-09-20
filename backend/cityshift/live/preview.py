@@ -5,8 +5,10 @@ from itertools import pairwise
 from cityshift.contracts import CityPack
 from cityshift.domain.network import route
 from cityshift.live.contracts import (
+    HAZARDS,
     MAX_TRAVELERS,
     BusRouteChange,
+    IncidentChange,
     InterventionRequest,
     PopulationChange,
     RoadChange,
@@ -14,6 +16,7 @@ from cityshift.live.contracts import (
     TemperatureChange,
     temperature_response,
 )
+from cityshift.live.network import LiveNetwork
 
 
 def preview(pack: CityPack, config: SessionConfig, state: dict, request: InterventionRequest, net) -> dict:
@@ -43,7 +46,18 @@ def preview(pack: CityPack, config: SessionConfig, state: dict, request: Interve
             closed.update(change["edge_ids"])
     value = request.intervention
     out = {"at_s": request.at_s, "branches_history": request.at_s < state["time_s"], "assumption": "Synthetic demand and explicit mobility assumptions; outcomes are measured by SUMO.", "intervention": value.model_dump()}
-    if isinstance(value, TemperatureChange):
+    if isinstance(value, IncidentChange):
+        profile = HAZARDS[value.hazard]
+        x, y = net.convertLonLat2XY(value.lon, value.lat)
+        edges = LiveNetwork(net, None, (0.0, 0.0)).edges_within(x, y, value.radius_m)
+        if not edges:
+            raise ValueError("no streets lie inside that footprint; place the incident on the city")
+        out.update(
+            title=f"{value.label or profile.label}: {value.radius_m} m footprint", detail=profile.description,
+            edges=len(edges), alarm_radius_m=value.alarm_radius_m, duration_s=value.effective_duration_s, blocks=list(profile.blocks),
+            assumption=f"Travelers within {value.alarm_radius_m:g} m witness it; others learn only from neighbours within earshot. Responses are measured, not scripted.",
+        )
+    elif isinstance(value, TemperatureChange):
         response = temperature_response(value.temperature_c)
         out.update(title=f"Temperature {temperature:g} to {value.temperature_c:g} C", detail="Adjust walking speed and tolerance, then reconsider available transit. Road friction is unchanged.", mobility=response.model_dump(), assumption=response.assumption)
     elif isinstance(value, PopulationChange):

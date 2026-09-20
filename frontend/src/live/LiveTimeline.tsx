@@ -17,6 +17,7 @@ export default function LiveTimeline({ controller, view }: { controller: LiveCon
       <div className="live-count"><strong>{counts?.arrived.toLocaleString() ?? '—'}</strong><span>Arrived</span></div>
       <div className="live-count live-secondary-count"><strong>{counts?.not_departed.toLocaleString() ?? '—'}</strong><span>Not departed</span></div>
       <div className="live-count live-secondary-count"><strong>{counts?.unroutable.toLocaleString() ?? '—'}</strong><span>Unroutable</span></div>
+      {!!state?.metrics?.swarm?.events.length && <div className="live-count alerted"><strong>{state.metrics.swarm.aware_total.toLocaleString()}</strong><span>Know of incident</span></div>}
       {baseline && <div className="live-baseline-count">Original: <b>{baseline.arrived.toLocaleString()}</b> arrived / {baseline.total.toLocaleString()}</div>}
     </div>
     <div className="live-scrub">

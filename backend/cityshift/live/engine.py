@@ -9,7 +9,9 @@ import traci
 
 from cityshift.contracts import CityPack
 from cityshift.live.contracts import (
+    HAZARDS,
     BusRouteChange,
+    IncidentChange,
     Intervention,
     PopulationChange,
     RoadChange,
@@ -20,6 +22,7 @@ from cityshift.live.contracts import (
 from cityshift.live.network import LiveNetwork
 from cityshift.live.population import Population
 from cityshift.live.recording import FrameStore
+from cityshift.live.swarm import Swarm, SwarmEvent
 from cityshift.live.transit import Transit
 from cityshift.transport.sumo_env import binary
 from cityshift.transport.sumo_xml import BusStopDef, write_additional, write_routes, write_sumocfg
@@ -58,7 +61,8 @@ class LiveEngine:
             self.engine_version = self.connection.getVersion()[1]
             self.network = LiveNetwork(self.net, self.connection, self.origin)
             self.transit = Transit(self.network, pack, config, self.entities)
-            self.population = Population(self.network, self.transit, pack, config, self.entities)
+            self.swarm = Swarm(config.seed, self.root.name)
+            self.population = Population(self.network, self.transit, pack, config, self.entities, self.swarm)
             self.population.add_initial()
             if self.recording.latest_s < 0:
                 self.recording.append(0, [], self.counts(), self.temperature_c)
@@ -81,7 +85,37 @@ class LiveEngine:
             return result
         if isinstance(intervention, PopulationChange):
             return self.population.add(intervention, command_id, self.time_s)
+        if isinstance(intervention, IncidentChange):
+            return self.declare_incident(intervention, command_id)
         raise ValueError("unsupported live intervention")
+
+    def declare_incident(self, change: IncidentChange, command_id: str) -> dict:
+        x, y = self.net.convertLonLat2XY(change.lon, change.lat)
+        edges = self.network.edges_within(x, y, change.radius_m)
+        if not edges:
+            raise ValueError("no streets lie inside that footprint; place the incident on the city")
+        profile = HAZARDS[change.hazard]
+        event = SwarmEvent(
+            event_id=f"ev-{len(self.swarm.events) + 1}", command_id=command_id, hazard=change.hazard, label=change.label or profile.label,
+            x=x, y=y, radius_m=float(change.radius_m), alarm_radius_m=change.alarm_radius_m, start_s=self.time_s,
+            end_s=self.time_s + change.effective_duration_s, blocks=profile.blocks, edge_ids=tuple(edges),
+        )
+        self.network.apply_incident(event, self.time_s)
+        self.swarm.post(event)
+        self.population.respond(self.swarm.step(self.time_s, self.population.positions, self.population.reach), self.time_s)
+        self.population.reconsider()
+        return {"event_id": event.event_id, "edges": len(edges), "alarm_radius_m": event.alarm_radius_m, "ends_s": event.end_s, "witnesses": self.swarm.witnessed}
+
+    def snapshot_incidents(self) -> list[dict]:
+        return [
+            {
+                "event_id": ev.event_id, "command_id": ev.command_id, "hazard": ev.hazard, "label": ev.label,
+                "x": round(ev.x - self.origin[0], 2), "z": round(ev.y - self.origin[1], 2), "radius_m": ev.radius_m,
+                "alarm_radius_m": ev.alarm_radius_m, "start_s": ev.start_s, "end_s": ev.end_s, "blocks": list(ev.blocks),
+                "edge_ids": list(ev.edge_ids)[:512], "active": ev.active(self.time_s),
+            }
+            for ev in self.swarm.events.values()
+        ]
 
     def counts(self) -> dict[str, int]:
         return self.population.counts()
@@ -94,9 +128,9 @@ class LiveEngine:
             raise RuntimeError("session is closed")
         if self.time_s >= self.config.horizon_s:
             raise ValueError("simulation horizon reached")
-        closed = self.network.closed_edges.copy()
+        blocked = (self.network.closed_edges.copy(), self.network.blocked_walk.copy())
         self.network.expire(self.time_s)
-        if closed != self.network.closed_edges:
+        if blocked != (self.network.closed_edges, self.network.blocked_walk):
             self.population.reconsider()
         self.population.before_step(self.time_s)
         self.connection.simulationStep()

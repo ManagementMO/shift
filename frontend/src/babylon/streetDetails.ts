@@ -21,7 +21,9 @@ export function buildStreetDetails(scene: Scene, world: WorldData, parkTrees: Tr
   }
   const box = (b: Batch, x: number, z: number, sx: number, sz: number, y: number, h: number, c: RGB) => b.extrude([x-sx,z-sz,x+sx,z-sz,x+sx,z+sz,x-sx,z+sz], undefined, y, y+h, c, c)
   const buildings = new BuildingIndex(world)
-  const roads = new RoadIndex(world, r => r.allow.includes('car') || r.allow.includes('bus'))
+  const roads = new RoadIndex({ roads: world.roads.flatMap(r => r.lanes?.length
+    ? r.lanes.filter(l => l.allow.includes('car') || l.allow.includes('bus')).map((l, i) => ({ ...r, id: `${r.id}:lane:${i}`, shape: l.shape, w: l.w }))
+    : r.allow.includes('car') || r.allow.includes('bus') ? [r] : []) })
   const occupied = new PlacementGrid()
   for (const t of parkTrees) occupied.reserve(t.x, t.z, TREE_RADIUS * t.scale + 0.1, ground, ground + TREE_HEIGHT * t.scale)
   const free = (x: number, z: number, clearance = 0.25, height = 8) => !buildings.overlapsCircle(x, z, clearance, ground, ground + height) && !world.water.some(w => {

@@ -10,6 +10,13 @@ describe('Display settings', () => {
     expect(useDisplay.getState()).toMatchObject({ projection: 'isometric', lighting: 'golden', shadows: true })
   })
 
+  it('uses life-size agents by default and keeps enlargement opt-in', () => {
+    expect(useDisplay.getState().swarmScale).toBe(1)
+    useDisplay.getState().set({ swarmScale: 2.2 })
+    expect(useDisplay.getState().swarmScale).toBe(2.2)
+    useDisplay.getState().set({ swarmScale: 1 })
+  })
+
   it('caps retina rendering without reducing standard displays below native resolution', () => {
     expect(renderScale(1, false)).toBe(1)
     expect(renderScale(2, false)).toBeCloseTo(2 / 3)

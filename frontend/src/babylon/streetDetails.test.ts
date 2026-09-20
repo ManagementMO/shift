@@ -34,6 +34,19 @@ describe('Street detail clearance', () => {
     engine.dispose()
   })
 
+  it('uses vehicle-lane widths instead of treating the sidewalk as a vehicle lane', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const world = fixture()
+    world.roads[0].w = 28
+    world.stops = []
+    world.rail = []
+    const meshes = buildStreetDetails(scene, world)
+    expect(meshes.some(mesh => mesh.name.startsWith('street-trees-'))).toBe(true)
+    scene.dispose()
+    engine.dispose()
+  })
+
   it('keeps stop shelters off the vehicle lane without changing the stop location', () => {
     const engine = new NullEngine()
     const scene = new Scene(engine)
@@ -44,7 +57,7 @@ describe('Street detail clearance', () => {
     expect(meshes.length).toBeGreaterThan(0)
     for (const mesh of meshes) {
       const vertices = mesh.getVerticesData('position')!
-      for (let i = 0; i < vertices.length; i += 3) expect(Math.abs(vertices[i])).toBeGreaterThan(4)
+      for (let i = 0; i < vertices.length; i += 3) expect(Math.abs(vertices[i])).toBeGreaterThan(world.roads[0].lanes![0].w / 2)
     }
     expect(world.stops[0]).toMatchObject({ x: 0, z: 0 })
     scene.dispose()

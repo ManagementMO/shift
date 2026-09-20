@@ -67,6 +67,18 @@ def test_child_recording_inherits_only_the_unchanged_past(tmp_path):
     assert child.latest_s == 7
 
 
+def test_recording_carries_per_agent_alert_flags_in_the_spare_row_field(tmp_path):
+    from cityshift.live.recording import FrameStore
+
+    store = FrameStore(tmp_path)
+    store.append(0, [(0, 1, 2, 3, 1, 1, 1), (1, 1, 2, 3, 1, 2, 4, 0b1011)], {**COUNTS, "total": 2, "walking": 1, "driving": 1}, 20)
+    frames = decode(store.read_chunk(0))
+    assert [row[7] for row in frames[0][1]] == [0, 0b1011]
+    with pytest.raises(ValueError):
+        store.append(1, [(0, 1, 2, 3, 1, 1, 1, 70000)], {**COUNTS, "total": 2, "walking": 1, "driving": 1}, 20)
+    assert store.latest_s == 0
+
+
 def test_recording_rejects_nonfinite_positions_and_inconsistent_cohort_counts(tmp_path):
     from cityshift.live.recording import FrameStore
 

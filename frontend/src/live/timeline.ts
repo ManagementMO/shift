@@ -1,4 +1,4 @@
-import type { Intervention, LiveSession } from './types'
+import { HAZARDS, type Intervention, type LiveSession } from './types'
 
 export function environmentAt(session: LiveSession, t: number) {
   let temperature = session.config.temperature_c
@@ -24,6 +24,7 @@ export function interventionLabel(change: Intervention): string {
     case 'add_bus_route': return `${change.bus_id.replace('_', ' ')} route added`
     case 'close_road': return `${change.edge_ids.length} road segments closed`
     case 'reopen_road': return `${change.edge_ids.length} road segments reopened`
+    case 'incident': return `${change.label ?? HAZARDS.find(h => h.id === change.hazard)?.label ?? change.hazard} · ${change.radius_m} m`
   }
 }
 

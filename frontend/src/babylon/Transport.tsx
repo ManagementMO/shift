@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react'
 
 import { clock, PLAYBACK_SPEEDS, simClock } from '../world/playback'
 import { cohortSummaryAt, STATE_COLORS, type PersonState, type ReplayIndex } from '../replay'
-import type { TrafficStats } from './traffic'
+import { EMPTY_STATS, type TrafficStats } from './traffic'
 
 /** Minimal play/scrub bar for the Babylon route; the full sim dock is wired in a later milestone. */
 export default function Transport({ rx, stats }: { rx: ReplayIndex; stats: () => TrafficStats }) {
   const [t, setT] = useState(clock.t)
   const [playing, setPlaying] = useState(clock.playing)
   const [speed, setSpeed] = useState(clock.speed)
-  const [live, setLive] = useState<TrafficStats>({ buses: 0, cars: 0, people: 0, released: 0 })
+  const [live, setLive] = useState<TrafficStats>(EMPTY_STATS)
   const cohort = cohortSummaryAt(rx, t)
   const total = Object.keys(rx.personEvents).length
 
