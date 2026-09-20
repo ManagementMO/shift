@@ -1,12 +1,9 @@
-import { lazy, Suspense, useEffect } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { useLive } from './live/session'
 import { useStore } from './store'
 import type { WorldScene } from './babylon/scene'
-import TopStrip from './shell/TopStrip'
-import SimDock from './shell/SimDock'
-import ToolRail from './shell/ToolRail'
-import ToolPanel from './shell/ToolPanel'
-import AgentBubble from './shell/AgentBubble'
+import GodCityUI from './gods-plan/GodCityUI'
+import { GlassSurface } from './gods-plan/ui'
 import './App.css'
 
 const WorldBabylon = lazy(() => import('./babylon/WorldBabylon'))
@@ -14,47 +11,23 @@ const WorldBabylon = lazy(() => import('./babylon/WorldBabylon'))
 /** The live city: one running SUMO simulation under the shell; every tool changes it in place. */
 export default function App({ active = true, onGlobe, onWorldReady, onWorldError }: { active?: boolean; onGlobe?: () => void; onWorldReady?: (scene: WorldScene) => void; onWorldError?: (message: string) => void }) {
   const boot = useStore((s) => s.boot)
-  const error = useStore((s) => s.error)
-  const setError = useStore((s) => s.setError)
-  const { busy, error: liveError } = useLive()
+  const { busy } = useLive()
+  const [world, setWorld] = useState<WorldScene | null>(null)
+  const ready = useCallback((scene: WorldScene) => { setWorld(scene); onWorldReady?.(scene) }, [onWorldReady])
 
   useEffect(() => {
     void boot(new URLSearchParams(window.location.search).get('pack') ?? undefined)
   }, [boot])
 
   return (
-    <div className="shell">
+    <div className="shell gp-shell">
       <div className="worlds">
         <Suspense fallback={null}>
-          <WorldBabylon side="solo" active={active} onWorldReady={onWorldReady} onWorldError={onWorldError} />
+          <WorldBabylon side="solo" active={active} onWorldReady={ready} onWorldError={onWorldError} />
         </Suspense>
       </div>
-
-      <TopStrip onGlobe={onGlobe} active={active} />
-
-      <ToolRail active={active} />
-      <ToolPanel />
-      <AgentBubble />
-
-      <div className="bottom">
-        <SimDock active={active} />
-      </div>
-
-      {busy && (
-        <div className="building">
-          <div className="building-card">
-            <i />
-            <b>{busy}</b>
-            <span className="small dim">SUMO is working on the running city.</span>
-          </div>
-        </div>
-      )}
-
-      {(error ?? liveError) && (
-        <div className="error" onClick={() => setError(null)}>
-          {error ?? liveError}
-        </div>
-      )}
+      <GodCityUI world={world} active={active} onHome={onGlobe ?? (() => { window.location.href = '/' })} />
+      {busy && active && <div className="gp-busy-cover"><GlassSurface><b>{busy}</b><p>SUMO is working on the running city.</p></GlassSurface></div>}
     </div>
   )
 }

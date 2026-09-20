@@ -4,6 +4,7 @@ import '@babylonjs/core/Culling/ray'
 import type { LiveChannel } from '../live/channel'
 import { live, liveClosuresAt } from '../live/session'
 import { useStore, type Selection } from '../store'
+import { useGodVisuals } from '../gods-plan/state'
 import type { Restriction } from '../types'
 import { corridorPose, currentPose, districtPose } from '../world/camera'
 import DevelopmentMarkers from '../world/DevelopmentMarkers'
@@ -179,6 +180,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         return { x: e.clientX - r.left, y: e.clientY - r.top }
       }
       const onMove = (e: PointerEvent): void => {
+        if (useGodVisuals.getState().armed) return
         last = local(e)
         if (down) {
           if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > DRAG_PX) {
@@ -195,10 +197,12 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         if (aiming) useStore.getState().setDevelopmentHover(null)
       }
       const onDown = (e: PointerEvent): void => {
+        if (useGodVisuals.getState().armed) { down = null; return }
         if (e.button === 0) down = { x: e.clientX, y: e.clientY }
         else stopFollowing(map)
       }
       const onUp = (e: PointerEvent): void => {
+        if (useGodVisuals.getState().armed) { down = null; return }
         if (!down) return
         const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y)
         down = null
@@ -317,6 +321,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
       })
       const unsub = useStore.subscribe(sync)
       const unsubLive = live.subscribe(sync)
+      const unsubVisuals = useGodVisuals.subscribe(sync)
 
       onWorldReady?.(ws)
       ws.scene.onDisposeObservable.addOnce(() => {
@@ -334,6 +339,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         labels?.dispose()
         unsub()
         unsubLive()
+        unsubVisuals()
         offFrame()
         unregister()
         nav.dispose()
@@ -375,5 +381,5 @@ function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverla
   developments.set({ developments: view.primary?.state.developments ?? [], draft, placed: s.developmentPlaced,
     ghostPosition: draft ? s.developmentPlaced ? draft.position : s.developmentHover : null, invalidDraft: !!s.developmentError && s.developmentPlaced,
     focusedId: s.selection?.kind === 'development' ? s.selection.id : null, zones: s.pack?.zones ?? [], t })
-  ws.storm.setHazards(s.ghost?.hazard ? [s.ghost.hazard] : [])
+  ws.storm.setHazards([...(s.ghost?.hazard ? [s.ghost.hazard] : []), ...(side === 'left' ? [] : useGodVisuals.getState().events.map(event => event.track))])
 }
