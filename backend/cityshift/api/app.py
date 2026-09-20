@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -12,13 +14,25 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from cityshift.api.live_router import close_registry
+from cityshift.api.live_router import router as live_router
 from cityshift.api.service import get_service
 from cityshift.contracts import SCHEMA_VERSION, DemandSet, ScenarioSpec, ServicePlan
 from cityshift.domain.network import pack_dir
 from cityshift.domain.runs import RUN_ROOT
 from cityshift.transport.sumo_env import sumo_version
 
-app = FastAPI(title="CITY//SHIFT", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    try:
+        yield
+    finally:
+        close_registry()
+
+
+app = FastAPI(title="CITY//SHIFT", version="0.1.0", lifespan=lifespan)
+app.include_router(live_router)
 app.add_middleware(GZipMiddleware, minimum_size=2048)
 app.add_middleware(
     CORSMiddleware,

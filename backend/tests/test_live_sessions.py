@@ -100,3 +100,51 @@ def test_live_registry_rejects_unknown_ids_and_uncomputed_edits(live_pack, tmp_p
         assert not session.snapshot()["commands"]
     finally:
         registry.close()
+
+
+def test_recorded_history_and_receipts_survive_a_registry_restart(live_pack, tmp_path):
+    from cityshift.live.sessions import LiveRegistry
+
+    first = LiveRegistry(tmp_path, pack_loader=lambda _: live_pack)
+    session = first.create(SessionConfig(pack_id=live_pack.pack_id, initial_population=0))
+    try:
+        session.wait_ready()
+        request = InterventionRequest(command_id="cold-once", at_s=0, expected_revision=0, intervention={"kind": "temperature", "temperature_c": 0})
+        first.apply(session.session_id, request)
+        session.advance(4)
+        wait_until(session, 4)
+        recorded = session.recording.read_chunk(0)
+    finally:
+        first.close()
+    second = LiveRegistry(tmp_path, pack_loader=lambda _: live_pack)
+    try:
+        restored = second.get(session.session_id)
+        assert not restored.thread.is_alive()
+        assert restored.snapshot()["available_until_s"] == 4
+        assert restored.snapshot()["temperature_c"] == 0
+        assert restored.recording.read_chunk(0) == recorded
+        duplicate = second.apply(session.session_id, request)
+        assert duplicate.session_id == restored.session_id
+        assert len(duplicate.snapshot()["commands"]) == 1
+    finally:
+        second.close()
+
+
+def test_seeded_restore_reproduces_measured_motion_after_the_branch_point(live_pack, tmp_path):
+    from cityshift.live.sessions import LiveRegistry
+
+    registry = LiveRegistry(tmp_path, pack_loader=lambda _: live_pack)
+    try:
+        parent = registry.create(SessionConfig(pack_id=live_pack.pack_id, initial_population=0, car_share=0))
+        parent.wait_ready()
+        registry.apply(parent.session_id, InterventionRequest(command_id="same-travelers", at_s=0, expected_revision=0, intervention={"kind": "population", "count": 12, "destination_zone_id": "Z_EAST", "origin_zone_id": "Z_WEST", "release_window_s": 0}))
+        parent.advance(9)
+        wait_until(parent, 9)
+        original = parent.recording.read_chunk(0)
+        child = registry.apply(parent.session_id, InterventionRequest(command_id="unchanged-weather", at_s=5, expected_revision=1, intervention={"kind": "temperature", "temperature_c": 20}))
+        child.advance(9)
+        wait_until(child, 9)
+        assert child.recording.read_chunk(0) == original
+        assert child.metadata()["entities"] == parent.metadata()["entities"]
+    finally:
+        registry.close()

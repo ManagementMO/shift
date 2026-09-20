@@ -5,7 +5,7 @@ type Listener = (t: number) => void
 
 const UI_HZ = 10
 
-class PlaybackClock {
+export class PlaybackClock {
   t = 0
   playing = false
   speed = 10
@@ -15,9 +15,20 @@ class PlaybackClock {
   private raf = 0
   private last = 0
   private lastUi = 0
+  private frontier: number | null = null
+
+  get buffering(): boolean {
+    return this.playing && this.frontier !== null && this.t >= this.frontier && this.t < this.horizon
+  }
+
+  setFrontier(t: number | null) {
+    this.frontier = t === null ? null : Math.max(0, Math.min(this.horizon, t))
+    if (this.frontier !== null && this.t > this.frontier) this.t = this.frontier
+    this.emit(true)
+  }
 
   seek(t: number) {
-    this.t = Math.max(0, Math.min(this.horizon, t))
+    this.t = Math.max(0, Math.min(this.horizon, this.frontier ?? this.horizon, t))
     this.emit(true)
   }
 
@@ -64,7 +75,7 @@ class PlaybackClock {
   private step = (now: number) => {
     const dt = (now - this.last) / 1000
     this.last = now
-    this.t = Math.min(this.horizon, this.t + dt * this.speed)
+    this.t = Math.min(this.horizon, this.frontier ?? this.horizon, this.t + dt * this.speed)
     if (this.t >= this.horizon) {
       this.playing = false
       this.emit(true)

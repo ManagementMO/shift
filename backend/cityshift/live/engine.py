@@ -8,8 +8,19 @@ import sumolib
 import traci
 
 from cityshift.contracts import CityPack
-from cityshift.live.contracts import Intervention, SessionConfig, TemperatureChange, temperature_response
-from cityshift.live.recording import COUNT_KEYS, FrameStore
+from cityshift.live.contracts import (
+    BusRouteChange,
+    Intervention,
+    PopulationChange,
+    RoadChange,
+    SessionConfig,
+    TemperatureChange,
+    temperature_response,
+)
+from cityshift.live.network import LiveNetwork
+from cityshift.live.population import Population
+from cityshift.live.recording import FrameStore
+from cityshift.live.transit import Transit
 from cityshift.transport.sumo_env import binary
 from cityshift.transport.sumo_xml import BusStopDef, write_additional, write_routes, write_sumocfg
 
@@ -45,6 +56,10 @@ class LiveEngine:
         try:
             self.connection = traci.connect(port, numRetries=240, waitBetweenRetries=0.25, proc=self.process)
             self.engine_version = self.connection.getVersion()[1]
+            self.network = LiveNetwork(self.net, self.connection, self.origin)
+            self.transit = Transit(self.network, pack, config, self.entities)
+            self.population = Population(self.network, self.transit, pack, config, self.entities)
+            self.population.add_initial()
             if self.recording.latest_s < 0:
                 self.recording.append(0, [], self.counts(), self.temperature_c)
         except Exception:
@@ -54,21 +69,41 @@ class LiveEngine:
     def apply(self, intervention: Intervention, command_id: str) -> dict:
         if isinstance(intervention, TemperatureChange):
             self.temperature_c = intervention.temperature_c
+            self.population.change_temperature(self.temperature_c)
             return temperature_response(self.temperature_c).model_dump()
+        if isinstance(intervention, RoadChange):
+            result = self.network.apply(intervention, self.time_s)
+            self.population.reconsider()
+            return result
+        if isinstance(intervention, BusRouteChange):
+            result = self.transit.add(intervention, command_id, self.time_s)
+            self.population.reconsider()
+            return result
+        if isinstance(intervention, PopulationChange):
+            return self.population.add(intervention, command_id, self.time_s)
         raise ValueError("unsupported live intervention")
 
     def counts(self) -> dict[str, int]:
-        return dict.fromkeys(COUNT_KEYS, 0)
+        return self.population.counts()
+
+    def metrics(self) -> dict:
+        return self.population.metrics() | {"rerouted": self.network.rerouted, "warnings": list(self.network.warnings)}
 
     def step(self, record: bool = True) -> None:
         if self.closed or self.connection is None:
             raise RuntimeError("session is closed")
         if self.time_s >= self.config.horizon_s:
             raise ValueError("simulation horizon reached")
+        closed = self.network.closed_edges.copy()
+        self.network.expire(self.time_s)
+        if closed != self.network.closed_edges:
+            self.population.reconsider()
+        self.population.before_step(self.time_s)
         self.connection.simulationStep()
         self.time_s = int(self.connection.simulation.getTime())
+        rows = self.population.observe(self.time_s)
         if record:
-            self.recording.append(self.time_s, [], self.counts(), self.temperature_c)
+            self.recording.append(self.time_s, rows, self.counts(), self.temperature_c)
 
     def advance_to(self, target_s: int, record: bool = True) -> None:
         if not self.time_s <= target_s <= self.config.horizon_s:

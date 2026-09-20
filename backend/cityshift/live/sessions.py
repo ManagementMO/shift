@@ -27,7 +27,7 @@ class LiveSession:
 
     def __init__(self, session_id: str, pack: CityPack, config: SessionConfig, root: Path,
                  parent: LiveSession | None = None, fork_s: int | None = None,
-                 history: list[InterventionRequest] | None = None):
+                 history: list[InterventionRequest] | None = None, archived_state: dict | None = None):
         self.session_id = session_id
         self.pack = pack
         self.config = config
@@ -51,7 +51,14 @@ class LiveSession:
             "chunk_seconds": CHUNK_SECONDS, "protocol": "CSF1", "engine_version": "", "entity_count": 0,
         }
         self.thread = threading.Thread(target=self._run, name=session_id, daemon=True)
-        self.thread.start()
+        if archived_state is not None:
+            self._state = copy.deepcopy(archived_state)
+            self._state["status"] = "failed" if archived_state["status"] == "failed" else "closed"
+            self._closing = True
+            self._ready.set()
+        else:
+            atomic_json(self.root / "session.json", self._state)
+            self.thread.start()
 
     def wait_ready(self, timeout: float = 90) -> None:
         if not self._ready.wait(timeout):
@@ -86,9 +93,15 @@ class LiveSession:
 
     def metadata(self) -> dict:
         if not self.thread.is_alive():
-            path = self.root / "entities.json"
-            return {"entities": json.loads(path.read_text()) if path.exists() else []}
+            path, routes = self.root / "entities.json", self.root / "routes.json"
+            return {"entities": json.loads(path.read_text()) if path.exists() else [], "routes": json.loads(routes.read_text()) if routes.exists() else [], "fleet": self.snapshot().get("fleet", [])}
         return self._call("metadata")
+
+    def _save_metadata(self) -> None:
+        engine = self._engine
+        assert engine is not None
+        atomic_json(self.root / "entities.json", engine.entities)
+        atomic_json(self.root / "routes.json", engine.transit.public_routes())
 
     def _publish(self, status: str | None = None, error: str | None = None) -> None:
         engine = self._engine
@@ -98,6 +111,7 @@ class LiveSession:
                     time_s=engine.time_s, available_until_s=self.recording.latest_s,
                     temperature_c=engine.temperature_c, counts=engine.counts(), engine_version=engine.engine_version,
                     entity_count=len(engine.entities), mobility=temperature_response(engine.temperature_c).model_dump(),
+                    metrics=engine.metrics(), fleet=engine.transit.fleet(), closed_edge_ids=sorted(engine.network.closed_edges),
                 )
             self._state.update(revision=len(self.commands), commands=[c.model_dump(mode="json") for c in self.commands])
             if status is not None:
@@ -117,7 +131,7 @@ class LiveSession:
         elif name == "pause":
             self._target = engine.time_s
         elif name == "metadata":
-            return {"entities": copy.deepcopy(engine.entities)}
+            return {"entities": copy.deepcopy(engine.entities), "routes": engine.transit.public_routes(), "fleet": engine.transit.fleet()}
         elif name == "apply":
             assert isinstance(value, InterventionRequest)
             for command in self.commands:
@@ -132,7 +146,7 @@ class LiveSession:
             self._target = engine.time_s
             engine.apply(value.intervention, value.command_id)
             self.commands.append(value)
-            atomic_json(self.root / "entities.json", engine.entities)
+            self._save_metadata()
         else:
             raise ValueError("unknown worker command")
         self._publish("running" if self._target > engine.time_s else "paused")
@@ -146,7 +160,7 @@ class LiveSession:
                 engine.advance_to(command.at_s, record=False)
                 engine.apply(command.intervention, command.command_id)
             engine.advance_to(self._target, record=False)
-            atomic_json(self.root / "entities.json", engine.entities)
+            self._save_metadata()
             self._publish("paused")
             self._ready.set()
             while True:
@@ -187,7 +201,8 @@ class LiveSession:
         with self._condition:
             self._closing = True
             self._condition.notify_all()
-        self.thread.join(timeout=120)
+        if self.thread.ident is not None:
+            self.thread.join(timeout=120)
         if self.thread.is_alive():
             raise TimeoutError("SUMO worker did not stop")
 
@@ -199,7 +214,9 @@ class LiveRegistry:
         self.pack_loader = pack_loader
         self.sessions: dict[str, LiveSession] = {}
         self.lock = threading.RLock()
-        self.receipts: dict[str, dict] = {}
+        receipts = self.root / "receipts.json"
+        self.receipts: dict[str, dict] = json.loads(receipts.read_text()) if receipts.exists() else {}
+        self._loading: set[str] = set()
 
     def create(self, config: SessionConfig, parent: LiveSession | None = None, fork_s: int | None = None,
                history: list[InterventionRequest] | None = None) -> LiveSession:
@@ -217,9 +234,30 @@ class LiveRegistry:
             return session
 
     def get(self, session_id: str) -> LiveSession:
-        if not SESSION_ID.fullmatch(session_id) or session_id not in self.sessions:
+        if not SESSION_ID.fullmatch(session_id):
             raise KeyError("live session not found")
-        return self.sessions[session_id]
+        if session_id in self.sessions:
+            return self.sessions[session_id]
+        with self.lock:
+            if session_id in self.sessions:
+                return self.sessions[session_id]
+            root = self.root / session_id
+            path = root / "session.json"
+            if not path.resolve().is_relative_to(self.root.resolve()) or not path.is_file():
+                raise KeyError("live session not found")
+            if session_id in self._loading:
+                raise ValueError("recorded session lineage contains a cycle")
+            self._loading.add(session_id)
+            try:
+                state = json.loads(path.read_text())
+                config = SessionConfig.model_validate(state["config"])
+                parent = self.get(state["parent_session_id"]) if state.get("parent_session_id") else None
+                history = [InterventionRequest.model_validate(c) for c in state["commands"]]
+                session = LiveSession(session_id, self.pack_loader(config.pack_id), config, root, parent, state.get("fork_s"), history, state)
+                self.sessions[session_id] = session
+                return session
+            finally:
+                self._loading.remove(session_id)
 
     def apply(self, session_id: str, request: InterventionRequest) -> LiveSession:
         with self.lock:
@@ -231,6 +269,8 @@ class LiveRegistry:
                 return self.get(previous["session_id"])
             parent = self.get(session_id)
             state = parent.pause()
+            if state["network_fingerprint"] != parent.pack.network_fingerprint:
+                raise ValueError("the city network changed; this recording cannot be continued")
             if state["revision"] != request.expected_revision:
                 raise ValueError("session revision changed; refresh before applying")
             if request.at_s > state["available_until_s"]:
@@ -245,6 +285,18 @@ class LiveRegistry:
             self.receipts[receipt_key] = {"session_id": session.session_id, "request": request.model_dump(mode="json")}
             atomic_json(self.root / "receipts.json", self.receipts)
             return session
+
+    def resume(self, session_id: str) -> LiveSession:
+        with self.lock:
+            session = self.get(session_id)
+            if session.thread.is_alive():
+                return session
+            state = session.snapshot()
+            if state["network_fingerprint"] != session.pack.network_fingerprint:
+                raise ValueError("the city network changed; this recording cannot be continued")
+            if session.recording.latest_s < 0:
+                raise ValueError("this session has no recorded state; start a new city")
+            return self.create(session.config, session, session.recording.latest_s, list(session.commands))
 
     def close(self) -> None:
         for session in list(self.sessions.values()):

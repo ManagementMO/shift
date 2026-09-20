@@ -18,7 +18,7 @@ def live_pack(tmp_path_factory):
     nodes.write_text(GEO_NODES)
     bypass = ''.join(
         f'<edge id="{eid}" from="{a}" to="{b}" numLanes="1" speed="13.9" sidewalkWidth="3.0"/>'
-        for eid, a, b in [("e_AE", "A", "E"), ("e_EA", "E", "A"), ("e_ED", "E", "D"), ("e_DE", "D", "E")]
+        for eid, a, b in [("e_AE", "A", "E"), ("e_EA", "E", "A"), ("e_ED", "E", "D"), ("e_DE", "D", "E"), ("e_BE", "B", "E"), ("e_EB", "E", "B")]
     )
     edges.write_text(EDGES.replace("</edges>", bypass + "</edges>"))
     subprocess.run([

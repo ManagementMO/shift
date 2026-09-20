@@ -45,6 +45,7 @@ class PopulationChange(InputModel):
     kind: Literal["population"]
     count: int = Field(ge=1, le=MAX_TRAVELERS, strict=True)
     destination_zone_id: Identifier
+    origin_zone_id: Identifier | None = None
     release_window_s: int = Field(default=300, ge=0, le=1800, strict=True)
 
 
