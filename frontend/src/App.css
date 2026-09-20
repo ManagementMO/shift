@@ -100,6 +100,8 @@ button:disabled {
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: 100%;
   height: 100dvh;
+  /* anchored overlays (a bubble on a traveler near the edge) must never widen the page */
+  overflow: clip;
 }
 .worlds,
 .worlds .world {
