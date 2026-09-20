@@ -64,7 +64,7 @@ export function populationUnavailableReason(status: PopulationStatus | null, err
 export function defaultPopulationSpec(status: PopulationStatus, options: { count?: number; seed?: number; horizon?: number; packId?: string; maxCostUsd?: number; modelIds?: string[] } = {}): PopulationSpec {
   const unavailable = populationDefinitionReason(status)
   if (unavailable) throw new Error(unavailable)
-  const cost = options.maxCostUsd ?? 5
+  const cost = options.maxCostUsd ?? 10
   if (!Number.isFinite(cost) || cost < 0) throw new Error('Population budget must be a finite non-negative amount.')
   const count = options.count ?? Math.min(100, populationCountLimit(status))
   const horizon = options.horizon ?? 600
