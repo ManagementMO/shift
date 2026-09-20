@@ -133,7 +133,8 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
         nav.setHover(g?.kind === 'building' ? null : g)
         const a = nav.anchor(g)
         labels?.set(a ? [a] : [])
-        canvas.style.cursor = t && t.kind !== 'building' ? 'pointer' : ''
+        // a crosshair says "choosing an area" for the whole pick; otherwise the pointer marks what can be opened
+        canvas.style.cursor = navMode ? 'crosshair' : t && t.kind !== 'building' ? 'pointer' : ''
       }
       const refreshHover = (): void => {
         raf = 0

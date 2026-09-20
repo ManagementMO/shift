@@ -549,40 +549,6 @@ input[type='checkbox'] {
   display: none;
 }
 
-/* ---------- right edge: District / Corridor pickers ---------- */
-.cams {
-  position: absolute;
-  right: 14px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  background: var(--glass);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  border: 1px solid var(--glass-line);
-  box-shadow: var(--glass-shadow);
-  border-radius: var(--r);
-  z-index: 20;
-}
-.cams button {
-  padding: 7px 10px;
-  border-radius: var(--r);
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--ink-2);
-  text-align: left;
-}
-.cams button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.07);
-}
-.cams button.on {
-  background: var(--hover);
-  color: var(--on-accent);
-}
-
 /* ---------- drawers (scenario left, lens right) ---------- */
 .drawer {
   position: absolute;
@@ -609,7 +575,7 @@ input[type='checkbox'] {
   left: 14px;
 }
 .lens {
-  right: 100px;
+  right: 14px;
   width: 400px;
   padding: 0;
 }
@@ -1299,8 +1265,6 @@ details summary {
   .metric .lbl { font-size: 9px; }
   .rail { left: 10px; padding: 3px; }
   .railbtn { width: 32px; height: 32px; }
-  .cams { right: 10px; padding: 3px; }
-  .cams button { padding: 6px; }
   .display-panel { width: 180px; top: 128px; }
   .drawer { top: 128px; }
   .hint { top: 128px; width: calc(100vw - 32px); border-radius: var(--r); }
