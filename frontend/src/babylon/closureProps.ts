@@ -90,7 +90,7 @@ const key = (x: number, z: number) => `${Math.round(x)},${Math.round(z)}`
  * block, plus every corridor entry), and a line of cones down each closed edge.
  */
 export function closureProps(b: Batch, roads: RoadIndex, closed: Iterable<string>, y = Y.junction + 0.02): void {
-  const shapes = [...closed].map((id) => roads.byId.get(id)).filter((r): r is NonNullable<typeof r> => !!r && r.shape.length >= 4)
+  const shapes = [...new Set(closed)].map((id) => roads.byId.get(id)).filter((r): r is NonNullable<typeof r> => !!r && r.shape.length >= 4)
   const exits = new Set(shapes.map((r) => key(r.shape[r.shape.length - 2], r.shape[r.shape.length - 1])))
   for (const r of shapes) {
     const total = length(r.shape)
