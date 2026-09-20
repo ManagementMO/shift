@@ -93,3 +93,16 @@ def test_cold_response_changes_mobility_without_creating_road_ice():
     assert cold.walk_speed_factor > 0
     assert cold.road_speed_factor == mild.road_speed_factor == 1
     assert cold.model_version == mild.model_version
+
+
+def test_stored_incident_commands_load_again_without_their_derived_fields():
+    from cityshift.live.contracts import IncidentChange, InterventionRequest, stored_command
+
+    request = InterventionRequest(command_id="c1", at_s=10, expected_revision=0, intervention=IncidentChange(kind="incident", hazard="storm", lon=-79.38, lat=43.64, radius_m=120))
+    dumped = request.model_dump(mode="json")
+    assert {"effective_duration_s", "alarm_radius_m"} <= dumped["intervention"].keys()
+    stored = request.stored()
+    assert not ({"effective_duration_s", "alarm_radius_m"} & stored["intervention"].keys())
+    assert InterventionRequest.model_validate(stored) == request
+    # a session.json written before this fix still carries the derived fields
+    assert InterventionRequest.model_validate(stored_command(dumped)) == request
