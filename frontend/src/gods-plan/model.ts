@@ -1,6 +1,6 @@
 export type GodTab = 'live' | 'simulate' | 'agents' | 'events' | 'analytics'
-export type GodTool = 'select' | 'map' | 'people' | 'transport' | 'build' | 'population' | 'events' | 'weather' | 'layers'
-export type GodEventKind = 'normal' | 'tornado' | 'earthquake' | 'flood' | 'wildfire' | 'outage' | 'riot' | 'transit' | 'orbital' | 'custom'
+export type GodTool = 'select' | 'map' | 'people' | 'population' | 'events' | 'weather' | 'layers'
+export type GodEventKind = 'normal' | 'closure' | 'development' | 'tornado' | 'earthquake' | 'flood' | 'wildfire' | 'outage' | 'riot' | 'transit' | 'orbital' | 'custom'
 export type GodEventCategory = 'all' | 'natural' | 'infrastructure' | 'social' | 'custom'
 export type GodIntensity = 'low' | 'medium' | 'high'
 

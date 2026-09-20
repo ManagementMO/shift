@@ -75,6 +75,8 @@ interface EventDefinition {
 
 const eventDefinitions: Record<GodEventKind, EventDefinition> = {
   normal: { label: 'Normal Conditions', description: 'Baseline city conditions', alert: 'City Conditions' },
+  closure: { label: 'Road Closure', description: 'Close a street; barricades go up and traffic re-plans', alert: 'Road Closure' },
+  development: { label: 'New Development', description: 'Place a building that adds real trips', alert: 'New Development' },
   orbital: { label: 'Orbital Strike', description: 'High-impact scenario', alert: 'High-Impact Event' },
   tornado: { label: 'Tornado', description: 'Extreme weather event', alert: 'Severe Weather Event' },
   earthquake: { label: 'Earthquake', description: 'Seismic activity', alert: 'Seismic Event' },
@@ -94,15 +96,17 @@ const categories: {
   events: readonly GodEventKind[]
 }[] = [
   { id: 'natural', label: 'Natural Disasters', description: 'Weather and natural hazards', icon: 'cloud', events: ['tornado', 'earthquake', 'flood', 'wildfire'] },
-  { id: 'infrastructure', label: 'Infrastructure', description: 'Power and transit disruptions', icon: 'bolt', events: ['outage', 'transit'] },
+  { id: 'infrastructure', label: 'Infrastructure', description: 'Roads, buildings, power and transit', icon: 'bolt', events: ['closure', 'development', 'outage', 'transit'] },
   { id: 'social', label: 'Social Events', description: 'Crowds and civil unrest', icon: 'people', events: ['riot'] },
   { id: 'custom', label: 'Custom Event', description: 'Tell the city what happens...', icon: 'sparkles', events: [] },
 ]
 
-const referenceEvents: readonly GodEventKind[] = ['normal', 'tornado', 'earthquake', 'outage', 'riot', 'transit', 'flood', 'orbital']
+const referenceEvents: readonly GodEventKind[] = ['normal', 'closure', 'development', 'tornado', 'earthquake', 'outage', 'riot', 'transit', 'flood', 'orbital']
 
 const eventIconNames: Record<GodEventKind, string> = {
   normal: 'sun',
+  closure: 'route',
+  development: 'building',
   tornado: 'tornado',
   earthquake: 'activity',
   flood: 'flood',
@@ -218,7 +222,7 @@ export function EventMenu({
         aria-pressed={selected}
         onClick={() => onSelect(kind)}
       >
-        {kind === 'normal' || kind === 'earthquake' || kind === 'outage'
+        {kind === 'normal' || kind === 'earthquake' || kind === 'outage' || kind === 'closure' || kind === 'development'
           ? <GodIcon name={eventIconNames[kind]} size={36} className={`gp-event-glyph gp-event-glyph-${kind}`} />
           : <EventGlyph kind={kind} size={40} className={`gp-event-glyph gp-event-glyph-${kind}`} />}
         <span className="gp-event-row-copy"><span className="gp-event-row-title">{definition.label}</span><span className="gp-event-row-description">{definition.description}</span></span>
