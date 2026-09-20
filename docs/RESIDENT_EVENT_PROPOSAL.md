@@ -9,6 +9,13 @@ main and its God's Plan command bar, Events menu, City log and resident panels.
 Rebasing brings those entry points into the branch; the native event bridge
 described here still needs implementation.
 
+Merge-readiness update: main at `7903714` has since been merged into this branch.
+Its rain/storm/flood/fire menu entries now submit live incidents, and local
+plane prompts start visual flyovers. Those additions are preserved alongside
+the centred recording controls. They still target the street simulation rather
+than the native society; the source audit below records the earlier `73e1e45`
+baseline, and that native authority/observation bridge remains proposed.
+
 The companion [natural-language and swarm conversation proposal](SWARM_COMMAND_PROPOSAL.md)
 extends the same flow to temperature, rain, roadblocks, policy changes such as
 taxes, direct messages to swarms, and summaries of their recorded responses.

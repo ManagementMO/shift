@@ -6,6 +6,11 @@ This document extends the
 at `73e1e45`. The existing command bar, Events menu and City log are the product
 entry points. The native command/conversation behavior below remains to be built.
 
+The branch now also includes main through `7903714`: live weather/fire placement
+and local visual plane commands are preserved. The audit below describes the
+earlier baseline; these newer street/visual commands do not yet deliver changes
+or conversations to native resident sessions.
+
 ## Intended experience
 
 The user can change conditions in ordinary language, talk directly to a resident

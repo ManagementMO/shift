@@ -7,6 +7,8 @@ import { selectionEntityId } from '../selection'
 import { live, liveClosuresAt } from '../live/session'
 import { useStore, type Selection } from '../store'
 import { useGodVisuals } from '../gods-plan/state'
+import { applyNow } from '../live/session'
+import { weatherTrackFor, WEATHER_VISUALS, type HazardTrack as WeatherTrack } from '../weather'
 import type { Restriction } from '../types'
 import { corridorPose, currentPose, districtPose } from '../world/camera'
 import DevelopmentMarkers from '../world/DevelopmentMarkers'
@@ -14,6 +16,7 @@ import { clock } from '../world/playback'
 import { cameraTo, registerMap } from '../world/registry'
 import type { BuildingIndex } from './buildingIndex'
 import { DevelopmentOverlay } from './developments'
+import { guideTrack, HazardEffects } from './hazardEffects'
 import { BabylonSyncMap } from './mapAdapter'
 import { CORRIDOR_PICK_PX, NavLabels, NavOverlay, type NavMode, type NavTarget } from './navigation'
 import { Overlay } from './overlay'
@@ -107,6 +110,12 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
       const buildings = ws.buildings
       const nav = new NavOverlay(ws.scene, ws.world, ws.roads, buildings)
       const streets = new RoadIndex(ws.world, (r) => r.allow.includes('car') || r.allow.includes('bus'))
+      // rain / storm / fire / flood incidents of the live city, plus the cloud following the cursor while one is aimed
+      const weather = new HazardEffects(ws.scene, ws.frame)
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      const animator = ws.scene.onBeforeRenderObservable.add(() => {
+        if (!reducedMotion) weather.animate(Math.min(ws.engine.getDeltaTime(), 100) / 1000)
+      })
       const unregister = registerMap(side, map)
       if (side !== 'left') {
         // a development branch that loaded before any map was registered still gets its framing
@@ -190,6 +199,12 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
       const onMove = (e: PointerEvent): void => {
         if (useGodVisuals.getState().armed) return
         last = local(e)
+        if (useGodVisuals.getState().weather) {
+          const g = map.unprojectGround(last.x, last.y)
+          useGodVisuals.getState().setWeatherAt(g ? ws.frame.worldToLonLat(g[0], g[1]) : null)
+          canvas.style.cursor = 'crosshair'
+          return
+        }
         if (down) {
           if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > DRAG_PX) {
             if (hover) applyHover(null)
@@ -214,6 +229,19 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         if (!down) return
         const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y)
         down = null
+        const aim = useGodVisuals.getState().weather
+        if (aim) {
+          // casting a weather / fire event: one click posts the live incident where the cloud is
+          if (moved > DRAG_PX) return
+          const p = local(e)
+          const g = map.unprojectGround(p.x, p.y)
+          if (!g) return
+          const [lon, lat] = ws.frame.worldToLonLat(g[0], g[1])
+          useGodVisuals.getState().setWeather(null)
+          canvas.style.cursor = ''
+          void applyNow({ kind: 'incident', hazard: aim.hazard, lon, lat, radius_m: Math.round(aim.radius_m), duration_s: Math.round(aim.duration_s), label: aim.label || null })
+          return
+        }
         const p = local(e)
         if (moved > DRAG_PX) {
           if (!raf) raf = requestAnimationFrame(refreshHover)
@@ -330,7 +358,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
           if (last && !raf) raf = requestAnimationFrame(refreshHover)
         }
         nav.setSelected(selectedGround(sel, nav, buildings))
-        marks(ws, overlay, developments, clock.t, side)
+        marks(ws, overlay, developments, weather, clock.t, side)
       }
       syncRef.current = sync
       sync()
@@ -338,7 +366,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
       const offFrame = clock.onFrame((t) => {
         ws.simT = t
         syncSelection()
-        marks(ws, overlay, developments, t, side)
+        marks(ws, overlay, developments, weather, t, side)
       })
       const unsub = useStore.subscribe(sync)
       const unsubLive = live.subscribe(sync)
@@ -365,6 +393,8 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         unregister()
         nav.dispose()
         developments.dispose()
+        ws.scene.onBeforeRenderObservable.remove(animator)
+        weather.dispose()
         overlay.dispose()
         map.dispose()
         syncRef.current = () => {}
@@ -386,7 +416,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
 }
 
 /** Standing closures, the tool's aim, the focused closure and the developments of the live city at sim time `t`. */
-function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverlay, t: number, side: string): void {
+function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverlay, weather: HazardEffects, t: number, side: string): void {
   const s = useStore.getState()
   if (s.populationActive) {
     overlay.set({ closed: [], ghost: [], focus: [], ghostStops: [] })
@@ -409,4 +439,22 @@ function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverla
     ghostPosition: draft ? s.developmentPlaced ? draft.position : s.developmentHover : null, invalidDraft: !!s.developmentError && s.developmentPlaced,
     focusedId: s.selection?.kind === 'development' ? s.selection.id : null, zones: s.pack?.zones ?? [], t })
   ws.storm.setHazards([...(s.ghost?.hazard ? [s.ghost.hazard] : []), ...(side === 'left' ? [] : useGodVisuals.getState().events.map(event => event.track))])
+  weather.set(weatherTracks(ws, t), t, useGodVisuals.getState().weather ? 'weather-guide' : null)
+}
+
+/** Weather / fire visuals for the live incidents in their windows, plus the muted guide cloud where one is being aimed. */
+function weatherTracks(ws: WorldScene, t: number): WeatherTrack[] {
+  const tracks: WeatherTrack[] = []
+  for (const incident of live.session?.incidents ?? []) {
+    if (!(incident.hazard in WEATHER_VISUALS) || t < incident.start_s || t >= incident.end_s) continue
+    const track = weatherTrackFor(incident, ws.frame)
+    if (track) tracks.push(track)
+  }
+  const { weather, weatherAt } = useGodVisuals.getState()
+  if (weather && weatherAt) {
+    const kind = WEATHER_VISUALS[weather.hazard]
+    const guide = kind && guideTrack({ waypoints: [weatherAt], radius_m: weather.radius_m, start_s: t, end_s: t + weather.duration_s, modes: [], kind, label: weather.label }, ws.frame)
+    if (guide) tracks.push(guide)
+  }
+  return tracks
 }

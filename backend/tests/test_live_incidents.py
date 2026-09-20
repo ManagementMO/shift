@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 
 from cityshift.live.contracts import IncidentChange, PopulationChange, SessionConfig
@@ -51,10 +53,14 @@ def test_incident_without_streets_is_refused_before_touching_the_city(drivers):
 def test_a_crash_is_learned_by_proximity_and_only_informed_drivers_detour(drivers):
     drivers.apply(demand(40, 120), "commuters")
     drivers.advance_to(60)
-    drivers.apply(incident(drivers, "crash", radius=80, duration=300), "crash-1")
+    with patch.object(drivers.network, "reroute_vehicle", wraps=drivers.network.reroute_vehicle) as reroute:
+        drivers.apply(incident(drivers, "crash", radius=80, duration=300), "crash-1")
+    # A nearby witness can react immediately. Uninformed drivers must not receive
+    # the citywide reroute used for announced closures, regardless of spawn layout.
+    informed = set(drivers.swarm.aware_ids())
+    assert {call.args[0] for call in reroute.call_args_list} <= informed
     assert "passenger" in drivers.connection.lane.getDisallowed("e_BC_1")
     assert "pedestrian" not in drivers.connection.lane.getDisallowed("e_BC_0")
-    assert drivers.network.rerouted == 0, "an unannounced crash must not reroute every driver in the city"
     drivers.advance_to(200)
     swarm = drivers.metrics()["swarm"]
     assert swarm["witnessed"] > 0

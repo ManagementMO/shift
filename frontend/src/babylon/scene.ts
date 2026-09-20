@@ -38,6 +38,7 @@ import type { WorldData } from './worldData'
 import { buildStreetDetails } from './streetDetails'
 import { loadLandmarkModels } from './landmarkModels'
 import { StormSystem } from './tornado'
+import { PlaneFlyover, planeShadowHeight } from './plane'
 
 export interface WorldSceneOptions {
   shadows?: boolean
@@ -64,6 +65,7 @@ export class WorldScene {
   readonly buildings: BuildingIndex
   readonly traffic: Traffic
   readonly storm: StormSystem
+  readonly plane: PlaneFlyover
   readonly fill: HemisphericLight
   readonly assetsReady: Promise<void>
   private readonly post: DefaultRenderingPipeline
@@ -82,7 +84,8 @@ export class WorldScene {
     this.world = world
     const balanced = opts.quality === 'balanced'
     this.balanced = balanced
-    this.shadowHeight = Math.max(100, ...world.buildings.map((b) => (b.base ?? 0) + b.h), ...world.landmarks.map((l) => l.h), ...(world.massing?.buildings.map((b) => b.h) ?? []))
+    const roofHeight = Math.max(100, ...world.buildings.map((b) => (b.base ?? 0) + b.h), ...world.landmarks.map((l) => l.h), ...(world.massing?.buildings.map((b) => b.h) ?? []))
+    this.shadowHeight = planeShadowHeight(roofHeight)
     this.engine = new Engine(canvas, true, { antialias: true, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' }, true)
     this.engine.setHardwareScalingLevel(balanced ? 1 : renderScale(window.devicePixelRatio, true, canvas.clientWidth, canvas.clientHeight))
     this.engine.useReverseDepthBuffer = true
@@ -231,10 +234,12 @@ export class WorldScene {
     this.buildings = new BuildingIndex(world)
     this.traffic = new Traffic(scene, this.frame, balanced ? null : this.shadows, world.surfaces ? Y.road : Y.path)
     this.storm = new StormSystem(scene, this.frame, world, this.city, balanced ? null : this.shadows)
+    this.plane = new PlaneFlyover(scene, this.shadows, world.crs.bounds_world, roofHeight)
     scene.onBeforeRenderObservable.add(() => {
       const p = this.camera.cam.globalPosition
       this.traffic.update(this.simT, { x: p.x, y: p.y, z: p.z, radius: this.camera.cam.radius })
       this.storm.update(this.simT)
+      this.plane.update(this.engine.getDeltaTime() / 1000)
     })
 
     scene.autoClear = true
@@ -254,6 +259,7 @@ export class WorldScene {
     if (!active) {
       this.camera.cancel()
       this.keys.release()
+      this.plane.clear()
     }
   }
 
@@ -291,6 +297,7 @@ export class WorldScene {
     window.removeEventListener('resize', this.resize)
     this.engine.stopRenderLoop()
     this.camera.cancel()
+    this.plane.dispose()
     this.storm.dispose()
     this.traffic.dispose()
     this.terrain.dispose()
