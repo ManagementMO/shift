@@ -72,6 +72,7 @@ export class WorldScene {
   lighting: 'afternoon' | 'golden' = 'afternoon'
   private disposed = false
   private active = true
+  private sharp = true
   private readonly balanced: boolean
   private readonly shadowHeight: number
   landmarkModelsLoaded = 0
@@ -83,7 +84,7 @@ export class WorldScene {
     this.balanced = balanced
     this.shadowHeight = Math.max(100, ...world.buildings.map((b) => (b.base ?? 0) + b.h), ...world.landmarks.map((l) => l.h), ...(world.massing?.buildings.map((b) => b.h) ?? []))
     this.engine = new Engine(canvas, true, { antialias: true, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' }, true)
-    this.engine.setHardwareScalingLevel(balanced ? 1 : renderScale(window.devicePixelRatio, false))
+    this.engine.setHardwareScalingLevel(balanced ? 1 : renderScale(window.devicePixelRatio, true, canvas.clientWidth, canvas.clientHeight))
     this.engine.useReverseDepthBuffer = true
     this.scene = new Scene(this.engine)
     this.frame = new WorldFrame(world.crs)
@@ -94,7 +95,7 @@ export class WorldScene {
     scene.clearColor = new Color4(horizon.r, horizon.g, horizon.b, 1)
     scene.ambientColor = new Color3(0.3, 0.32, 0.36)
     const sky = buildSky(scene, horizon)
-    scene.environmentTexture = new HDRCubeTexture('/assets/city/afternoon-sky.hdr', scene, 128, false, true, false, true)
+    scene.environmentTexture = new HDRCubeTexture('/assets/city/afternoon-sky.hdr', scene, balanced ? 128 : 256, false, true, false, true)
     scene.environmentIntensity = 0.8
 
     // --- lights: sun from the south-west, cool sky fill
@@ -206,7 +207,7 @@ export class WorldScene {
     }
     const pipe = new DefaultRenderingPipeline('post', true, scene, [cam])
     this.post = pipe
-    pipe.samples = balanced ? 1 : Math.max(1, Math.min(2, this.engine.getCaps().maxMSAASamples))
+    pipe.samples = balanced ? 1 : Math.max(1, Math.min(4, this.engine.getCaps().maxMSAASamples))
     pipe.fxaaEnabled = balanced || pipe.samples < 2
     pipe.imageProcessingEnabled = true
     pipe.imageProcessing.contrast = 1.04
@@ -262,7 +263,11 @@ export class WorldScene {
     this.scene.shadowsEnabled = settings.shadows
     this.scene.texturesEnabled = settings.textures
     this.traffic.setAgentScale(settings.swarmScale)
-    this.engine.setHardwareScalingLevel(this.balanced ? 1 : renderScale(window.devicePixelRatio, settings.sharp))
+    this.sharp = settings.sharp
+    this.engine.setHardwareScalingLevel(this.balanced ? 1 : renderScale(window.devicePixelRatio, this.sharp, this.canvas.clientWidth, this.canvas.clientHeight))
+    const samples = this.balanced ? 1 : Math.max(1, Math.min(this.sharp ? 4 : 2, this.engine.getCaps().maxMSAASamples))
+    if (this.post.samples !== samples) this.post.samples = samples
+    this.post.fxaaEnabled = this.balanced || samples < 2
     if (settings.projection !== this.camera.preferredProjection) this.camera.setPreferredProjection(settings.projection)
     if (settings.lighting !== this.lighting) this.setLighting(settings.lighting)
     this.engine.resize()
@@ -271,6 +276,7 @@ export class WorldScene {
   }
 
   resize(): void {
+    this.engine.setHardwareScalingLevel(this.balanced ? 1 : renderScale(window.devicePixelRatio, this.sharp, this.canvas.clientWidth, this.canvas.clientHeight))
     this.engine.resize()
     this.camera.resize(this.engine.getAspectRatio(this.camera.cam))
   }

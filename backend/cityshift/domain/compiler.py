@@ -261,6 +261,10 @@ def compile_scenario(
             cohort_vehicles[vid] = tr.person_id
             mode[tr.person_id] = "car"
             continue
+        if any(not net.hasEdge(eid) or not net.getEdge(eid).allows("pedestrian") for eid in (tr.origin_edge, tr.dest_edge)):
+            unroutable[tr.person_id] = "no pedestrian access at origin or destination"
+            mode[tr.person_id] = "unroutable"
+            continue
         service_key = (tr.origin_edge, tr.dest_edge, tr.walk_limit_m)
         if service_key not in service_cache:
             options = []
@@ -347,6 +351,8 @@ def _nearest_allowed_edge_to_edge(net, edge_id: str, vclass: str) -> str | None:
     if not net.hasEdge(edge_id):
         return None
     e = net.getEdge(edge_id)
+    if e.isSpecial():
+        return None
     if e.allows(vclass):
         return edge_id
     shape = e.getShape()

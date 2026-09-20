@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef } from 'react'
 import '@babylonjs/core/Culling/ray'
 
 import type { LiveChannel } from '../live/channel'
+import type { ReplayIndex } from '../replay'
+import { selectionEntityId } from '../selection'
 import { live, liveClosuresAt } from '../live/session'
 import { useStore, type Selection } from '../store'
 import { useGodVisuals } from '../gods-plan/state'
@@ -29,11 +31,17 @@ type Target = { kind: Kind | 'stop' | 'incident' | 'district' | 'corridor' | 'de
 
 /** The ground part of a target (what `NavOverlay` draws); null for replayed entities and developments (drawn by `DevelopmentOverlay`). */
 function ground(t: Target): NavTarget {
-  return t && t.kind !== 'bus' && t.kind !== 'car' && t.kind !== 'person' && t.kind !== 'development' ? { kind: t.kind, id: t.id, name: t.name } : null
+  if (!t) return null
+  switch (t.kind) {
+    case 'stop': case 'incident': case 'district': case 'corridor': case 'building':
+      return { kind: t.kind, id: t.id, name: t.name }
+    default: return null
+  }
 }
 
 /** The closures standing in the live city at sim time `t`, named after the street they cover when there is one. */
 function closuresAt(t: number): Restriction[] {
+  if (useStore.getState().populationActive) return []
   const corridors = useStore.getState().corridors
   return liveClosuresAt(live.session, t, (edges) => Object.values(corridors).find((c) => c.edge_ids.every((e) => edges.includes(e)))?.label ?? null)
 }
@@ -275,21 +283,33 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
 
       // --- store + live session -> scene
       let attached: LiveChannel | null | undefined
+      let residentReplay: ReplayIndex | null = null
+      let populationActive = false
       let closureKey = ''
       let corridors: unknown = null
+      const syncSelection = (): void => {
+        const selection = useStore.getState().selection
+        ws.traffic.selectedId = residentReplay ? selectionEntityId(residentReplay, selection, clock.t)
+          : selection && ['bus', 'car', 'person'].includes(selection.kind) ? selection.id : null
+        ws.traffic.dimOthers = !populationActive && selection?.kind === 'person'
+      }
       const sync = (): void => {
         const s = useStore.getState()
-        const channel = live.getSnapshot().primary
-        if (attached !== channel) {
+        const channel = s.populationActive ? null : live.getSnapshot().primary
+        const replay = s.populationActive && s.primaryRunId ? s.replays[s.primaryRunId] ?? null : null
+        if (attached !== channel || residentReplay !== replay || populationActive !== s.populationActive) {
           attached = channel
+          residentReplay = replay
+          populationActive = s.populationActive
           // frames from another city's network would put people on the wrong streets
-          const compatible = !channel || channel.state.network_fingerprint === ws.world.network_fingerprint
-          ws.traffic.setLiveSource(compatible ? channel : null)
-          if (channel && !compatible) s.setError('This recording uses a different city network. Open its matching city pack.')
+          const fingerprint = populationActive ? replay?.population?.definition.network_fingerprint : channel?.state.network_fingerprint
+          const compatible = !fingerprint || fingerprint === ws.world.network_fingerprint
+          if (populationActive) ws.traffic.setReplay(compatible ? replay : null)
+          else ws.traffic.setLiveSource(compatible ? channel : null)
+          if (!compatible) s.setError('This recording uses a different city network. Open its matching city pack.')
         }
         const sel = s.selection
-        ws.traffic.selectedId = sel && (sel.kind === 'bus' || sel.kind === 'car' || sel.kind === 'person') ? sel.id : null
-        ws.traffic.dimOthers = sel?.kind === 'person'
+        syncSelection()
         const closures = closuresAt(clock.t)
         const key = closures.map((r) => `${r.restriction_id}:${r.edge_ids.length}`).join('|')
         if (key !== closureKey) {
@@ -317,6 +337,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
       ws.simT = clock.t
       const offFrame = clock.onFrame((t) => {
         ws.simT = t
+        syncSelection()
         marks(ws, overlay, developments, t, side)
       })
       const unsub = useStore.subscribe(sync)
@@ -367,6 +388,12 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
 /** Standing closures, the tool's aim, the focused closure and the developments of the live city at sim time `t`. */
 function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverlay, t: number, side: string): void {
   const s = useStore.getState()
+  if (s.populationActive) {
+    overlay.set({ closed: [], ghost: [], focus: [], ghostStops: [] })
+    developments.set({ developments: [], draft: null, placed: false, ghostPosition: null, invalidDraft: false, focusedId: null, zones: [], t })
+    ws.storm.setHazards([])
+    return
+  }
   const view = live.getSnapshot()
   const closures = closuresAt(t)
   const closed = closures.flatMap((r) => r.edge_ids)

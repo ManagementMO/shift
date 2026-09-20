@@ -21,9 +21,13 @@ export default function TopStrip({ onGlobe, active = true }: { onGlobe?: () => v
   const t = useStore((s) => s.t)
   const playing = useStore((s) => s.playing)
   const { primary, busy, error } = useLive()
+  const populationActive = useStore(s => s.populationActive)
+  const population = useStore(s => s.populationDefinition)
+  const run = useStore(s => s.runs.find(r => r.run_id === s.primaryRunId) ?? s.runs.at(-1))
   const session = primary?.state ?? null
   const environment = session ? environmentAt(session, t) : null
-  const st = sessionStatus(session?.status, playing, busy, error)
+  const native = population?.spec.brains.every(b => b.control_mode === 'jiuwenswarm')
+  const st = populationActive ? { label: `${native ? 'JiuwenSwarm' : population ? 'Rules fixture' : 'Residents'} · ${run?.status ?? 'not executed'}`, cls: run?.status === 'failed' ? 'bad' : run?.status === 'running' ? 'busy' : 'idle' } : sessionStatus(session?.status, playing, busy, error)
 
   return (
     <header className="strip">
@@ -34,7 +38,7 @@ export default function TopStrip({ onGlobe, active = true }: { onGlobe?: () => v
         <span className="city">{pack ? CITY_NAMES[pack.pack_id] ?? pack.name : '—'}</span>
       </div>
       <div className="scenario-name" title={session?.session_id}>
-        {environment ? `${environment.population.toLocaleString()} travelers · ${environment.temperature}°C` : 'Live city'}
+        {populationActive ? `${population?.spec.count ?? 0} persistent residents · ${native ? 'JiuwenSwarm assigned' : population ? 'labeled rules recording' : 'loading definition'}` : environment ? `${environment.population.toLocaleString()} travelers · ${environment.temperature}°C` : 'Live city'}
       </div>
       <div className={`status ${st.cls}`}>
         <i />
