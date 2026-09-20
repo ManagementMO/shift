@@ -88,6 +88,13 @@ class GatewayError(RuntimeError):
         return {"error": {"message": str(self), "type": "population_gateway_error", "code": self.code}}
 
 
+class ReservationPending(GatewayError):
+    """Same-run in-flight cost holds may settle within the existing deadline."""
+
+    def __init__(self) -> None:
+        super().__init__("run_limit_exceeded")
+
+
 def _integer(value: Any, minimum: int = 0, maximum: int = 2**53) -> bool:
     return type(value) is int and minimum <= value <= maximum
 
@@ -517,8 +524,7 @@ class BudgetLedger:
                 raise GatewayError("budget_exhausted")
             run = connection.execute("""SELECT COUNT(*), COALESCE(SUM(accounted_tokens), 0),
                 COALESCE(SUM(accounted_microdollars), 0) FROM requests WHERE run_hash=?""", (scope.run_hash,)).fetchone()
-            if (run[0] >= scope.limits.max_calls or run[1] + tokens > scope.limits.max_tokens
-                    or run[2] + quote.ceiling_microdollars > scope.limits.max_cost_microdollars):
+            if run[0] >= scope.limits.max_calls or run[1] + tokens > scope.limits.max_tokens:
                 raise GatewayError("run_limit_exceeded")
             now = max(now, session["last_time"])
             window = connection.execute("""SELECT COUNT(*),
@@ -532,6 +538,12 @@ class BudgetLedger:
                     or global_window[0] >= MAX_SESSION_REQUESTS_PER_MINUTE
                     or global_window[1] + tokens > MAX_SESSION_TOKENS_PER_MINUTE):
                 raise GatewayError("rate_limit_exceeded")
+            if run[2] + quote.ceiling_microdollars > scope.limits.max_cost_microdollars:
+                pending_cost = connection.execute("""SELECT COALESCE(SUM(accounted_microdollars), 0)
+                    FROM requests WHERE run_hash=? AND status='reserved'""", (scope.run_hash,)).fetchone()[0]
+                if pending_cost and run[2] - pending_cost + quote.ceiling_microdollars <= scope.limits.max_cost_microdollars:
+                    raise ReservationPending()
+                raise GatewayError("run_limit_exceeded")
             connection.execute("UPDATE session SET last_time=? WHERE id=1", (now,))
             connection.execute("""INSERT INTO requests(
                 request_id, run_hash, created_at, assigned_model, status, reserved_microdollars,
@@ -1077,7 +1089,19 @@ class PopulationGateway:
                 async with self._http_client(scope.limits.request_timeout_seconds) as client:
                     await self._verify_catalog(client, POPULATION_MODELS[quote.model_id])
                     await self._refresh_provider_cap(client)
-                    request_id = self._ledger.reserve(scope, quote, self._clock(), self._provider_binding())
+                    refreshed = time.monotonic()
+                    while True:
+                        try:
+                            request_id = self._ledger.reserve(scope, quote, self._clock(), self._provider_binding())
+                            break
+                        except ReservationPending:
+                            # Waiting creates no request or provider charge. Only
+                            # the atomic reservation authorizes the single POST.
+                            # Hard caps, uncertain holds and rate limits never retry.
+                            await asyncio.sleep(0.05)
+                            if time.monotonic() - refreshed >= KEY_READINESS_MAX_AGE_SECONDS / 2:
+                                await self._refresh_provider_cap(client)
+                                refreshed = time.monotonic()
                     async with client.stream("POST", f"{POPULATION_OPENROUTER_BASE}/chat/completions",
                                              headers={"Authorization": f"Bearer {self._config.api_key}"},
                                              json=sent) as response:

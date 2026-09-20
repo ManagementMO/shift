@@ -19,6 +19,7 @@ from cityshift.agents.population_gateway import (
     SESSION_CAP_MICRODOLLARS,
     GatewayError,
     PopulationGateway,
+    ReservationPending,
     RunLimits,
     get_population_gateway,
 )
@@ -709,6 +710,127 @@ async def test_large_payload_cannot_bypass_per_run_reservation_ceiling(tmp_path)
         await gateway.complete(token, request_body(model=model, messages=[{"role": "user", "content": "x" * 102400}]))
     assert exhausted.value.code == "run_limit_exceeded"
     assert not fake.posts
+
+
+def cost_constrained_run(gateway, **overrides):
+    probe = gateway.register_run("reservation-probe", [MODEL])
+    quote = gateway.quote(probe.token, request_body())
+    limits = RunLimits(**({"max_cost_microdollars": quote.ceiling_microdollars + 100} | overrides))
+    return gateway.register_run("reservation-run", [MODEL], limits=limits), quote
+
+
+def observe_pending_reservation(monkeypatch, gateway):
+    pending = asyncio.Event()
+    original = gateway._ledger.reserve
+
+    def reserve(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        except ReservationPending:
+            pending.set()
+            raise
+
+    monkeypatch.setattr(gateway._ledger, "reserve", reserve)
+    return pending
+
+
+async def test_concurrent_followup_waits_for_same_run_settlement_and_refreshes_readiness(tmp_path, monkeypatch):
+    from cityshift.agents import population_gateway as module
+
+    fake = FakeOpenRouter()
+    started, release, refreshed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    posts = []
+
+    async def handle(request):
+        if request.method == "POST":
+            posts.append(request)
+            if len(posts) == 2:
+                started.set()
+                await release.wait()
+        response = await fake.handle(request)
+        if len(fake.key_gets) >= 4:
+            refreshed.set()
+        return response
+
+    gateway = PopulationGateway(config=PopulationProviderConfig(enabled=True, api_key=UPSTREAM_SECRET),
+        ledger_path=tmp_path / "wait.sqlite3", transport=httpx.MockTransport(handle))
+    registration, _ = cost_constrained_run(gateway)
+    # A completed initial turn has already spent money. The follow-up calls
+    # contend for enough remaining budget to reserve only one at a time.
+    await gateway.complete(registration.token, request_body())
+    monkeypatch.setattr(module, "KEY_READINESS_MAX_AGE_SECONDS", 0.2)
+    pending = observe_pending_reservation(monkeypatch, gateway)
+    first = asyncio.create_task(gateway.complete(registration.token, request_body()))
+    await asyncio.wait_for(started.wait(), 2)
+    second = asyncio.create_task(gateway.complete(registration.token, request_body()))
+    await asyncio.wait_for(pending.wait(), 2)
+    await asyncio.wait_for(refreshed.wait(), 2)
+    assert len(posts) == 2 and not second.done()
+    assert gateway.usage("reservation-run")["run_totals"]["calls"] == 2
+    release.set()
+    await asyncio.gather(first, second)
+    assert len(posts) == 3
+    usage = gateway.usage("reservation-run")
+    assert usage["run_totals"]["calls"] == 3
+    assert usage["run_totals"]["accounted_microdollars"] == 24
+    assert all(row["status"] == "succeeded" for row in usage["requests"])
+
+
+@pytest.mark.parametrize("stop", ["cancel", "deadline"])
+async def test_reservation_wait_cancellation_and_deadline_make_no_new_charge(tmp_path, monkeypatch, stop):
+    fake = FakeOpenRouter()
+    gateway = gateway_at(tmp_path / "wait.sqlite3", fake)
+    registration, quote = cost_constrained_run(gateway, request_timeout_seconds=1)
+    await gateway.preflight()
+    gateway._ledger.reserve(gateway.authenticate(registration.token), quote, gateway._clock(), gateway._provider_binding())
+    pending = observe_pending_reservation(monkeypatch, gateway)
+    task = asyncio.create_task(gateway.complete(registration.token, request_body()))
+    await asyncio.wait_for(pending.wait(), 2)
+    if stop == "cancel":
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        with pytest.raises(GatewayError) as failure:
+            await task
+        assert failure.value.code == "upstream_timeout"
+    usage = gateway.usage("reservation-run")
+    assert usage["run_totals"]["calls"] == 1
+    assert usage["run_totals"]["accounted_microdollars"] == quote.ceiling_microdollars
+    assert usage["requests"][0]["status"] == "reserved"
+    assert not fake.posts
+
+
+@pytest.mark.parametrize("constraint,expected", [
+    ("spent", "run_limit_exceeded"), ("upstream_timeout", "run_limit_exceeded"),
+    ("cancelled", "run_limit_exceeded"), ("calls", "run_limit_exceeded"),
+    ("tokens", "run_limit_exceeded"), ("rate", "rate_limit_exceeded"),
+])
+async def test_hard_limits_and_uncertain_holds_never_wait(tmp_path, monkeypatch, constraint, expected):
+    fake = FakeOpenRouter()
+    gateway = gateway_at(tmp_path / "wait.sqlite3", fake)
+    limits = {"max_calls": 1} if constraint == "calls" else {}
+    if constraint == "rate":
+        limits["requests_per_minute"] = 1
+    if constraint == "tokens":
+        limits["max_tokens"] = POPULATION_MODELS[MODEL].context_length + 512
+    registration, quote = cost_constrained_run(gateway, **limits)
+    await gateway.preflight()
+    request_id = gateway._ledger.reserve(gateway.authenticate(registration.token), quote,
+                                        gateway._clock(), gateway._provider_binding())
+    if constraint == "spent":
+        result = completion()
+        result["usage"]["cost"] = str(Decimal(quote.ceiling_microdollars) / 1_000_000)
+        gateway._ledger.settle(request_id, quote, result, 1, True)
+    elif constraint in {"upstream_timeout", "cancelled"}:
+        gateway._ledger.fail(request_id, constraint, 1)
+    pending = observe_pending_reservation(monkeypatch, gateway)
+    with pytest.raises(GatewayError) as failure:
+        await asyncio.wait_for(gateway.complete(registration.token, request_body()), 0.5)
+    assert failure.value.code == expected
+    assert not pending.is_set()
+    assert not fake.posts
+    assert gateway.usage("reservation-run")["run_totals"]["calls"] == 1
 
 
 @pytest.mark.asyncio
