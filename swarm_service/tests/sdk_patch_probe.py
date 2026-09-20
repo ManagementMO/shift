@@ -36,7 +36,10 @@ async def main():
 
     if profile == "base":
         source = Path(primitives.__file__)
-        assert "var/upstream/agent-core" in str(source)
+        actual, expected = await asyncio.gather(
+            asyncio.to_thread(source.resolve), asyncio.to_thread((Path(sys.argv[3]) / SDK_FILE).resolve),
+        )
+        assert actual == expected
         assert sha256(await asyncio.to_thread(source.read_bytes)) == BASE_FILE_SHA256
     else:
         assert str(Path(primitives.__file__)).endswith(SDK_FILE)

@@ -3,6 +3,7 @@ import asyncio
 import copy
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -11,11 +12,24 @@ import pytest
 from cityshift_swarm import prepare
 from cityshift_swarm.native import installed_sources
 
-BASE_ROOT = prepare.SERVICE_ROOT.parent / "var" / "upstream" / "agent-core"
+
+@pytest.fixture
+def base_source():
+    source = prepare.installed_target().read_bytes()
+    if prepare.sha256(source) == prepare.BASE_FILE_SHA256:
+        return source
+    assert prepare.sha256(source) == prepare.PATCHED_FILE_SHA256
+    text = source.decode("utf-8")
+    for edit in reversed(prepare.read_patch()["edits"]):
+        assert text.count(edit["new"]) == 1
+        text = text.replace(edit["new"], edit["old"], 1)
+    source = text.encode("utf-8")
+    assert prepare.sha256(source) == prepare.BASE_FILE_SHA256
+    return source
 
 
-def test_reviewed_patch_hashes_and_unchanged_single_shot_ast():
-    source = (BASE_ROOT / prepare.SDK_FILE).read_bytes()
+def test_reviewed_patch_hashes_and_unchanged_single_shot_ast(base_source):
+    source = base_source
     assert prepare.sha256(source) == prepare.BASE_FILE_SHA256
     updated = prepare.transform(source, prepare.read_patch())
     assert prepare.sha256(updated) == prepare.PATCHED_FILE_SHA256
@@ -30,8 +44,8 @@ def test_reviewed_patch_hashes_and_unchanged_single_shot_ast():
     assert "openjiuwen==0.1.18" in (prepare.SERVICE_ROOT.parent / "backend" / "pyproject.toml").read_text()
 
 
-def test_patch_rejects_unknown_source_and_unreviewed_results():
-    source = (BASE_ROOT / prepare.SDK_FILE).read_bytes()
+def test_patch_rejects_unknown_source_and_unreviewed_results(base_source):
+    source = base_source
     patch = prepare.read_patch()
     with pytest.raises(prepare.CorePatchError, match="unknown_source_file_hash"):
         prepare.transform(source + b"\n", patch)
@@ -77,16 +91,20 @@ def test_preparation_is_idempotent_and_attests_modified_source():
     assert first["profile"] == prepare.PROFILE
 
 
-async def test_base_regression_and_patched_sdk_semantics_in_separate_processes(tmp_path):
+async def test_base_regression_and_patched_sdk_semantics_in_separate_processes(tmp_path, base_source):
     script = Path(__file__).with_name("sdk_patch_probe.py")
+    base_root = tmp_path / "pinned-core-base"
+    package = prepare.installed_target().parents[3]
+    shutil.copytree(package, base_root / "openjiuwen", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    (base_root / prepare.SDK_FILE).write_bytes(base_source)
     summaries = {}
     for profile in ("base", "patched"):
         env = {name: os.environ[name] for name in ("PATH", "LANG", "LC_ALL", "TMPDIR") if name in os.environ}
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         if profile == "base":
-            env["PYTHONPATH"] = str(BASE_ROOT)
+            env["PYTHONPATH"] = str(base_root)
         process = await asyncio.create_subprocess_exec(
-            sys.executable, str(script), profile, str(tmp_path), env=env,
+            sys.executable, str(script), profile, str(tmp_path), str(base_root), env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         try:
