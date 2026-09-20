@@ -18,6 +18,7 @@ import { GlassSurface, GlassButton, GlassIconButton } from './ui'
 import { GodIcon } from './icons'
 import { citizenName, intensityPower, powerIntensity } from './data'
 import { useGodVisuals } from './state'
+import { AGENT_DEMO_LOCKED, AGENT_UNAVAILABLE_MESSAGE } from './demo'
 import type { GodEventDraft, GodEventKind, GodEventStatus, GodTab, GodTool, GodCitizen } from './model'
 import './city.css'
 
@@ -78,11 +79,13 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
   }
   const commandAction = (text: string) => {
     setCommand(text)
-    if (/tornado/i.test(text)) selectEvent('tornado')
+    if (AGENT_DEMO_LOCKED && /\b(ai|agents?|swarms?|evacuat\w*|rescue|police|responders?|dispatch|patrol|secure|protect|guide|message)\b/i.test(text)) open('agents')
+    else if (/tornado/i.test(text)) selectEvent('tornado')
     else if (/weather|temperature|cold|heat/i.test(text)) openTool('temperature')
     else if (/population|people|crowd/i.test(text)) openTool('population')
     else if (/build|apartment|park|office|development/i.test(text)) openTool('development')
     else if (/road|close|traffic|bus|transit|gardiner/i.test(text)) openTool('closure')
+    else if (AGENT_DEMO_LOCKED) open('agents')
     else setNotice('Choose a city tool to configure and apply this change. Free-form group objectives are not connected yet.')
   }
   const onTab = (tab: GodTab) => { if (tab === 'simulate') open('settings'); else open(tab === 'live' ? 'none' : tab) }
@@ -93,6 +96,7 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
     else open(next === 'people' ? 'agents' : next === 'events' ? 'events' : next === 'layers' ? 'settings' : 'none')
   }
   const updateDraft = (patch: Partial<GodEventDraft>) => {
+    if (AGENT_DEMO_LOCKED && patch.autoRespond) { setNotice(AGENT_UNAVAILABLE_MESSAGE); return }
     const next = { ...draft, ...patch }
     if (next.kind === 'tornado') { next.radiusM = tornadoRadius(next.radiusM); next.durationS = Math.max(100, Math.min(600, next.durationS)) }
     setDraft(next)
@@ -126,10 +130,11 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
     {panel === 'event-config' && <EventConfigPanel draft={draft} supported={draft.kind === 'tornado'} placing={armed} onChange={updateDraft} onCancel={armed ? cancel : close} onPlace={arm} />}
     {armed && world && <TornadoPlacement scene={world} armed settings={settings} onSettings={patch => { setSettings(s => ({ ...s, ...patch })); setDraft(d => ({ ...d, radiusM: patch.radius ?? d.radiusM, heading: patch.heading ?? d.heading, intensity: patch.power === undefined ? d.intensity : powerIntensity(patch.power) })) }} onCast={cast} onCancel={cancel} />}
     {status && t >= status.start && t <= status.end && <DisasterAlert status={status} onFocus={() => { setPanel('event-active'); focusEvent() }} />}
-    {panel === 'event-active' && status && <ActiveEventPanel status={status} currentTime={t} onClose={close} onFocus={focusEvent} onStop={() => useGodVisuals.getState().removeEvent(status.id)} onResponse={() => openTool('closure')} onViewImpact={() => { focusEvent(); close() }} />}
-    {panel === 'agents' && !citizen && <LivePeoplePanel channel={view.primary} time={t} onPick={picked => useStore.getState().select(picked)} onClose={close} onCommand={commandAction} />}
-    {citizen && <CitizenPanel citizen={citizen} tab={citizenTab} onTab={setCitizenTab} onClose={close} onFollow={() => { const map = leadMap(), pose = world?.traffic.poseOf(citizen.id); if (map && pose && world) cameraTo(agentPose(world.frame.worldToLonLat(pose.x, pose.z), null, currentPose(map)), 'agent') }} onGuide={() => setNotice('Individual guidance is not connected yet.')} onMessage={() => setNotice('Citizen conversations are not connected yet.')} onPerson={id => useStore.getState().select({ kind: 'person', id })} />}
-    <div className={citizen ? 'gp-follow-behavior' : 'gp-selection-bubble'}><AgentBubble /></div>
+    {panel === 'event-active' && status && <ActiveEventPanel status={status} currentTime={t} onClose={close} onFocus={focusEvent} onStop={() => useGodVisuals.getState().removeEvent(status.id)} responsesEnabled onResponse={action => { if (AGENT_DEMO_LOCKED && action !== 'close-roads' && action !== 'redirect-traffic') setNotice(AGENT_UNAVAILABLE_MESSAGE); else openTool('closure') }} onViewImpact={() => { focusEvent(); close() }} />}
+    {AGENT_DEMO_LOCKED && (panel === 'agents' || selection?.kind === 'person') && <PanelBox title="Agents & swarms" onClose={close}><p role="status">{AGENT_UNAVAILABLE_MESSAGE}</p><p className="gp-panel-note">Agent features are unavailable in this demo.</p></PanelBox>}
+    {!AGENT_DEMO_LOCKED && panel === 'agents' && !citizen && <LivePeoplePanel channel={view.primary} time={t} onPick={picked => useStore.getState().select(picked)} onClose={close} onCommand={commandAction} />}
+    {!AGENT_DEMO_LOCKED && citizen && <CitizenPanel citizen={citizen} tab={citizenTab} onTab={setCitizenTab} onClose={close} onFollow={() => { const map = leadMap(), pose = world?.traffic.poseOf(citizen.id); if (map && pose && world) cameraTo(agentPose(world.frame.worldToLonLat(pose.x, pose.z), null, currentPose(map)), 'agent') }} onGuide={() => setNotice('Individual guidance is not connected yet.')} onMessage={() => setNotice('Citizen conversations are not connected yet.')} onPerson={id => useStore.getState().select({ kind: 'person', id })} />}
+    <div className={citizen || (AGENT_DEMO_LOCKED && selection?.kind === 'person') ? 'gp-follow-behavior' : 'gp-selection-bubble'}><AgentBubble /></div>
     {panel === 'tools' && tool && <PanelBox title={TITLES[tool]} onClose={close}><div className="gp-inline-segment">{(['area','closure','development','population','temperature'] as ToolId[]).map(id => <GlassButton key={id} onClick={() => openTool(id)}>{id === 'development' ? 'Build' : id === 'temperature' ? 'Temp' : id === 'closure' ? 'Roads' : id === 'population' ? 'People' : 'Areas'}</GlassButton>)}</div><div className="gp-legacy-inline"><ToolPanel /></div></PanelBox>}
     {panel === 'settings' && <PanelBox title="City settings" onClose={close}><GlassButton onClick={() => live.toggle()}>{playing ? 'Pause simulation' : 'Resume simulation'}</GlassButton><div className="gp-inline-segment">{PLAYBACK_SPEEDS.map(speed => <GlassButton key={speed} onClick={() => live.setSpeed(speed)}>{speed}×</GlassButton>)}</div>{(['textures','shadows','sharp'] as const).map(key => <label key={key} className="gp-setting-row"><span>{key === 'sharp' ? 'High resolution' : key === 'textures' ? 'Building textures' : 'Shadows'}</span><input type="checkbox" checked={display[key]} onChange={event => display.set({ [key]: event.target.checked })} /></label>)}<GlassButton onClick={() => display.set({ projection: display.projection === 'perspective' ? 'isometric' : 'perspective' })}>Switch to {display.projection === 'perspective' ? '2D' : '3D'}</GlassButton><GlassButton onClick={() => openTool('development')}>Add a development</GlassButton><GlassButton onClick={() => openTool('population')}>Add travelers</GlassButton></PanelBox>}
     {panel === 'analytics' && <PanelBox title="City analytics" onClose={close}><div className="gp-kpi-grid">{([['Travelers',counts?.total],['Arrived',counts?.arrived],['Waiting',counts?.waiting]] as const).map(([label,value]) => <div key={label}><span>{label}</span><strong>{value ?? '—'}</strong></div>)}</div><div className="gp-facts"><span>Walking</span><b>{counts?.walking ?? '—'}</b><span>Driving</span><b>{counts?.driving ?? '—'}</b><span>Riding</span><b>{counts?.riding ?? '—'}</b><span>Messages passed</span><b>{session?.metrics?.swarm?.messages ?? '—'}</b><span>Informed agents</span><b>{session?.metrics?.swarm?.aware_total ?? '—'}</b></div><p className="gp-panel-note">Actual live-session measurements. Decorative tornadoes do not change these outcomes.</p></PanelBox>}

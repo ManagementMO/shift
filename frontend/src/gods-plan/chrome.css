@@ -121,6 +121,16 @@
 .god-chrome .god-chrome__submit { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; min-height: 0; padding: 6px; border: 0; border-radius: 50%; color: #29415b; background: #f7fbff; box-shadow: none; }
 .god-chrome .god-chrome__submit:disabled { opacity: .65; }
 
+@media (prefers-reduced-motion: no-preference) {
+  .god-chrome > :is(.god-chrome__brand, .god-chrome__tabs, .god-chrome__weather, .god-chrome__tools, .god-chrome__command-zone) {
+    animation: gp-enter 320ms cubic-bezier(.22, 1, .36, 1) var(--gp-enter-delay, 0ms) backwards;
+  }
+  .god-chrome__tabs { --gp-enter-delay: 25ms; }
+  .god-chrome__weather { --gp-enter-delay: 50ms; }
+  .god-chrome__tools { --gp-enter-delay: 75ms; }
+  .god-chrome__command-zone { --gp-enter-delay: 110ms; }
+}
+
 @media (max-width: 900px) {
   .god-chrome .god-chrome__tabs { top: calc(var(--gp-edge) + 44px); width: min(430px, calc(100% - 2 * var(--gp-edge))); }
 }

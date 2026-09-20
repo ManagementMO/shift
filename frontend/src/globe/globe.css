@@ -163,6 +163,21 @@
   .orbital-entry-status { font-size: 11px; }
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .orbital[data-phase='globe'] .orbital-bar {
+    animation: gp-enter 340ms cubic-bezier(.22, 1, .36, 1) backwards;
+  }
+  .orbital[data-phase='globe'] .orbital-picker {
+    animation: gp-enter 380ms cubic-bezier(.22, 1, .36, 1) 45ms backwards;
+  }
+  .orbital[data-phase='globe'] .orbital-settings {
+    animation: gp-enter 380ms cubic-bezier(.22, 1, .36, 1) 85ms backwards;
+  }
+  .orbital[data-phase='globe'] .orbital-stage {
+    animation: gp-fade-in 420ms ease-out backwards;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .orbital *, .orbital *::before, .orbital *::after { transition: none !important; animation: none !important; }
   .orbital[data-phase='flight'] .orbital-stage { transition: none; }

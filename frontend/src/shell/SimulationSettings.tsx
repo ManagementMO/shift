@@ -4,6 +4,7 @@ import { api } from '../api'
 import { DEFAULT_LIVE_CONFIG, newCity, useLive } from '../live/session'
 import { useStore } from '../store'
 import { usePreferences } from '../preferences'
+import { AGENT_DEMO_LOCKED, AGENT_UNAVAILABLE_MESSAGE } from '../gods-plan/demo'
 import { useDisplay } from '../babylon/display'
 import { SWARM_SCALES } from '../babylon/figures'
 import Icon from '../components/Icon'
@@ -35,7 +36,7 @@ export function SettingsPanel({ city = false, showCityAppearance = true, appeara
   const [buses, setBuses] = useState(primary?.state.config.fleet_size ?? DEFAULT_LIVE_CONFIG.fleet_size)
 
   useEffect(() => {
-    if (health || !docked) return
+    if (AGENT_DEMO_LOCKED || health || !docked) return
     let cancelled = false
     api.health().then((value) => { if (!cancelled) useStore.setState({ health: value }) }).catch(() => { if (!cancelled) setConnectionError(true) })
     return () => { cancelled = true }
@@ -61,6 +62,7 @@ export function SettingsPanel({ city = false, showCityAppearance = true, appeara
         <div className="settings-provider"><button disabled={!!busy} onClick={() => { void newCity(pack.pack_id, { initial_population: travelers, fleet_size: buses }); onClose?.() }}>{busy ? 'Working…' : 'Start a fresh city'}</button></div>
         <p className="settings-hint">Restarts SUMO from the beginning with this crowd. The current city stays saved and listed on the globe.</p>
       </section>}
+      {AGENT_DEMO_LOCKED ? <section className="settings-section"><h3><Icon name="swarm" /><span>Swarm & AI assistance</span></h3><p role="status">{AGENT_UNAVAILABLE_MESSAGE}</p><p className="settings-hint">Agent features are unavailable in this demo.</p></section> : <>
       <section className="settings-section">
         <h3><Icon name="swarm" /><span>Swarm</span><small>{preferences.aiEnabled ? '3 specialists' : 'Local planning'}</small></h3>
         <div className="settings-role-list"><span>Evidence</span><span>Demand</span><span>Planning</span></div>
@@ -78,6 +80,7 @@ export function SettingsPanel({ city = false, showCityAppearance = true, appeara
         <div className="settings-provider"><span className={`connection-dot ${elastic?.available ? 'available' : ''}`} /><span>{connectionError ? 'Connection unavailable' : elastic ? elastic.available ? 'Connected' : 'Offline' : 'Checking connection…'}</span><button onClick={() => void check()} disabled={checking}>{checking ? 'Checking…' : 'Check'}</button></div>
         <p className="settings-hint">{!preferences.useElasticsearch ? 'Search the local evidence corpus only.' : elastic?.available ? 'Search indexed city evidence for each investigation.' : 'The local corpus is used while Elasticsearch is unavailable.'}</p>
       </section>
+      </>}
       {(appearance || showCityAppearance) && <details className="settings-section settings-visuals" open={docked}><summary><Icon name="display" /><span>Appearance</span><Icon name="chevron" size={14} /></summary>
         {appearance && <div className="settings-row"><label htmlFor={`${titleId}-appearance`}>Globe style</label><select id={`${titleId}-appearance`} value={appearance.monochrome ? 'mono' : 'natural'} onChange={(e) => appearance.setMonochrome(e.target.value === 'mono')}><option value="mono">Monochrome</option><option value="natural">Natural</option></select></div>}
         {showCityAppearance && <><div className="settings-row"><label htmlFor={`${titleId}-projection`}>City overview</label><select id={`${titleId}-projection`} value={display.projection} onChange={(e) => display.set({ projection: e.target.value as 'perspective' | 'isometric' })}><option value="perspective">Perspective</option><option value="isometric">Isometric</option></select></div>
