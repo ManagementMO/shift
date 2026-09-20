@@ -46,7 +46,7 @@ describe('population render paths', () => {
     } finally { traffic.dispose(); scene.dispose(); engine.dispose() }
   })
 
-  it('keeps walking figures, distant markers, abstract presence and shared buses truthful across time', () => {
+  it('keeps native humanoids visible at district zoom and bindings truthful across time', () => {
     const engine = new NullEngine(), scene = new Scene(engine)
     const traffic = new Traffic(scene, frame, null)
     const data = bundle()
@@ -58,8 +58,8 @@ describe('population render paths', () => {
       const figure = scene.meshes.find(mesh => mesh.name.startsWith('person-') && mesh.name.endsWith('-body') && mesh.isEnabled()) as Mesh
       assertBuffer(figure, brainColor(claude))
       traffic.update(10, { ...near, radius: 5000 })
-      expect(figure.isEnabled()).toBe(false)
-      assertBuffer(scene.getMeshByName('crowd-marker-body') as Mesh, brainColor(claude))
+      assertBuffer(figure, brainColor(claude))
+      expect(scene.getMeshByName('crowd-marker-body')!.isEnabled()).toBe(false)
       traffic.update(30, near)
       expect(traffic.poseOf('bike-body')).toBeNull()
       expect(traffic.poseOf(abstractEntityId('r1'))).not.toBeNull()
@@ -113,7 +113,7 @@ describe('population render paths', () => {
       expect(matrix[12]).toBeCloseTo(anchorX, 3)
       expect(matrix[13]).toBe(pathY)
       expect(matrix[14]).toBeCloseTo(anchorZ, 3)
-      const hit = traffic.pick(anchorX, pathY + 0.08 * 3, (x, y) => ({ x, y }), 0.01)
+      const hit = traffic.pick(anchorX, pathY + 0.9 * 3, (x, y) => ({ x, y }), 0.01)
       expect(hit).toEqual({ id, kind: 'person' })
       expect(selectionForEntity(rx, hit!.id, hit!.kind, 30)).toEqual({ kind: 'resident', id: 'r1' })
       traffic.selectedId = id
@@ -168,7 +168,7 @@ describe('population render paths', () => {
     } finally { traffic.dispose(); scene.dispose(); engine.dispose() }
   })
 
-  it('picks distant pedestrian pins using their rendered height and keeps hovered people detailed', () => {
+  it('picks distant native humanoids at their drawn height before and after hovering', () => {
     const engine = new NullEngine(), scene = new Scene(engine)
     const traffic = new Traffic(scene, frame, null)
     const data = bundle()
@@ -178,13 +178,16 @@ describe('population render paths', () => {
       traffic.setAgentScale(3)
       traffic.update(10, { ...near, radius: 5000 })
       const marker = scene.getMeshByName('crowd-marker-body') as Mesh
-      const scale = marker.thinInstanceGetWorldMatrices()[0].m[5]
-      expect(traffic.pick(x, Y.path + 1.6 * scale, (x, y) => ({ x, y }), 0.01)).toEqual({ id: 'bike-body', kind: 'person' })
+      expect(marker.isEnabled()).toBe(false)
+      const figure = scene.meshes.find(mesh => mesh.name.startsWith('person-') && mesh.name.endsWith('-body') && mesh.isEnabled()) as Mesh
+      const scale = figure.thinInstanceGetWorldMatrices()[0].m[5]
+      expect(scale).toBeGreaterThan(3)
+      expect(traffic.pick(x, Y.path + 0.9 * scale, (x, y) => ({ x, y }), 0.01)).toEqual({ id: 'bike-body', kind: 'person' })
       traffic.hoverId = 'bike-body'
       traffic.update(10, { ...near, radius: 5000 })
       expect(marker.isEnabled()).toBe(false)
       expect(scene.getMeshByName('hover-halo-body')!.isEnabled()).toBe(true)
-      expect(traffic.pick(x, Y.path + 0.9 * 3, (x, y) => ({ x, y }), 0.01)).toEqual({ id: 'bike-body', kind: 'person' })
+      expect(traffic.pick(x, Y.path + 0.9 * scale, (x, y) => ({ x, y }), 0.01)).toEqual({ id: 'bike-body', kind: 'person' })
     } finally { traffic.dispose(); scene.dispose(); engine.dispose() }
   })
 

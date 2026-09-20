@@ -325,7 +325,7 @@ export class Traffic {
       }, null),
       delivery: cargoSet(scene, 'delivery', 2, 1.8, 5.8, shadows),
       truck: cargoSet(scene, 'truck', 2.5, 2.6, 8.5, shadows),
-      presence: new InstanceSet(scene, 'abstract-presence', (b) => ring(b, 2.2, 0.5, 0.08, SKIN, 12), null, null),
+      presence: new InstanceSet(scene, 'abstract-presence', (b) => buildFigure(b, 'stand'), (b) => buildHead(b, 'stand'), null),
       marker: new InstanceSet(scene, 'crowd-marker', buildMarker, null, null),
       pulse: new InstanceSet(scene, 'release-pulse', (b) => ring(b, 1, 0.12, 0.05, SKIN), null, null),
       halo: new InstanceSet(scene, 'selection-halo', (b) => ring(b, 1, 0.22, 0.05, SKIN), null, null),
@@ -503,9 +503,10 @@ export class Traffic {
       if (e.kind === 'person') {
         people++
         const d = Math.hypot(x - view.x, view.y, z - view.z)
-        if (!isSel && !isHov && lodFor(d, view.radius) === 'marker') set = 'marker'
+        if (!rx.population && !isSel && !isHov && lodFor(d, view.radius) === 'marker') set = 'marker'
       }
-      const scale = set === 'marker' ? scales.marker : scales[e.kind]
+      // Native residents keep their humanoid silhouette at district zoom; enlarge the body, never its position.
+      const scale = rx.population && e.kind === 'person' ? scales.person * farBoost(view.radius, 'marker') : set === 'marker' ? scales.marker : scales[e.kind]
       e.pickHeight = (set === 'marker' ? 1.6 : BODY_PICK_HEIGHT[e.kind]) * scale
       if (isSel) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, HALO_RADIUS[e.kind] * scale)
       else if (isHov) this.sets.hover.set(n.hover++, x, Y.junction + 0.12, z, 0, HOVER_COLOR, Math.max(HALO_RADIUS[e.kind] * scale * 1.25, view.radius * HOVER_MIN_RADIUS))
@@ -518,12 +519,12 @@ export class Traffic {
       const isSel = presence.id === sel
       const isHov = presence.id === hov && !isSel
       const color = trafficColorAt(rx, presence.id, t, [0.5, 0.5, 0.5])
-      const scale = scales.person
+      const scale = scales.person * farBoost(view.radius, 'marker')
       const haloY = Math.max(this.pathY, Y.junction) + 0.12
-      if (isSel) this.sets.halo.set(n.halo++, x, haloY, z, 0, HALO_COLOR, 3.3 * scale)
-      else if (isHov) this.sets.hover.set(n.hover++, x, haloY, z, 0, HOVER_COLOR, Math.max(3.3 * scale, view.radius * HOVER_MIN_RADIUS))
+      if (isSel) this.sets.halo.set(n.halo++, x, haloY, z, 0, HALO_COLOR, HALO_RADIUS.person * scale)
+      else if (isHov) this.sets.hover.set(n.hover++, x, haloY, z, 0, HOVER_COLOR, Math.max(HALO_RADIUS.person * scale * 1.25, view.radius * HOVER_MIN_RADIUS))
       this.sets.presence.set(n.presence++, x, this.pathY, z, 0, color, scale)
-      this.abstractPoses.push({ id: presence.id, kind: 'person', px: x, py: this.pathY, pz: z, yaw: 0, pickHeight: 0.08 * scale, seen: true })
+      this.abstractPoses.push({ id: presence.id, kind: 'person', px: x, py: this.pathY, pz: z, yaw: 0, pickHeight: BODY_PICK_HEIGHT.person * scale, seen: true })
     }
     const live = activeReleases(this.releases, t)
     this.sets.pulse.reserve(live.length)

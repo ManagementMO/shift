@@ -52,7 +52,7 @@ export default function PopulationLens() {
     {rx && !population && <div className="small warn">Optional population artifact is absent. Measured tracks may still replay, but mental state and ownership cannot be reconstructed.</div>}
     <div className="small dim">Persistent personas across mobility modes. Replay, selection, and scrubbing make no model calls.</div>
     <div className="wrap small">{families.map((assignment) => <span className="pill" key={assignment.model_family}><i className="brain-dot" style={{ background: `rgb(${brainColor(assignment).join(',')})` }} />{assignment.model_family}</span>)}</div>
-    <div className="small dim">Color = assigned brain family, not actual decision source. Hollow rings = abstract stationary presence at declared anchors. Shared and unowned traffic stays neutral.</div>
+    <div className="small dim">Color = assigned brain family, not actual decision source. Standing figures show stationary residents at declared anchors; their position is not measured movement. Shared and unowned traffic stays neutral.</div>
     {summary && <div className="kv small"><span>moving / working now</span><b>{summary.moving} / {summary.working}</b><span>completed / recorded tasks now</span><b>{summary.completed} / {summary.tasks}</b><span>commitments now</span><b>{summary.commitments}</b></div>}
     <div className="row population-filters">
       <select aria-label="Resident role" value={role} onChange={(e) => setRole(e.target.value as ResidentRole | '')}>
