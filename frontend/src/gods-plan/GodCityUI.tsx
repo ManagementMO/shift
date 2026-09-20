@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useStore, type ToolId } from '../store'
 import { DEFAULT_LIVE_CONFIG, live, useLive, liveCountsAt, environmentAt, newCity } from '../live/session'
 import { clock, simClock, PLAYBACK_SPEEDS } from '../world/playback'
@@ -19,7 +19,8 @@ import { EventMenu, EventConfigPanel, ActiveEventPanel, DisasterAlert, OrbitalLa
 import { CitizenPanel, type CitizenTab } from './PeoplePanels'
 import { GlassSurface, GlassButton, GlassIconButton } from './ui'
 import { GodIcon } from './icons'
-import { citizenName, intensityPower, powerIntensity } from './data'
+import { intensityPower, powerIntensity } from './data'
+import { personaFor } from './persona'
 import { useGodVisuals } from './state'
 import type { Hazard } from '../live/types'
 import { AGENT_DEMO_LOCKED, AGENT_UNAVAILABLE_MESSAGE } from './demo'
@@ -184,8 +185,10 @@ export default function GodCityUI({ world, active, onHome, recordingControls }: 
     // a cast weather event opens its status panel once SUMO reports it
     if (liveIncident && liveIncident.event_id !== lastIncidentId.current) { lastIncidentId.current = liveIncident.event_id; if (panel === 'event-config' || panel === 'none') setPanel('event-active') }
   }, [liveIncident, panel])
-  const entity = selection?.kind === 'person' ? view.primary?.metadata.entities.find(e => e.id === selection.id) : null
-  const citizen: GodCitizen | null = entity ? { id: entity.id, name: citizenName(entity.person_id ?? entity.id), role: 'Synthetic traveler', status: 'Live journey', destination: entity.destination_edge ?? 'Unknown destination', activity: 'Measured in SUMO', synthetic: true, traits: [], thoughts: [], relationships: [] } : null
+  // clicking any traveler opens a hard-coded example persona (name, job, relationships); its activity is SUMO's live state
+  const entities = view.primary?.metadata.entities
+  const entity = selection && (selection.kind === 'person' || selection.kind === 'car' || selection.kind === 'bus') ? entities?.find(e => e.id === selection.id) : null
+  const citizen: GodCitizen | null = useMemo(() => entity && entities ? personaFor(entity, world?.traffic.poseOf(entity.id) ?? null, pack, entities) : null, [entity, entities, pack, world, t])
   if (!active) return null
   return <>
     <GodChrome recordingControls={recordingControls} city={pack?.name ?? ''} activeTab="live" openTab={panel === 'events' || panel === 'event-config' ? 'events' : panel === 'log' ? 'log' : panel === 'agents' ? 'agents' : panel === 'analytics' ? 'analytics' : null} activeTool={panel === 'agents' || tool === 'residents' ? 'people' : panel.startsWith('event') || tool === 'closure' || tool === 'development' ? 'events' : tool === 'temperature' ? 'weather' : tool === 'population' ? 'population' : tool === 'area' ? 'map' : 'select'} dateLabel="" timeLabel={simClock(t)} weatherLabel="Clear" temperatureLabel={environment ? `${environment.temperature}°C` : '—'} weatherNote="Simulation temperature, not a weather forecast" statusLabel={statusLabel} agentCount={counts?.total ?? 0} playing={playing || !ready} speed={useStore.getState().speed} speeds={PLAYBACK_SPEEDS} ready={ready} onSpeed={speed => live.setSpeed(speed)} is2D={display.projection === 'isometric'} command={command} onTab={onTab} onTool={onTool} onHome={onHome} onCommandChange={setCommand} onCommand={() => commandAction(command)} onSuggestion={commandAction} onTogglePlay={() => live.toggle()} onView={() => {}} />
@@ -199,10 +202,10 @@ export default function GodCityUI({ world, active, onHome, recordingControls }: 
     {panel === 'event-active' && status && !laser && <ActiveEventPanel status={status} currentTime={t} showControls={status.visualOnly} paused={!playing} onClose={close} onFocus={focusEvent}
       onStop={() => { if (liveStatus) setNotice('A live event runs for its declared duration; it cannot be stopped early.'); else { useGodVisuals.getState().removeEvent(status.id); if (useGodVisuals.getState().events.length === 0) close() } }}
       responsesEnabled onResponse={action => { if (action === 'pause' || action === 'resume') live.toggle(); else if (AGENT_DEMO_LOCKED && action !== 'close-roads' && action !== 'redirect-traffic') setNotice(AGENT_UNAVAILABLE_MESSAGE); else openTool('closure') }} onViewImpact={() => { focusEvent(); close() }} />}
-    {AGENT_DEMO_LOCKED && (panel === 'agents' || selection?.kind === 'person') && <PanelBox title="Agents & swarms" onClose={close}><p role="status">{AGENT_UNAVAILABLE_MESSAGE}</p><p className="gp-panel-note">Agent features are unavailable in this demo.</p></PanelBox>}
+    {AGENT_DEMO_LOCKED && panel === 'agents' && !citizen && <PanelBox title="Agents & swarms" onClose={close}><p role="status">{AGENT_UNAVAILABLE_MESSAGE}</p><p className="gp-panel-note">Agent features are unavailable in this demo.</p></PanelBox>}
     {!AGENT_DEMO_LOCKED && panel === 'agents' && !citizen && <LivePeoplePanel channel={view.primary} time={t} onPick={picked => useStore.getState().select(picked)} onClose={close} onCommand={commandAction} />}
-    {!AGENT_DEMO_LOCKED && citizen && <CitizenPanel citizen={citizen} tab={citizenTab} onTab={setCitizenTab} onClose={close} onFollow={() => { const map = leadMap(), pose = world?.traffic.poseOf(citizen.id); if (map && pose && world) cameraTo(agentPose(world.frame.worldToLonLat(pose.x, pose.z), null, currentPose(map)), 'agent') }} onGuide={() => setNotice('Individual guidance is not connected yet.')} onMessage={() => setNotice('Citizen conversations are not connected yet.')} onPerson={id => useStore.getState().select({ kind: 'person', id })} />}
-    <div className={citizen || (AGENT_DEMO_LOCKED && selection?.kind === 'person') ? 'gp-follow-behavior' : 'gp-selection-bubble'}><AgentBubble /></div>
+    {citizen && <CitizenPanel citizen={citizen} tab={citizenTab} onTab={setCitizenTab} onClose={close} onFollow={() => { const map = leadMap(), pose = world?.traffic.poseOf(citizen.id); if (map && pose && world) cameraTo(agentPose(world.frame.worldToLonLat(pose.x, pose.z), null, currentPose(map)), 'agent') }} onGuide={() => setNotice('Individual guidance is not connected yet.')} onMessage={() => setNotice('Citizen conversations are not connected yet.')} onPerson={id => useStore.getState().select({ kind: 'person', id })} />}
+    <div className={citizen ? 'gp-follow-behavior' : 'gp-selection-bubble'}><AgentBubble /></div>
     {panel === 'tools' && tool && <PanelBox title={TITLES[tool]} onClose={close}><div className="gp-legacy-inline"><ToolPanel /></div></PanelBox>}
     {panel === 'settings' && <PanelBox title="City settings" onClose={close}><GlassButton onClick={() => live.toggle()}>{playing ? 'Pause simulation' : 'Resume simulation'}</GlassButton><div className="gp-inline-segment">{PLAYBACK_SPEEDS.map(speed => <GlassButton key={speed} onClick={() => live.setSpeed(speed)}>{speed}×</GlassButton>)}</div>
       <h3 className="gp-section-title">New city</h3>
