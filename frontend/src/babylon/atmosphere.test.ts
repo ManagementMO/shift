@@ -79,6 +79,10 @@ describe('Sky-matched world atmosphere', () => {
     const unrelated = new MaterialType('unrelated', other)
     expect(unrelated.pluginManager?.getPlugin('WorldAtmosphere')).toBeFalsy()
     other.dispose()
+    const weather = new MaterialType('hazard-storm-cloud-mat', scene)
+    expect(weather.pluginManager?.getPlugin('WorldAtmosphere')).toBeFalsy()
+    const marks = new MaterialType('overlay-mat', scene)
+    expect(marks.pluginManager?.getPlugin('WorldAtmosphere')).toBeFalsy()
   })
 
   it.each(materialTypes)('updates fade uniforms after zooming even when the %s material is frozen', (_name, MaterialType) => {

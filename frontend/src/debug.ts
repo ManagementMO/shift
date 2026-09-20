@@ -5,6 +5,7 @@ import type { CameraMode, CameraPose } from './world/camera'
 import { clock } from './world/playback'
 import type { WorldScene } from './babylon/scene'
 import type { LiveController } from './live/controller'
+import { live } from './live/session'
 import type { GlobeScene } from './globe/GlobeScene'
 
 declare global {
@@ -35,5 +36,6 @@ if (typeof window !== 'undefined') {
     map: () => leadMap(),
     stats: renderStats,
     store: useStore,
+    live: { controller: live, worlds: {} },
   }
 }
