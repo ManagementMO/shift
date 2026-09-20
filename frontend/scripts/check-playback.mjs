@@ -46,6 +46,8 @@ try {
       await route.fulfill({ json })
     })
     await page.goto(`${base}${path}`)
+    // `/` lands on the globe; every destination flies into the Toronto prototype.
+    if (path === '/') await page.getByRole('button', { name: /^Fly to / }).first().click({ timeout: 120000 })
     await expect(page.getByRole('button', { name: 'Pause simulation', exact: true })).toBeEnabled({ timeout: 120000 })
     await expect(page.getByRole('button', { name: '1×', exact: true })).toHaveAttribute('aria-pressed', 'true')
     await expect(page.locator('.clock .wall')).toHaveText(/^\d{2}:\d{2}:\d{2}$/)
@@ -89,12 +91,17 @@ try {
     await expect(page.locator('.scenario-drawer')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Compare', exact: true })).toHaveCount(0)
     await page.locator('.scenario-drawer').getByRole('button', { name: 'Close', exact: true }).click()
-    const cameras = page.getByRole('navigation', { name: 'Camera', exact: true })
-    await expect(cameras).toBeVisible()
+    // No camera-mode panel: the District / Corridor pickers live in the left rail's Area select tool.
+    await expect(page.getByRole('navigation', { name: 'Camera', exact: true })).toHaveCount(0)
+    const areaSelect = page.getByRole('navigation', { name: 'Interventions', exact: true }).getByRole('button', { name: 'Area select', exact: true })
+    await expect(areaSelect).toBeVisible()
+    const picker = (name) => page.locator('.toolpanel .listitem', { hasText: name })
     if (path === '/mapbox' && await page.locator('.map-notice').isVisible()) {
       await expect(page.locator('.map-notice')).toContainText('Connect Mapbox to load the 3D city')
       await expect(page.locator('.world canvas')).toHaveCount(0)
-      for (const name of ['City', 'District', 'Corridor', 'Agent', 'Incident']) await expect(cameras.getByRole('button', { name, exact: true })).toBeDisabled()
+      await areaSelect.click()
+      for (const name of ['District', 'Corridor']) await expect(picker(name)).toBeDisabled()
+      await page.keyboard.press('Escape')
       assert.deepEqual(errors, [])
       console.log('/mapbox: playback, removed controls, and missing-token notice passed; configured map rendering requires a token')
       await page.close()
@@ -139,7 +146,11 @@ try {
       })
     })
     const waitForCamera = () => expect.poll(() => page.evaluate(() => window.__cityshift.map().isMoving())).toBe(false)
-    await expect(cameras.getByRole('button', { name: 'City', exact: true })).toBeEnabled()
+    // The city hero pose, asked for the way the shell does it (globe arrival, pack switch).
+    const cityPose = () => page.evaluate(() => {
+      const pack = window.__cityshift.store.getState().pack
+      window.__cityshift.camera({ center: pack.center, zoom: 15.05, pitch: 60, bearing: -17 }, 'city')
+    })
     await page.getByRole('button', { name: 'Pause simulation', exact: true }).click()
     const beforeZoom = await cameraPose()
     await page.mouse.move(720, 400)
@@ -164,37 +175,69 @@ try {
     const beforeArrow = await time()
     await page.keyboard.press('ArrowRight')
     assert.equal(await time(), beforeArrow, 'Camera navigation must not scrub the simulation clock')
-    await cameras.getByRole('button', { name: 'City', exact: true }).click()
+    const presetTime = await time()
+    const beforeCity = await cameraPose()
+    await cityPose()
     await waitForCamera()
-    const carPoint = await page.evaluate(() => {
+    assert.notDeepEqual(await cameraPose(), beforeCity, `The city pose did not change the camera on ${path}`)
+    assert.ok(await insideCity(), `The city pose exposes unrendered city edges on ${path}`)
+    assert.equal(await time(), presetTime, 'Framing the city changed the paused simulation clock')
+    await expect(page.getByRole('button', { name: 'Resume simulation', exact: true })).toBeEnabled()
+    // Click the fixture car where it is drawn: the bubble opens with its info; Escape closes it.
+    const carLonLat = () => {
       const t = window.__cityshift.store.getState().t
-      return window.__cityshift.map().project([-79.38 + t * 0.00005, 43.64])
-    })
+      return [-79.38 + t * 0.00005, 43.64]
+    }
+    await page.evaluate((lonLat) => {
+      const babylon = window.__cityshift.babylon
+      if (!babylon) return
+      const [x, z] = babylon.frame.lonLatToWorld(lonLat[0], lonLat[1])
+      babylon.camera.apply({ target: [x, z], radius: 260, heading: babylon.camera.pose.heading, elevation: 50 })
+    }, await page.evaluate(carLonLat))
+    await page.waitForTimeout(300) // let a frame render so the projection matches the new camera
+    const carPoint = await page.evaluate((lonLat) => window.__cityshift.map().project(lonLat), await page.evaluate(carLonLat))
     await page.mouse.click(carPoint.x, carPoint.y)
     await expect.poll(() => page.evaluate(() => window.__cityshift.store.getState().selection?.id)).toBe('car')
     await expect(page.getByRole('button', { name: 'Follow', exact: true })).toBeVisible()
-    await page.locator('.bubble').getByRole('button', { name: 'Close', exact: true }).click()
+    await page.keyboard.press('Escape')
+    await expect.poll(() => page.evaluate(() => window.__cityshift.store.getState().selection)).toBeNull()
     if (path === '/world' && process.env.CAMERA_SCREENSHOT) await page.screenshot({ path: process.env.CAMERA_SCREENSHOT })
-    const presetTime = await time()
-    for (const name of ['District', 'Corridor', 'Agent', 'Incident', 'City']) {
+    // Area select: a key starts the pick with the panel closed; the rail icon stays lit and the map cursor is a
+    // crosshair until a region is chosen or Escape ends it.  Keys typed into fields are ignored.
+    const picking = () => page.evaluate(() => window.__cityshift.store.getState().picking)
+    const mapCursor = () => page.evaluate(() => document.querySelector('.bworld-canvas')?.style.cursor ?? null)
+    for (const [name, key] of [['District', '2'], ['Corridor', '3']]) {
       const before = await cameraPose()
-      const button = cameras.getByRole('button', { name, exact: true })
-      await button.click()
-      await expect(button).toHaveAttribute('aria-pressed', 'true')
+      await page.evaluate(() => document.activeElement?.blur())
+      await page.keyboard.press(key)
+      await expect.poll(picking).toBe(true)
+      await expect(page.locator('.toolpanel')).toHaveCount(0)
+      await expect(areaSelect).toHaveAttribute('aria-pressed', 'true')
+      if (path !== '/mapbox') await expect.poll(mapCursor).toBe('crosshair')
       await waitForCamera()
-      assert.notDeepEqual(await cameraPose(), before, `${name} did not change the camera on ${path}`)
+      assert.notDeepEqual(await cameraPose(), before, `${name} did not frame its regions on ${path}`)
       assert.ok(await insideCity(), `${name} exposes unrendered city edges on ${path}`)
       assert.equal(await time(), presetTime, `${name} changed the paused simulation clock`)
-      await expect(page.getByRole('button', { name: 'Resume simulation', exact: true })).toBeEnabled()
+      await page.getByRole('slider', { name: 'Simulation time', exact: true }).focus()
+      await page.keyboard.press(key === '2' ? '3' : '2')
+      assert.equal(await page.evaluate(() => window.__cityshift.store.getState().cameraMode), name.toLowerCase(), 'A key typed into a field must not switch the pick')
+      await page.evaluate(() => document.activeElement?.blur())
+      await page.keyboard.press('Escape')
+      await expect.poll(picking).toBe(false)
+      await expect(areaSelect).toHaveAttribute('aria-pressed', 'false')
+      if (path !== '/mapbox') await expect.poll(mapCursor).toBe('')
     }
-    await page.evaluate(() => document.activeElement?.blur())
-    await page.keyboard.press('3')
-    await expect(cameras.getByRole('button', { name: 'Corridor', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    // From the panel: choosing a picker closes the panel; choosing another tool ends the pick.
+    await areaSelect.click()
+    await picker('District').click()
+    await expect.poll(picking).toBe(true)
+    await expect(page.locator('.toolpanel')).toHaveCount(0)
+    await page.getByRole('navigation', { name: 'Interventions', exact: true }).getByRole('button', { name: 'Closure', exact: true }).click()
+    await expect.poll(picking).toBe(false)
+    await expect(page.locator('.toolpanel')).toBeVisible()
+    await page.locator('.toolpanel-head').getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(page.locator('.toolpanel')).toHaveCount(0)
     await waitForCamera()
-    await page.getByRole('slider', { name: 'Simulation time', exact: true }).focus()
-    await page.keyboard.press('2')
-    await expect(cameras.getByRole('button', { name: 'Corridor', exact: true })).toHaveAttribute('aria-pressed', 'true')
-    await page.evaluate(() => document.activeElement?.blur())
     const beforeResize = await cameraPose()
     for (const width of [1440, 768, 390, 3440]) {
       await page.setViewportSize({ width, height: 900 })
@@ -205,10 +248,9 @@ try {
       assert.ok(fits, `Playback controls overflow at ${width}px on ${path}`)
       await page.waitForTimeout(100)
       assert.deepEqual(await cameraPose(), beforeResize, `Resizing should not reset the free camera at ${width}px on ${path}`)
-      await expect(cameras.getByRole('button', { name: 'Corridor', exact: true })).toHaveAttribute('aria-pressed', 'true')
     }
     assert.deepEqual(errors, [])
-    console.log(`${path}: playback, camera presets, free zoom/orbit/pan, click selection, and responsive dock passed`)
+    console.log(`${path}: playback, city framing, free zoom/orbit/pan, click selection, and responsive dock passed`)
     await page.close()
   }
   if (process.env.CITYSHIFT_LIVE_REPLAY === '1') await checkLivePlayback(browser, base)

@@ -6,11 +6,10 @@
 
 import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector'
 import type { Observer } from '@babylonjs/core/Misc/observable'
-import type { Camera } from '@babylonjs/core/Cameras/camera'
+import { Camera } from '@babylonjs/core/Cameras/camera'
 
 import type { CameraMode, CameraPose } from '../world/camera'
-import { clock } from '../world/playback'
-import type { SyncMap } from '../world/registry'
+import type { BuildingFacts, SyncMap } from '../world/registry'
 import type { Pose } from './camera'
 import type { WorldScene } from './scene'
 
@@ -141,9 +140,48 @@ export class BabylonSyncMap implements SyncMap {
     return { x: p.x * s, y: p.y * s }
   }
 
+  /**
+   * The line of sight through a CSS-pixel screen point, in world metres.  Built from the camera geometry rather
+   * than NDC depth so it holds for both the orthographic and the perspective projection and for the reverse
+   * depth buffer.  The origin is the eye for a perspective camera; for the orthographic one it is pushed far
+   * back along the view so every visible point lies at a positive distance.
+   */
+  pickRay(sx: number, sy: number): { origin: Vector3; dir: Vector3 } {
+    const engine = this.ws.engine
+    const cam = this.ws.camera.cam
+    const s = engine.getHardwareScalingLevel()
+    const w = engine.getRenderWidth()
+    const h = engine.getRenderHeight()
+    const on = Vector3.Unproject(new Vector3(sx / s, sy / s, 0.5), w, h, Matrix.IdentityReadOnly, cam.getViewMatrix(), cam.getProjectionMatrix())
+    const forward = cam.target.subtract(cam.globalPosition).normalize()
+    if (cam.mode === Camera.PERSPECTIVE_CAMERA) {
+      const origin = cam.globalPosition.clone()
+      const dir = on.subtract(origin).normalize()
+      if (Vector3.Dot(dir, forward) < 0) dir.scaleInPlace(-1)
+      return { origin, dir }
+    }
+    return { origin: on.subtract(forward.scale(cam.maxZ)), dir: forward }
+  }
+
+  /** World (x, z) where the line of sight through a screen point meets the ground plane; null above the horizon. */
+  unprojectGround(sx: number, sy: number): [number, number] | null {
+    const { origin, dir } = this.pickRay(sx, sy)
+    if (Math.abs(dir.y) < 1e-6) return null
+    const t = -origin.y / dir.y
+    if (t < 0) return null
+    return [origin.x + dir.x * t, origin.z + dir.z * t]
+  }
+
+  /** Ground metres covered by one CSS pixel at a screen point, from the spread of two neighbouring rays. */
+  metresPerPixel(sx: number, sy: number): number {
+    const a = this.unprojectGround(sx, sy)
+    const b = this.unprojectGround(sx + 8, sy)
+    return a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) / 8 : Infinity
+  }
+
   isMoving(): boolean {
     const c = this.ws.camera.cam
-    return this.ws.camera.flying || c.inertialAlphaOffset !== 0 || c.inertialBetaOffset !== 0 || c.inertialRadiusOffset !== 0 || c.inertialPanningX !== 0 || c.inertialPanningY !== 0
+    return this.ws.camera.flying || this.ws.keys?.moving || c.inertialAlphaOffset !== 0 || c.inertialBetaOffset !== 0 || c.inertialRadiusOffset !== 0 || c.inertialPanningX !== 0 || c.inertialPanningY !== 0
   }
 
   on(ev: string, cb: MoveCb): void {
@@ -159,28 +197,20 @@ export class BabylonSyncMap implements SyncMap {
     this.ws.camera.setProjection(mode === 'agent' ? 'perspective' : this.ws.camera.preferredProjection)
   }
 
-  /** Renderer-native hero framings the shell may offer when this map leads. */
+  /** Renderer-native hero framing the shell may offer when this map leads. */
   cityHero(): void {
     this.ws.camera.city()
   }
 
-  /**
-   * Blue Jays egress: frame the recorded release points looking at Rogers Centre and rewind the clock to
-   * just before the first ~10% of travellers left.  Positions and times are the replay's, not staged.
-   */
-  egress(): boolean {
-    if (this.cameraLocked) return false
-    const ws = this.ws
-    const l = ws.world.landmarks.find((x) => x.kind === 'rogers_centre')
-    const t0 = ws.traffic.releaseQuantile(0.1)
-    const gate = ws.traffic.releaseCentroid()
-    if (!l || t0 === null || !gate) return false
-    const heading = (Math.atan2(l.x - gate[0], l.z - gate[1]) * 180) / Math.PI
-    ws.camera.flyTo({ target: gate, radius: 300, heading, elevation: 46, y: 4 }, 1600, 'district')
-    clock.seek(Math.max(0, t0 - 3))
-    clock.setSpeed(1)
-    if (!clock.playing) clock.play()
-    return true
+  projectAt(lngLat: [number, number], height: number): { x: number; y: number } {
+    const [x, z] = this.ws.frame.lonLatToWorld(lngLat[0], lngLat[1])
+    return this.projectWorld(x, height, z)
+  }
+
+  buildingFacts(id: string): BuildingFacts | null {
+    const b = this.ws.buildings.building(id)
+    if (!b) return null
+    return { id: b.id, name: b.name, kind: b.kind, cat: b.cat, height: b.height, area: b.area, sections: b.sections, lonLat: this.ws.frame.worldToLonLat(b.x, b.z) }
   }
 
   dispose(): void {

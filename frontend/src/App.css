@@ -22,6 +22,7 @@
   --riding: #89b0ff;
   --arrived: #a9b6c0;
   --bus: #eed187;
+  --hover: #f5891f;
   --r: 3px;
   font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-size: 13px;
@@ -522,43 +523,30 @@ input[type='checkbox'] {
   font-size: 14px;
 }
 
-/* ---------- right edge: camera modes ---------- */
-.cams {
+/* ---------- name tag over the hovered district / corridor while picking ---------- */
+.nav-labels {
   position: absolute;
-  right: 14px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  background: var(--glass);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  border: 1px solid var(--glass-line);
-  box-shadow: var(--glass-shadow);
-  border-radius: 14px;
-  z-index: 20;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 14;
 }
-.cams button {
-  padding: 7px 10px;
-  border-radius: 9px;
+.nav-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin-top: -10px;
+  padding: 3px 7px;
+  background: var(--hover);
+  border: 1px solid var(--hover);
+  border-radius: var(--r);
+  color: var(--on-accent);
   font-size: 11.5px;
   font-weight: 500;
-  color: var(--ink-2);
-  text-align: left;
+  white-space: nowrap;
 }
-.cams button:hover {
-  background: rgba(255, 255, 255, 0.07);
-}
-.cams button.on {
-  background: var(--accent);
-  color: var(--on-accent);
-}
-.cams button.hero {
-  margin-top: 4px;
-  background: var(--accent);
-  color: var(--on-accent);
+.nav-label[hidden] {
+  display: none;
 }
 
 /* ---------- drawers (scenario left, lens right) ---------- */
@@ -587,7 +575,7 @@ input[type='checkbox'] {
   left: 14px;
 }
 .lens {
-  right: 100px;
+  right: 14px;
   width: 400px;
   padding: 0;
 }
@@ -769,6 +757,14 @@ input[type='checkbox'] {
 .pill.bus {
   background: rgba(242, 193, 78, 0.3);
   color: var(--bus);
+}
+.pill.closure {
+  background: rgba(240, 120, 105, 0.18);
+  color: var(--closure);
+}
+.pill.closure.off {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink-2);
 }
 .pill.car {
   background: rgba(255, 255, 255, 0.08);
@@ -1194,7 +1190,7 @@ details summary {
 .clock, .metric .val, .display-mode {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
 }
-.rail, .cams, .dock, .railbtn, .cams button, .ghostbtn, .seg, .seg button, .plan, .proposal, .fleetcard, .listitem, .bubble, button.primary, input, select, textarea, .iconbtn:not(.play) {
+.rail, .dock, .railbtn, .ghostbtn, .seg, .seg button, .plan, .proposal, .fleetcard, .listitem, .bubble, button.primary, input, select, textarea, .iconbtn:not(.play) {
   border-radius: var(--r);
 }
 .railbtn:focus-visible .tip {
@@ -1269,8 +1265,6 @@ details summary {
   .metric .lbl { font-size: 9px; }
   .rail { left: 10px; padding: 3px; }
   .railbtn { width: 32px; height: 32px; }
-  .cams { right: 10px; padding: 3px; }
-  .cams button { padding: 6px; }
   .display-panel { width: 180px; top: 128px; }
   .drawer { top: 128px; }
   .hint { top: 128px; width: calc(100vw - 32px); border-radius: var(--r); }
