@@ -161,6 +161,18 @@ export class Batch {
     }
   }
 
+  /** Flat ring on the ground: outer radius `r`, band width `w`. */
+  annulus(x: number, z: number, r: number, w: number, y: number, c: RGB, segments = 24): void {
+    const outer: number[] = []
+    const inner: number[] = []
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2
+      outer.push(x + Math.cos(a) * r, z + Math.sin(a) * r)
+      inner.push(x + Math.cos(a) * (r - w), z + Math.sin(a) * (r - w))
+    }
+    this.polygon(outer, [inner], y, c)
+  }
+
   /** Solid of revolution around a vertical axis: profile = [[radius, y], ...] bottom to top. */
   lathe(x: number, z: number, profile: [number, number][], c: RGB, segments = 24, shade = 0.9): void {
     if (profile.length < 2) return

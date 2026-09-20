@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { useStore, type ToolId } from '../store'
-import type { Corridor, ServicePlan } from '../types'
+import type { ServicePlan } from '../types'
 import { fmt } from '../util'
 import { ghostFromProposal } from './ghost'
 import ProposalCard from './ProposalCard'
@@ -77,25 +77,16 @@ function WindowPicker({ start, end, setStart, setEnd, horizon }: { start: number
 }
 
 function ClosureTool() {
-  const pack = useStore((s) => s.pack)
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
   const setGhost = useStore((s) => s.setGhost)
-  const [corridors, setCorridors] = useState<Record<string, Corridor>>({})
-  const [key, setKey] = useState<string>('')
+  const corridors = useStore((s) => s.corridors)
+  const [picked, setKey] = useState<string | null>(null)
+  const key = picked && corridors[picked] ? picked : Object.keys(corridors).find((k) => !corridors[k].flagship_closure) ?? Object.keys(corridors)[0] ?? ''
   const [mode, setMode] = useState<'close' | 'reopen'>('close')
   const horizon = scenario?.constraints.horizon_s ?? 2700
   const [start, setStart] = useState(0)
   const [end, setEnd] = useState(horizon)
   const { preview, busy } = usePreview()
-
-  useEffect(() => {
-    if (!pack) return
-    void api.corridors(pack.pack_id).then((c) => {
-      setCorridors(c)
-      const first = Object.keys(c).find((k) => !c[k].flagship_closure) ?? Object.keys(c)[0] ?? ''
-      setKey(first)
-    })
-  }, [pack])
 
   // Placement preview: hovering/selecting a corridor ghosts it on the world before any agent call.
   useEffect(() => {

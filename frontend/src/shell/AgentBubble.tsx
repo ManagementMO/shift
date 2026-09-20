@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { clock } from '../world/playback'
 import { entitiesAt, personStateAt, lonLatAt, seriesAt, type PersonState } from '../replay'
-import { fmt } from '../util'
+import { centroidOf, edgePath, fmt } from '../util'
 import { cameraTo, leadMap } from '../world/registry'
-import { agentPose, currentPose } from '../world/camera'
+import { agentPose, buildingPose, corridorPose, currentPose } from '../world/camera'
 
 const STATE_LABEL: Record<PersonState, string> = {
   not_departed: 'still inside the venue',
@@ -16,7 +16,10 @@ const STATE_LABEL: Record<PersonState, string> = {
   unroutable: 'no route found by SUMO',
 }
 
-/** Contextual bubble for the selected person / bus / car. Anchored to the lead map's screen projection. */
+/**
+ * Contextual bubble for whatever was clicked: a person / bus / car, a stop, a closure or a building.  Anchored
+ * to the lead map's screen projection of the thing: a moving entity is followed frame by frame, the rest sit still.
+ */
 export default function AgentBubble() {
   const selection = useStore((s) => s.selection)
   const select = useStore((s) => s.select)
@@ -24,23 +27,38 @@ export default function AgentBubble() {
   const rx = useStore((s) => (s.primaryRunId ? s.replays[s.primaryRunId] : null))
   const travelers = useStore((s) => s.travelers)
   const pack = useStore((s) => s.pack)
+  const roads = useStore((s) => s.roads)
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
   const cameraMode = useStore((s) => s.cameraMode)
   const t = useStore((s) => s.t)
   const [pt, setPt] = useState<{ x: number; y: number } | null>(null)
 
-  const id = selection && selection.kind !== 'restriction' && selection.kind !== 'stop' ? selection.id : null
+  const kind = selection?.kind ?? null
+  const selId = selection?.id ?? null
+  const id = selection && (selection.kind === 'bus' || selection.kind === 'car' || selection.kind === 'person') ? selection.id : null
+  const restriction = kind === 'restriction' ? scenario?.restrictions.find((r) => r.restriction_id === selId) ?? null : null
+  const stopSel = kind === 'stop' ? pack?.stops.find((s) => s.stop_id === selId) ?? null : null
+  const building = useMemo(() => (kind === 'building' && selId ? leadMap()?.buildingFacts?.(selId) ?? null : null), [kind, selId])
 
-  // Follow the entity on screen (per frame, off the React tree except for the final set when it moves).
+  // Keep the bubble on its anchor (per frame, off the React tree except for the final set when it moves).
   useEffect(() => {
-    if (!id || !rx) return
+    if (!selId || (id && !rx)) return
+    // A closure can run for blocks: pin its bubble to the closed segment nearest the middle of the view.
+    const path = restriction ? edgePath(roads, restriction.edge_ids) : []
+    const still = (lead: ReturnType<typeof leadMap>): [number, number] | null => {
+      if (stopSel) return [stopSel.lon, stopSel.lat]
+      if (building) return building.lonLat
+      if (!restriction) return null
+      const c = lead?.getCenter()
+      return c ? nearestPoint(path, [c.lng, c.lat]) : centroidOf(path)
+    }
     let last = ''
     let lastFollow = 0
     const update = (tt: number, follow: boolean) => {
       const lead = leadMap()
-      const ix = rx.tracks[id]
-      const stop = pack?.stops.find((s) => s.stop_id === waitingStop(rx.personEvents[id], tt))
-      const pos: [number, number] | null = ix ? lonLatAt(ix, tt) : stop ? [stop.lon, stop.lat] : null
+      const ix = id && rx ? rx.tracks[id] : undefined
+      const stop = id && rx ? pack?.stops.find((s) => s.stop_id === waitingStop(rx.personEvents[id], tt)) : undefined
+      const pos: [number, number] | null = still(lead) ?? (ix ? lonLatAt(ix, tt) : stop ? [stop.lon, stop.lat] : null)
       if (!lead || !pos) {
         if (last !== 'none') {
           last = 'none'
@@ -48,7 +66,8 @@ export default function AgentBubble() {
         }
         return
       }
-      const p = lead.project([pos[0], pos[1]])
+      // a building's bubble floats over its roof
+      const p = building && lead.projectAt ? lead.projectAt([pos[0], pos[1]], building.height) : lead.project([pos[0], pos[1]])
       const key = `${p.x | 0},${p.y | 0}`
       if (key !== last) {
         last = key
@@ -56,7 +75,7 @@ export default function AgentBubble() {
       }
       // Agent mode: glide the camera after the entity at most ~1.5×/s, and only once it has drifted off centre.
       const now = performance.now()
-      if (follow && !lead.cameraLocked && cameraMode === 'agent' && now - lastFollow > 650 && !lead.isMoving()) {
+      if (follow && id && !lead.cameraLocked && cameraMode === 'agent' && now - lastFollow > 650 && !lead.isMoving()) {
         const c = lead.getCenter()
         const drift = Math.hypot((pos[0] - c.lng) * 80_000, (pos[1] - c.lat) * 111_000)
         if (drift > 12) {
@@ -76,12 +95,114 @@ export default function AgentBubble() {
       off()
       lead?.off('move', onMove)
     }
-  }, [id, rx, pack, cameraMode])
+  }, [id, selId, rx, pack, roads, restriction, stopSel, building, cameraMode])
 
-  if (!selection || !id || !rx) return null
-  const ent = entitiesAt(rx, t).find((e) => e.id === id)
+  if (!selection) return null
   const style = pt ? { left: pt.x, top: pt.y } : undefined
   const cls = `bubble ${pt ? '' : 'docked'}`
+  const locked = leadMap()?.cameraLocked
+
+  if (building) {
+    const b = building
+    const floors = b.height > 4 ? Math.max(1, Math.round(b.height / 3.5)) : null
+    const source = b.kind === 'massing' ? 'City of Toronto 3D massing' : b.kind === 'landmark' ? 'landmark model' : `OpenStreetMap footprint ${b.id}`
+    const frame = () => {
+      const lead = leadMap()
+      if (lead) cameraTo(buildingPose(b.lonLat, b.height, currentPose(lead)), 'district')
+    }
+    return (
+      <div className={cls} style={style}>
+        <div className="bubble-head">
+          <b>{b.name ?? (b.kind === 'landmark' ? 'Landmark' : 'Building')}</b>
+          <span className="pill">{b.cat && b.cat !== 'generic' ? b.cat : 'building'}</span>
+          <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
+            ✕
+          </button>
+        </div>
+        <div className="small">
+          {Math.round(b.height)} m tall{floors ? ` · about ${floors} floor${floors === 1 ? '' : 's'}` : ''} · {Math.round(b.area).toLocaleString()} m² footprint
+        </div>
+        <div className="small dim">
+          {b.sections > 1 ? `${b.sections} sections · ` : ''}
+          {source}
+        </div>
+        <div className="row">
+          {!locked && (
+            <button className="ghostbtn" onClick={frame}>
+              Frame
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  if (restriction) {
+    const r = restriction
+    const status = t < r.start_s ? `starts in ${fmt(r.start_s - t)}` : t > r.end_s ? 'over' : 'in effect now'
+    const frame = () => {
+      const lead = leadMap()
+      const pts = edgePath(roads, r.edge_ids)
+      if (lead && pts.length >= 2) cameraTo(corridorPose(pts, currentPose(lead)), 'incident')
+    }
+    return (
+      <div className={cls} style={style}>
+        <div className="bubble-head">
+          <b>{r.restriction_id.startsWith('hazard') ? 'Hazard footprint' : 'Street closure'}</b>
+          <span className={`pill closure ${t >= r.start_s && t <= r.end_s ? '' : 'off'}`}>{status}</span>
+          <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
+            ✕
+          </button>
+        </div>
+        <div className="small">{r.label}</div>
+        <div className="small dim">
+          {r.edge_ids.length} segments · {r.modes.join(', ')} · +{fmt(r.start_s)}–+{fmt(r.end_s)}
+        </div>
+        <div className="small dim">source: {r.source_claim_id ?? 'scenario fixture, no evidence claim'}</div>
+        <div className="row">
+          {!locked && (
+            <button className="ghostbtn" onClick={frame}>
+              Frame
+            </button>
+          )}
+          <button className="ghostbtn" onClick={() => setLens('transport')}>
+            Details
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (stopSel) {
+    const s = stopSel
+    const waiting = rx ? seriesAt(rx.stopQueue[s.stop_id], t) ?? 0 : null
+    const duties = rx?.bundle.compile?.duties.filter((d) => d.stop_sequence.includes(s.stop_id)) ?? []
+    const allowed = scenario?.constraints.allowed_stop_ids.includes(s.stop_id)
+    return (
+      <div className={cls} style={style}>
+        <div className="bubble-head">
+          <b>{s.name}</b>
+          <span className="pill">stop</span>
+          <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
+            ✕
+          </button>
+        </div>
+        <div className="small">{waiting === null ? 'no replay loaded' : `${waiting} waiting now`}</div>
+        <div className="small dim">
+          {allowed ? 'in the scenario’s allowed set' : 'not in the allowed set'}
+          {duties.length > 0 && ` · served by ${duties.map((d) => d.vehicle_id.replace('_', ' ')).filter((v, i, a) => a.indexOf(v) === i).join(', ')}`}
+        </div>
+        <div className="row">
+          <button className="ghostbtn" onClick={() => setLens('transport')}>
+            Details
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (!id || !rx) return null
+  const ent = entitiesAt(rx, t).find((e) => e.id === id)
 
   const follow = () => {
     const lead = leadMap()
@@ -183,6 +304,20 @@ export default function AgentBubble() {
       </div>
     </div>
   )
+}
+
+function nearestPoint(pts: [number, number][], to: [number, number]): [number, number] | null {
+  let best: [number, number] | null = null
+  let bestD = Infinity
+  const k = Math.cos((to[1] * Math.PI) / 180)
+  for (const p of pts) {
+    const d = ((p[0] - to[0]) * k) ** 2 + (p[1] - to[1]) ** 2
+    if (d < bestD) {
+      bestD = d
+      best = p
+    }
+  }
+  return best
 }
 
 function waitingStop(ev: { t: number; event: string; stop_id: string | null }[] | undefined, t: number): string | null {

@@ -48,7 +48,7 @@ export default function App({ renderer = 'babylon', active = true, onGlobe, onWo
           {renderer === 'mapbox' ? (
             <WorldMap runId={primaryRunId} side="solo" />
           ) : (
-            <WorldBabylon runId={primaryRunId} side="solo" onWorldReady={onWorldReady} onWorldError={onWorldError} />
+            <WorldBabylon runId={primaryRunId} side="solo" active={active} onWorldReady={onWorldReady} onWorldError={onWorldError} />
           )}
         </Suspense>
       </div>
