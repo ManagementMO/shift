@@ -22,6 +22,27 @@ credentials are absent.
 
 ## Quick start
 
+Application records now use **MongoDB Atlas** by default. Before starting the API, set
+`MONGODB_URI` (the Atlas `mongodb+srv://` connection string) and `MONGODB_DATABASE` in
+`backend/.env` or the process environment. The example database is `cityshift_events_development`;
+use a separate database per environment. Keep the URI out of source control and frontend variables.
+Allow the backend's IP in Atlas Network Access and give its database user `readWrite` access only
+to the chosen database. TLS certificate and hostname verification stay enabled; an approved custom
+CA bundle can be supplied with `MONGODB_TLS_CA_FILE` if required by your network.
+
+Scenarios and their demand are inserted together as one immutable document. Plans and validations
+are likewise stored together; run status, evidence, and investigations also live in Atlas. City
+packs and large SUMO/replay artifacts remain on disk (R2 export is still optional). Existing JSON
+records are not automatically imported, overwritten, or deleted. Run execution remains local to a
+single backend process; Atlas is not a distributed simulation job queue. `/api/health` reports
+storage readiness without exposing the connection string. Atlas failures do not silently switch stores.
+
+Select Atlas with `CITYSHIFT_STORAGE=mongodb`; for an explicitly offline demo, set
+`CITYSHIFT_STORAGE=json`. The legacy `CITYSHIFT_STORE` setting is accepted only when
+`CITYSHIFT_STORAGE` is absent. Unit tests use isolated temporary JSON stores or an in-memory
+MongoDB mock and do not require Atlas credentials. Documents larger
+than MongoDB's 16 MiB limit are rejected before writing; reduce the scenario cohort if necessary.
+
 ```sh
 # backend (Python 3.12; SUMO ships inside the eclipse-sumo wheel)
 python3.12 -m venv .venv && source .venv/bin/activate

@@ -6,7 +6,7 @@ import { Ray } from '@babylonjs/core/Culling/ray'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 import { PBRMaterial } from '@babylonjs/core/Materials/PBR/pbrMaterial'
 
-import { buildCity, PALETTE, Y } from './city'
+import { buildCity, HIDDEN_Y, PALETTE, Y } from './city'
 import { cityPose } from './camera'
 import { Overlay, MARK } from './overlay'
 import { RoadIndex } from './roadIndex'
@@ -49,6 +49,39 @@ describe('New-city rendering without appearance configuration', () => {
     expect(mark.getTotalVertices()).toBe(4)
     mark.getVerticesData('color')!.slice(0, 3).forEach((v, i) => expect(v).toBeCloseTo(MARK.focus[i]))
     overlay.dispose()
+    city.dispose()
+    scene.dispose()
+    engine.dispose()
+  })
+
+  it('collapses exactly the demolished buildings and landmarks by their ids, and restores them', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const world = fixture()
+    world.green = []
+    world.landmarks = [{ id: 'w-tower', kind: 'cn_tower', name: 'CN Tower', x: 4300, z: 7300, h: 553, ring: [4290, 7290, 4310, 7290, 4310, 7310, 4290, 7310] }]
+    const city = buildCity(scene, world)
+    const buildings = city.chunks.filter((m) => m.name.startsWith('buildings-'))
+    expect(buildings.length).toBeGreaterThan(0)
+    const house = city.buildingRanges.get('osm:house')!
+    const office = city.buildingRanges.get('osm:office')!
+    expect(house.length).toBeGreaterThan(0)
+    expect(office.length).toBeGreaterThan(0)
+    const landmark = city.chunks.find((m) => m.metadata?.landmarkId === 'w-tower')!
+    const before = buildings.map((m) => new Float32Array(m.getVerticesData('position')!))
+    const heights = (ranges: typeof house) => ranges.flatMap((r) => { const p = r.mesh.getVerticesData('position')!; const out: number[] = []; for (let v = r.start; v < r.end; v++) out.push(p[v * 3 + 1]); return out })
+
+    city.hideBuildings(['house', 'w-tower'])
+    expect(city.isHidden('house')).toBe(true)
+    expect(city.isHidden('office')).toBe(false)
+    expect(landmark.isEnabled()).toBe(false)
+    expect(heights(house).every((y) => y === HIDDEN_Y)).toBe(true) // the demolished house draws nothing
+    expect(heights(office).some((y) => y > 0)).toBe(true) // its neighbour is untouched
+
+    city.hideBuildings([]) // restoring puts every vertex back and re-enables the landmark
+    buildings.forEach((mesh, i) => expect(Array.from(mesh.getVerticesData('position')!)).toEqual(Array.from(before[i])))
+    expect(landmark.isEnabled()).toBe(true)
+    expect(city.isHidden('house')).toBe(false)
     city.dispose()
     scene.dispose()
     engine.dispose()

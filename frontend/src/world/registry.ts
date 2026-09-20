@@ -51,6 +51,10 @@ export function registerMap(side: string, map: SyncMap): () => void {
   }
 }
 
+export function mapForSide(side: string): SyncMap | null {
+  return maps.get(side) ?? null
+}
+
 export function leadMap(): SyncMap | null {
   return maps.get('solo') ?? maps.get('left') ?? maps.values().next().value ?? null
 }

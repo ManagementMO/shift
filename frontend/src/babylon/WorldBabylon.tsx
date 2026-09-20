@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef } from 'react'
+import '@babylonjs/core/Culling/ray'
 
+import { scenarioForView } from '../development'
 import { useStore, type Selection } from '../store'
 import { corridorPose, currentPose, districtPose } from '../world/camera'
+import DevelopmentMarkers from '../world/DevelopmentMarkers'
 import { clock } from '../world/playback'
 import { cameraTo, registerMap } from '../world/registry'
 import type { BuildingIndex } from './buildingIndex'
+import { DevelopmentOverlay } from './developments'
 import { BabylonSyncMap } from './mapAdapter'
 import { CORRIDOR_PICK_PX, NavLabels, NavOverlay, type NavMode, type NavTarget } from './navigation'
 import { Overlay } from './overlay'
@@ -16,12 +20,12 @@ import './world.css'
 const STOP_PICK_PX = 16
 const DRAG_PX = 5
 
-/** Whatever is under the pointer: a replayed entity, a stop, an active closure, a picker region or a building. */
-type Target = { kind: Kind | 'stop' | 'incident' | 'district' | 'corridor' | 'building'; id: string; name: string } | null
+/** Whatever is under the pointer: a replayed entity, a stop, an active closure, a picker region, a saved development or a building. */
+type Target = { kind: Kind | 'stop' | 'incident' | 'district' | 'corridor' | 'development' | 'building'; id: string; name: string } | null
 
-/** The ground part of a target (what `NavOverlay` draws); null for replayed entities. */
+/** The ground part of a target (what `NavOverlay` draws); null for replayed entities and developments (drawn by `DevelopmentOverlay`). */
 function ground(t: Target): NavTarget {
-  return t && t.kind !== 'bus' && t.kind !== 'car' && t.kind !== 'person' ? { kind: t.kind, id: t.id, name: t.name } : null
+  return t && t.kind !== 'bus' && t.kind !== 'car' && t.kind !== 'person' && t.kind !== 'development' ? { kind: t.kind, id: t.id, name: t.name } : null
 }
 
 /** Restrictions whose window covers sim time `t`: the closures drawn in red right now. */
@@ -59,7 +63,8 @@ function stopFollowing(map: BabylonSyncMap): void {
 /**
  * Drop-in for `WorldMap`: the Babylon miniature Toronto driven by the same store, clock and shell.  Registers a
  * `SyncMap` adapter so programmatic camera moves, the info bubble and compare sync work unchanged, and turns
- * pointer input into hover marks and selections: buildings, buses, cars, people, stops and active closures.
+ * pointer input into hover marks and selections: buildings, saved developments, buses, cars, people, stops and
+ * active closures.  While a development is being aimed its ghost follows the cursor and a click places it.
  */
 export default function WorldBabylon({ runId, side, active = true, onWorldReady, onWorldError }: { runId: string | null; side: 'solo' | 'left' | 'right'; /** false while the globe is shown or the city is still flying in: keyboard travel stays off */ active?: boolean; onWorldReady?: (scene: WorldScene) => void; onWorldError?: (message: string) => void }) {
   const pack = useStore((s) => s.pack)
@@ -84,9 +89,15 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
       ws.keys.setEnabled(activeRef.current)
       const map = new BabylonSyncMap(ws)
       const overlay = new Overlay(ws.scene, ws.roads, ws.frame)
+      const developments = new DevelopmentOverlay(ws.scene, ws.frame, ws.city)
       const buildings = ws.buildings
       const nav = new NavOverlay(ws.scene, ws.world, ws.roads, buildings)
       const unregister = registerMap(side, map)
+      if (side !== 'left') {
+        // a development branch that loaded before any map was registered still gets its framing
+        const pending = useStore.getState().pendingDevelopmentFocus
+        if (pending) useStore.getState().focusDevelopment(pending)
+      }
       const canvas = ws.canvas
       const project = (x: number, y: number, z: number) => map.projectWorld(x, y, z)
       const labels = labelsRef.current ? new NavLabels(labelsRef.current, project) : null
@@ -96,12 +107,18 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
 
       // --- pointer.  Agents, stops and active closures outline on hover and open their info on click.  While a
       // District / Corridor pick is open the regions tint and name themselves on hover and a click flies in and
-      // closes the pick.  Buildings never light up on hover, but a click outside a pick opens their info.
+      // closes the pick.  Buildings never light up on hover, but a click outside a pick opens their info.  While a
+      // development is being aimed (this pane leads) the ghost follows the cursor instead and a click places it.
       let down: { x: number; y: number } | null = null
       let last: { x: number; y: number } | null = null
       let hover: Target = null
       let navMode: NavMode = null
+      let aiming = false
       let raf = 0
+      const groundLonLat = (sx: number, sy: number): [number, number] | null => {
+        const g = map.unprojectGround(sx, sy)
+        return g ? ws.frame.worldToLonLat(g[0], g[1]) : null
+      }
       const targetAt = (sx: number, sy: number): Target => {
         const hit = ws.traffic.pick(sx, sy, project)
         if (hit) return { kind: hit.kind, id: hit.id, name: hit.id }
@@ -122,23 +139,33 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
         const incident = nav.incidentAt(g[0], g[1], tol, activeRestrictions(clock.t))
         if (incident) return incident
         if (navMode) return nav.regionAt(g[0], g[1], tol)
+        // saved developments are drawn as their own meshes; base buildings come from the prism index
+        const dev = ws.scene.pick(sx, sy, (mesh) => !!mesh.metadata?.development_id)
+        const devId = dev?.pickedMesh?.metadata?.development_id
+        if (devId) return { kind: 'development', id: String(devId), name: String(devId) }
         const b = buildings.pick(map.pickRay(sx, sy))
-        return b ? { kind: 'building', id: b.info.id, name: b.info.name ?? b.info.id } : null
+        return b && !ws.city.isHidden(b.info.id) ? { kind: 'building', id: b.info.id, name: b.info.name ?? b.info.id } : null
       }
       const applyHover = (t: Target): void => {
         hover = t
         const g = ground(t)
-        ws.traffic.hoverId = t && !g ? t.id : null
+        ws.traffic.hoverId = t && !g && t.kind !== 'development' ? t.id : null
         // buildings are clickable everywhere but only marked once clicked; everything else previews on hover
         nav.setHover(g?.kind === 'building' ? null : g)
         const a = nav.anchor(g)
         labels?.set(a ? [a] : [])
-        // a crosshair says "choosing an area" for the whole pick; otherwise the pointer marks what can be opened
-        canvas.style.cursor = navMode ? 'crosshair' : t && t.kind !== 'building' ? 'pointer' : ''
+        // a crosshair says "choosing an area" or "placing a building"; otherwise the pointer marks what can be opened
+        canvas.style.cursor = navMode || aiming ? 'crosshair' : t && t.kind !== 'building' ? 'pointer' : ''
       }
       const refreshHover = (): void => {
         raf = 0
         if (!last || down) return
+        if (aiming) {
+          // one ground pick per frame at most: the ghost outline follows the cursor
+          useStore.getState().setDevelopmentHover(groundLonLat(last.x, last.y))
+          if (hover) applyHover(null)
+          return
+        }
         applyHover(targetAt(last.x, last.y))
       }
       const local = (e: PointerEvent): { x: number; y: number } => {
@@ -159,6 +186,7 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
       const onLeave = (): void => {
         last = null
         applyHover(null)
+        if (aiming) useStore.getState().setDevelopmentHover(null)
       }
       const onDown = (e: PointerEvent): void => {
         if (e.button === 0) down = { x: e.clientX, y: e.clientY }
@@ -171,6 +199,14 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
         const p = local(e)
         if (moved > DRAG_PX) {
           if (!raf) raf = requestAnimationFrame(refreshHover)
+          return
+        }
+        const s = useStore.getState()
+        if (s.developmentDraft && side !== 'left') {
+          // a click lands the footprint (or moves an already placed one); access is checked straight away
+          const at = groundLonLat(p.x, p.y)
+          if (at) s.placeDevelopment(at)
+          else useStore.setState({ developmentError: 'Choose a land surface beside an existing network edge.' })
           return
         }
         const t = targetAt(p.x, p.y)
@@ -226,7 +262,9 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
           ws.traffic.setReplay(rx)
         }
         const sel = s.selection
-        ws.traffic.selectedId = sel && (sel.kind === 'bus' || sel.kind === 'car' || sel.kind === 'person') ? sel.id : null
+        // a traveler who drove is drawn as their car
+        ws.traffic.selectedId = sel && (sel.kind === 'bus' || sel.kind === 'car' || sel.kind === 'person')
+          ? sel.kind === 'person' && rx?.bundle.compile?.mode_assignment[sel.id] === 'car' ? `car_${sel.id}` : sel.id : null
         ws.traffic.dimOthers = sel?.kind === 'person'
         const scenario = s.scenarios.find((x) => x.scenario_id === s.scenarioId)
         if (scenario?.restrictions !== restrictions) {
@@ -238,21 +276,23 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
           nav.setCorridors(s.corridors)
         }
         const mode: NavMode = s.picking && (s.cameraMode === 'district' || s.cameraMode === 'corridor') ? s.cameraMode : null
-        if (mode !== navMode) {
+        const aim = side !== 'left' && !!s.developmentDraft && !s.developmentPlaced
+        if (mode !== navMode || aim !== aiming) {
           navMode = mode
+          aiming = aim
           nav.setMode(mode)
-          if (hover) applyHover(null)
+          applyHover(null)
           if (last && !raf) raf = requestAnimationFrame(refreshHover)
         }
         nav.setSelected(selectedGround(sel, nav, buildings))
-        marks(ws, overlay, clock.t)
+        marks(ws, overlay, developments, clock.t, runIdRef.current, side)
       }
       syncRef.current = sync
       sync()
       ws.simT = clock.t
       const offFrame = clock.onFrame((t) => {
         ws.simT = t
-        marks(ws, overlay, t)
+        marks(ws, overlay, developments, t, runIdRef.current, side)
       })
       const unsub = useStore.subscribe(sync)
 
@@ -274,6 +314,7 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
         offFrame()
         unregister()
         nav.dispose()
+        developments.dispose()
         overlay.dispose()
         map.dispose()
         syncRef.current = () => {}
@@ -289,19 +330,27 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
     <>
       <WorldCanvas packId={pack.pack_id} onReady={onReady} onError={onWorldError} quality={side === 'solo' ? 'high' : 'balanced'} className={`world world-${side} bworld`} />
       <div ref={labelsRef} className="nav-labels" aria-hidden="true" />
+      <DevelopmentMarkers runId={runId} side={side} />
     </>
   )
 }
 
-/** Active closures, ghost proposal and focus corridor for sim time `t`, from the store. */
-function marks(ws: WorldScene, overlay: Overlay, t: number): void {
+/** Active closures, ghost proposal, focus corridor, hazards, developments and scenario demolitions for sim time `t`, from the store. */
+function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverlay, t: number, runId: string | null, side: string): void {
   const s = useStore.getState()
-  const scenario = s.scenarios.find((x) => x.scenario_id === s.scenarioId)
+  const bundle = runId ? s.replays[runId]?.bundle ?? null : null
+  const scenario = scenarioForView(s.scenarios, s.scenarioId, bundle, side)
+  ws.city.hideBuildings(scenario?.demolished ?? [])
   const closed: string[] = []
   for (const r of scenario?.restrictions ?? []) if (t >= r.start_s && t <= r.end_s) closed.push(...r.edge_ids)
   const focusId = s.selection?.kind === 'restriction' ? s.selection.id : null
   const focus = focusId ? scenario?.restrictions.find((r) => r.restriction_id === focusId)?.edge_ids ?? [] : []
-  overlay.set({ closed, ghost: s.ghost?.edges ?? [], focus, ghostStops: s.ghost?.stops ?? [] })
+  const draft = side !== 'left' ? s.developmentDraft : null
+  const access = draft && s.developmentPlaced ? s.developmentPreview?.development.access.map((a) => a.edge_id) ?? [] : []
+  overlay.set({ closed, ghost: side === 'left' ? [] : [...(s.ghost?.edges ?? []), ...access], focus, ghostStops: side === 'left' ? [] : s.ghost?.stops ?? [] })
+  developments.set({ developments: scenario?.developments ?? [], draft, placed: s.developmentPlaced,
+    ghostPosition: draft ? s.developmentPlaced ? draft.position : s.developmentHover : null, invalidDraft: !!s.developmentError && s.developmentPlaced,
+    focusedId: s.selection?.kind === 'development' ? s.selection.id : null, zones: s.pack?.zones ?? [], t })
   const hazards = [...(scenario?.hazards ?? [])]
   const ghost = s.ghost?.hazard
   if (ghost && !hazards.some((h) => h.track_id === ghost.track_id)) hazards.push(ghost)

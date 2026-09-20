@@ -1,12 +1,16 @@
 import { create } from 'zustand'
 import { api } from './api'
+import { DEFAULT_HORIZON_S, developmentError as validateDevelopment, developmentKind, developmentPreset, latestDevelopment, validDevelopmentGeometry } from './development'
 import { buildIndex, type ReplayIndex } from './replay'
 import { clock } from './world/playback'
-import { cityPose, type CameraMode } from './world/camera'
-import { cameraTo, watchCameraMode } from './world/registry'
+import { cityPose, currentPose, developmentPose, type CameraMode } from './world/camera'
+import { cameraTo, leadMap, watchCameraMode } from './world/registry'
 import type {
+  BuildingKind,
   CityPack,
   Corridor,
+  DevelopmentPreview,
+  DevelopmentSpec,
   HazardTrack,
   Health,
   InterventionProposal,
@@ -24,10 +28,13 @@ export type Selection =
   | { kind: 'car'; id: string }
   | { kind: 'stop'; id: string }
   | { kind: 'restriction'; id: string }
+  /** A saved development of the active scenario. */
+  | { kind: 'development'; id: string }
+  /** A base-city building or landmark picked on the map (ids are the pack's OSM way ids); facts come from `SyncMap.buildingFacts`. */
   | { kind: 'building'; id: string }
   | null
 
-export type ToolId = 'area' | 'road' | 'intersection' | 'stop' | 'route' | 'population' | 'event' | 'closure' | 'weather'
+export type ToolId = 'area' | 'road' | 'intersection' | 'stop' | 'route' | 'population' | 'event' | 'development' | 'closure' | 'weather'
 
 export type LensTab = 'people' | 'agents' | 'transport' | 'diagnostics'
 
@@ -64,6 +71,15 @@ type State = {
   // shell
   tool: ToolId | null
   ghost: Ghost | null
+  developmentDraft: DevelopmentSpec | null
+  developmentPlaced: boolean
+  /** Cursor position over the map while a draft is still being aimed; the ghost outline follows it. */
+  developmentHover: [number, number] | null
+  developmentPreview: DevelopmentPreview | null
+  developmentError: string | null
+  developmentPreviewing: boolean
+  /** True while the base city crowd is being compiled because the tool was opened with no scenario yet. */
+  developmentPreparing: boolean
   lens: LensTab | null
   developer: boolean
   /** Last camera framing asked for through `cameraTo`; 'agent' keeps the camera gliding after the selected entity. */
@@ -74,7 +90,7 @@ type State = {
 
   boot: (packId?: string) => Promise<void>
   selectPack: (packId: string) => Promise<void>
-  selectScenario: (sid: string) => Promise<void>
+  selectScenario: (sid: string, options?: { keepDevelopment?: boolean }) => Promise<void>
   createFlagship: (cohort: number, seed: number) => Promise<void>
   refreshRuns: () => Promise<void>
   submitRun: (planId: string, seed?: number) => Promise<void>
@@ -85,10 +101,29 @@ type State = {
   setError: (e: string | null) => void
   setTool: (t: ToolId | null) => void
   setGhost: (g: Ghost | null) => void
+  setDevelopmentDraft: (spec: DevelopmentSpec) => void
+  /** Swap the building kind; keeps the placement (and re-checks access) if already placed. */
+  chooseDevelopmentKind: (kind: BuildingKind) => void
+  setDevelopmentHover: (position: [number, number] | null) => void
+  /** Commit the aimed footprint; access is checked immediately so the panel can show Confirm without a separate step. */
+  placeDevelopment: (position: [number, number]) => void
+  /** Create the default base crowd for the current city when no scenario exists, keeping the open development tool. */
+  ensureBaseScenario: () => Promise<string | null>
+  previewDevelopment: () => Promise<void>
+  applyDevelopment: () => Promise<ScenarioSpec | null>
+  /** In place: drop a saved development and exactly its trips from the current scenario, then re-run it. */
+  removeDevelopment: (developmentId: string) => Promise<boolean>
+  /** In place, visual only: hide a base-city building/landmark in the current scenario. */
+  demolishBuilding: (buildingId: string) => Promise<boolean>
+  deleting: string | null
   setLens: (l: LensTab | null) => void
   setDeveloper: (d: boolean) => void
   setCameraMode: (m: CameraMode) => void
   setPicking: (p: boolean) => void
+  /** Fly the lead camera to a saved development (default: the newest in the active scenario). Returns false if none. */
+  focusDevelopment: (id?: string) => boolean
+  /** Set when a development branch loads before any map is registered; the lead renderer consumes it on ready. */
+  pendingDevelopmentFocus: string | null
   applyGhost: () => Promise<void>
 }
 
@@ -99,6 +134,35 @@ let scenarioSelectionRequest = 0
 async function loadPack(packId: string): Promise<{ pack: CityPack; roads: GeoJSON.FeatureCollection; corridors: Record<string, Corridor> }> {
   const [pack, roads, corridors] = await Promise.all([api.pack(packId), api.roads(packId), api.corridors(packId).catch(() => ({}))])
   return { pack, roads, corridors }
+}
+
+const EMPTY_DEVELOPMENT = {
+  developmentDraft: null, developmentPlaced: false, developmentHover: null, developmentPreview: null,
+  developmentError: null, developmentPreviewing: false,
+}
+
+let basePromise: Promise<string | null> | null = null
+
+/**
+ * Deleting a building edits the current scenario in place: the backend rewrites it under the same id and stops
+ * listing runs of the superseded content, so re-selecting the scenario picks up the new state (and auto-runs it).
+ */
+async function editInPlace(target: string, request: (sid: string) => Promise<ScenarioSpec>): Promise<boolean> {
+  const { scenarioId } = useStore.getState()
+  if (!scenarioId || useStore.getState().deleting) return false
+  useStore.setState({ deleting: target, error: null })
+  try {
+    const updated = await request(scenarioId)
+    const scenarios = useStore.getState().scenarios.map((s) => (s.scenario_id === updated.scenario_id ? updated : s))
+    useStore.setState({ scenarios, selection: null })
+    if (useStore.getState().scenarioId === scenarioId) await useStore.getState().selectScenario(scenarioId)
+    return true
+  } catch (e) {
+    useStore.setState({ error: String(e) })
+    return false
+  } finally {
+    useStore.setState({ deleting: null })
+  }
 }
 
 export const useStore = create<State>((set, get) => ({
@@ -123,6 +187,9 @@ export const useStore = create<State>((set, get) => ({
   error: null,
   tool: null,
   ghost: null,
+  ...EMPTY_DEVELOPMENT,
+  developmentPreparing: false,
+  pendingDevelopmentFocus: null,
   lens: null,
   developer: false,
   cameraMode: 'city',
@@ -136,9 +203,10 @@ export const useStore = create<State>((set, get) => ({
       if (request !== packSelectionRequest) return
       set({ health, scenarios, packs })
       const requested = packs.find((p) => p.pack_id === requestedPackId)
+      // Latest scenario of the chosen city, so a freshly confirmed branch (e.g. a development) survives a reload.
       const preferred = requested
         ? scenarios.filter((s) => s.pack_id === requested.pack_id).at(-1)
-        : scenarios.find((s) => s.pack_id === 'toronto') ?? scenarios.at(-1)
+        : scenarios.filter((s) => s.pack_id === 'toronto').at(-1) ?? scenarios.at(-1)
       const packId = requested?.pack_id ?? preferred?.pack_id ?? packs.find((p) => p.pack_id === 'toronto')?.pack_id ?? packs[0]?.pack_id ?? 'toronto'
       const loaded = await loadPack(packId)
       if (request !== packSelectionRequest) return
@@ -160,6 +228,7 @@ export const useStore = create<State>((set, get) => ({
       set({
         ...loaded, scenarioId: null, travelers: {}, plans: [], runs: [], primaryRunId: null,
         loadingReplay: null, selection: null, ghost: null, investigation: null, tool: null, cameraMode: 'city', picking: false, error: null,
+        pendingDevelopmentFocus: null, ...EMPTY_DEVELOPMENT,
       })
       cameraTo(cityPose(loaded.pack.pack_id, loaded.pack.center), 'city')
       const own = get().scenarios.filter((s) => s.pack_id === packId)
@@ -169,8 +238,9 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  async selectScenario(sid) {
+  async selectScenario(sid, options) {
     const request = ++scenarioSelectionRequest
+    const changed = get().scenarioId !== sid // re-selecting after an in-place edit must not move the camera
     const sc = get().scenarios.find((s) => s.scenario_id === sid)
     if (sc && sc.pack_id !== get().pack?.pack_id) {
       const loaded = await loadPack(sc.pack_id)
@@ -181,7 +251,8 @@ export const useStore = create<State>((set, get) => ({
     clock.pause()
     clock.seek(0)
     if (sc) clock.setHorizon(sc.constraints.horizon_s)
-    set({ scenarioId: sid, plans: [], runs: [], travelers: {}, primaryRunId: null, loadingReplay: null, selection: null, ghost: null })
+    set({ scenarioId: sid, plans: [], runs: [], travelers: {}, primaryRunId: null, loadingReplay: null, selection: null, ghost: null, pendingDevelopmentFocus: null,
+      ...(options?.keepDevelopment ? {} : { tool: null, ...EMPTY_DEVELOPMENT }) })
     const [plans, runs, demand] = await Promise.all([api.plans(sid), api.runs(sid), api.demand(sid).catch(() => null)])
     if (request !== scenarioSelectionRequest || get().scenarioId !== sid) return
     set({ plans, runs, travelers: Object.fromEntries((demand?.travelers ?? []).map((t) => [t.person_id, t])) })
@@ -192,6 +263,24 @@ export const useStore = create<State>((set, get) => ({
       const initial = valid.find((p) => p.plan.family === 'none') ?? valid[0]
       if (initial) await get().submitRun(initial.plan.plan_id)
     }
+    if (changed && request === scenarioSelectionRequest && get().scenarioId === sid && latestDevelopment(sc)) get().focusDevelopment()
+  },
+
+  focusDevelopment(id) {
+    const { scenarios, scenarioId } = get()
+    const scenario = scenarios.find((s) => s.scenario_id === scenarioId)
+    const development = id ? scenario?.developments?.find((d) => d.development_id === id) ?? null : latestDevelopment(scenario)
+    if (!development || !validDevelopmentGeometry(development.spec)) return false
+    set({ selection: { kind: 'development', id: development.development_id }, tool: 'development', ghost: null, ...EMPTY_DEVELOPMENT })
+    const lead = leadMap()
+    if (!lead) {
+      set({ pendingDevelopmentFocus: development.development_id })
+      return false
+    }
+    const { spec } = development
+    cameraTo(developmentPose(spec.position, spec.footprint_m, spec.height_m, currentPose(lead)), 'development')
+    set({ cameraMode: 'development', pendingDevelopmentFocus: null })
+    return true
   },
 
   async createFlagship(cohort, seed) {
@@ -257,12 +346,118 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  select: (selection) => set({ selection }),
+  select: (selection) => set({ selection, ...(selection?.kind === 'development' ? EMPTY_DEVELOPMENT : {}) }),
   setInvestigation: (investigation) => set({ investigation }),
   setError: (error) => set({ error }),
-  // picking a different tool ends an Area select pick; closing the panel does not (the pick runs with it closed)
-  setTool: (tool) => set({ tool, ghost: tool ? get().ghost : null, picking: (tool === null || tool === 'area') && get().picking }),
+  // Picking a different tool ends an Area select pick (closing the panel does not: the pick runs with it closed) and
+  // drops any development draft; opening the development tool starts a fresh draft for the current city.
+  setTool: (tool) => {
+    const { pack, scenarios, scenarioId } = get()
+    const scenario = scenarios.find((s) => s.scenario_id === scenarioId)
+    set({ tool, ghost: tool ? get().ghost : null, ...EMPTY_DEVELOPMENT,
+      picking: (tool === null || tool === 'area') && get().picking,
+      selection: tool === 'development' ? null : get().selection,
+      developmentDraft: tool === 'development' && pack ? developmentPreset(pack, scenario?.constraints.horizon_s ?? DEFAULT_HORIZON_S) : null,
+    })
+    // No "create a base scenario" step: the first building simply lands on a default crowd compiled in the background.
+    if (tool === 'development' && pack && !scenario) void get().ensureBaseScenario()
+  },
   setGhost: (ghost) => set({ ghost }),
+  setDevelopmentDraft: (developmentDraft) => set({ developmentDraft, developmentPreview: null, developmentError: null, developmentPreviewing: false }),
+  chooseDevelopmentKind: (kind) => {
+    const { pack, scenarios, scenarioId, developmentDraft, developmentPlaced, tool } = get()
+    if (tool !== 'development' || !pack) return
+    const scenario = scenarios.find((s) => s.scenario_id === scenarioId)
+    const ordinal = (scenario?.developments?.filter((d) => developmentKind(d.spec) === kind).length ?? 0) + 1
+    const preset = developmentPreset(pack, scenario?.constraints.horizon_s ?? DEFAULT_HORIZON_S, kind, ordinal)
+    set({ developmentDraft: { ...preset, position: developmentDraft?.position ?? preset.position }, developmentPreview: null, developmentError: null, developmentPreviewing: false })
+    if (developmentPlaced) void get().previewDevelopment()
+  },
+  setDevelopmentHover: (developmentHover) => {
+    const { developmentDraft, developmentPlaced } = get()
+    if (!developmentDraft || developmentPlaced) return
+    const before = get().developmentHover
+    if (before === developmentHover || (before && developmentHover && before[0] === developmentHover[0] && before[1] === developmentHover[1])) return
+    set({ developmentHover })
+  },
+  placeDevelopment: (position) => {
+    const { developmentDraft, tool } = get()
+    if (tool !== 'development' || !developmentDraft) return
+    set({ developmentDraft: { ...developmentDraft, position }, developmentPlaced: true, developmentHover: null, developmentPreview: null, developmentError: null, developmentPreviewing: false })
+    void get().previewDevelopment()
+  },
+  async ensureBaseScenario() {
+    const { scenarioId, pack } = get()
+    if (scenarioId) return scenarioId
+    if (!pack) return null
+    if (!basePromise) {
+      basePromise = (async () => {
+        set({ developmentPreparing: true })
+        try {
+          const created = await api.createFlagship({ pack_id: pack.pack_id, seed: 7, cohort_size: 240, horizon_s: DEFAULT_HORIZON_S })
+          set({ scenarios: await api.scenarios() })
+          if (get().scenarioId) return get().scenarioId
+          await get().selectScenario(created.scenario_id, { keepDevelopment: true })
+          return created.scenario_id
+        } catch (e) {
+          set({ developmentError: `Could not prepare the base city: ${String(e)}` })
+          return null
+        } finally {
+          set({ developmentPreparing: false })
+          basePromise = null
+        }
+      })()
+    }
+    return basePromise
+  },
+  async previewDevelopment() {
+    if (!get().scenarioId) await get().ensureBaseScenario()
+    const { scenarioId, developmentDraft, developmentPlaced, scenarios } = get()
+    const scenario = scenarios.find((s) => s.scenario_id === scenarioId)
+    if (!scenarioId || !scenario || !developmentDraft || !developmentPlaced) return
+    const problem = validateDevelopment(developmentDraft, scenario.constraints.horizon_s)
+    if (problem) { set({ developmentError: problem }); return }
+    set({ developmentPreviewing: true, developmentError: null, developmentPreview: null })
+    try {
+      const preview = await api.previewDevelopment(scenarioId, developmentDraft)
+      if (get().scenarioId === scenarioId && get().developmentDraft === developmentDraft) set({ developmentPreview: preview, developmentDraft: preview.development.spec, developmentPreviewing: false })
+    } catch (e) {
+      if (get().scenarioId === scenarioId && get().developmentDraft === developmentDraft) set({ developmentError: String(e) })
+    } finally {
+      if (get().developmentDraft === developmentDraft) set({ developmentPreviewing: false })
+    }
+  },
+  async applyDevelopment() {
+    const { scenarioId, developmentPreview, developmentDraft } = get()
+    if (!scenarioId || !developmentPreview || !developmentDraft || developmentPreview.base_scenario_id !== scenarioId) return null
+    if (JSON.stringify(developmentPreview.development.spec) !== JSON.stringify(developmentDraft)) {
+      set({ developmentError: 'Assumptions changed. Preview again before confirming.' })
+      return null
+    }
+    set({ building: 'Adding development · preserving parent trips…', developmentError: null })
+    try {
+      const child = await api.applyDevelopment(scenarioId, developmentPreview)
+      const scenarios = await api.scenarios()
+      set({ scenarios })
+      if (get().scenarioId === scenarioId) {
+        set({ tool: null, ...EMPTY_DEVELOPMENT })
+        await get().selectScenario(child.scenario_id)
+      }
+      return child
+    } catch (e) {
+      set({ developmentError: String(e), error: String(e) })
+      return null
+    } finally {
+      set({ building: null })
+    }
+  },
+  deleting: null,
+  async removeDevelopment(developmentId) {
+    return editInPlace(developmentId, (sid) => api.removeDevelopment(sid, developmentId))
+  },
+  async demolishBuilding(buildingId) {
+    return editInPlace(buildingId, (sid) => api.demolishBuilding(sid, buildingId))
+  },
   setLens: (lens) => set({ lens }),
   setDeveloper: (developer) => set({ developer }),
   setCameraMode: (cameraMode) => set({ cameraMode }),

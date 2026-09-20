@@ -3,7 +3,9 @@ import { chromium, expect } from '@playwright/test'
 
 const base = process.argv[2] ?? 'http://127.0.0.1:5173'
 const scenarios = await (await fetch(`${base}/api/scenarios`)).json()
-const scenario = scenarios.find((s) => s.pack_id === 'toronto') ?? scenarios.at(-1)
+// The fixture run must belong to the scenario the app boots into: the latest Toronto scenario (store.boot), since
+// refreshRuns only opens runs of the current scenario.
+const scenario = scenarios.filter((s) => s.pack_id === 'toronto').at(-1) ?? scenarios.at(-1)
 assert.ok(scenario, 'Browser checks need a city pack and scenario; all run data is mocked')
 const run = {
   run_id: 'playback-fixture', scenario_id: scenario.scenario_id, plan_id: 'baseline', seed: 1,
@@ -40,7 +42,9 @@ try {
         }
       } else {
         const resource = pathname.split('/').at(-1)
-        const resources = { tracks, events: [], occupancy: {}, stop_queue: {}, compile: null }
+        // every artifact `api.bundle` fetches: the run's scenario/demand/cohort snapshots feed the cohort counters
+        const demand = { demand_id: 'playback-fixture', seed: 1, travelers: [], synthetic: true, generation_method: 'fixture' }
+        const resources = { tracks, events: [], occupancy: {}, stop_queue: {}, compile: null, scenario, demand, cohort: null }
         json = Object.hasOwn(resources, resource) ? resources[resource] : run
       }
       await route.fulfill({ json })

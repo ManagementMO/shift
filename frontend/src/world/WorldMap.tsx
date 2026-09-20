@@ -4,6 +4,8 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { AmbientLight, DirectionalLight, LightingEffect } from '@deck.gl/core'
 import { useStore } from '../store'
+import { scenarioForView } from '../development'
+import DevelopmentMarkers from './DevelopmentMarkers'
 import { clock } from './playback'
 import { buildWorldLayers, SLOT_NAMES, slotAnchorId } from './layers'
 import { cityPose, type CameraPose } from './camera'
@@ -174,6 +176,10 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
 
       map.addControl(overlay as unknown as IControl)
       unregister = registerMap(side, map)
+      if (side !== 'left') {
+        const pending = useStore.getState().pendingDevelopmentFocus
+        if (pending) useStore.getState().focusDevelopment(pending)
+      }
 
       let dirty = true
       const redraw = () => {
@@ -186,20 +192,33 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
         renderStats.layerRebuilds++
         const s = useStore.getState()
         const rid = runIdRef.current
-        const focusEdges = s.selection?.kind === 'restriction' ? s.scenarios.find((x) => x.scenario_id === s.scenarioId)?.restrictions.find((r) => r.restriction_id === s.selection?.id)?.edge_ids : undefined
+        const replay = rid ? s.replays[rid] ?? null : null
+        const scenario = scenarioForView(s.scenarios, s.scenarioId, replay?.bundle ?? null, side)
+        const focusEdges = s.selection?.kind === 'restriction' ? scenario?.restrictions.find((r) => r.restriction_id === s.selection?.id)?.edge_ids : undefined
+        const ghostAt = s.developmentPlaced ? s.developmentDraft?.position : s.developmentHover
+        const draft = side !== 'left' && s.developmentDraft && ghostAt ? { ...s.developmentDraft, position: ghostAt } : null
+        const access = draft && s.developmentPlaced ? s.developmentPreview?.development.access.map((a) => a.edge_id) ?? [] : []
+        map.getCanvas().style.cursor = s.developmentDraft && side !== 'left' ? 'crosshair' : 'default'
         overlay.setProps({
           layers: buildWorldLayers({
             pack: s.pack,
             roads: s.roads,
-            scenario: s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null,
-            replay: rid ? s.replays[rid] ?? null : null,
+            scenario,
+            replay,
             t: clock.t,
             zoom: map.getZoom(),
             selection: s.selection,
-            select: s.select,
-            ghostEdges: s.ghost?.edges,
-            ghostStops: s.ghost?.stops,
-            ghostHazard: s.ghost?.hazard,
+            select: (selection) => {
+              if (s.developmentDraft && side !== 'left') return
+              if (selection?.kind === 'development') s.setTool('development')
+              s.select(selection)
+            },
+            developmentDraft: draft,
+            developmentPlaced: s.developmentPlaced,
+            invalidDevelopment: !!s.developmentError && s.developmentPlaced,
+            ghostEdges: side === 'left' ? [] : [...(s.ghost?.edges ?? []), ...access],
+            ghostStops: side === 'left' ? [] : s.ghost?.stops,
+            ghostHazard: side === 'left' ? null : s.ghost?.hazard,
             focusCorridorEdges: focusEdges,
             dimOthers: s.selection?.kind === 'person',
             side: side === 'solo' ? undefined : side,
@@ -222,6 +241,24 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
       map.on('zoom', redraw as (e: never) => void)
       map.on('style.load', redraw as (e: never) => void)
       map.getCanvas().style.cursor = 'default'
+      m.on('click', (event) => {
+        const state = useStore.getState()
+        if (state.developmentDraft && side !== 'left') state.placeDevelopment([event.lngLat.lng, event.lngLat.lat])
+      })
+      // The ghost footprint follows the cursor until it is placed (throttled to one store update per frame).
+      let hoverRaf = 0
+      let hoverAt: [number, number] | null = null
+      m.on('mousemove', (event) => {
+        const state = useStore.getState()
+        if (!state.developmentDraft || state.developmentPlaced || side === 'left') return
+        hoverAt = [event.lngLat.lng, event.lngLat.lat]
+        if (hoverRaf) return
+        hoverRaf = requestAnimationFrame(() => {
+          hoverRaf = 0
+          useStore.getState().setDevelopmentHover(hoverAt)
+        })
+      })
+      m.on('mouseout', () => useStore.getState().setDevelopmentHover(null))
     }
     void init().catch(() => {
       if (!disposed) useStore.getState().setError('Mapbox could not load. Check the map token and network connection, then reload.')
@@ -239,6 +276,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
 
   return (
     <div ref={containerRef} className={`world world-${side}`}>
+      <DevelopmentMarkers runId={runId} side={side} />
       {!MAPBOX_TOKEN && (
         <div className="map-notice glass" role="status">
           <b>Connect Mapbox to load the 3D city</b>

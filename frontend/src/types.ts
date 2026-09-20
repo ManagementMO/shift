@@ -4,6 +4,7 @@ export type Health = {
   ok: boolean
   schema_version: string
   sumo: string
+  storage?: { backend: string; configured: boolean; available: boolean; message?: string }
   providers: {
     llm: { provider: string; model: string; available: boolean; sponsor: boolean }
     evidence: { provider: string; available: boolean; sponsor: boolean }
@@ -57,6 +58,60 @@ export type Traveler = {
   depart_s: number
   has_car: boolean
   walk_limit_m: number
+  development_id?: string | null
+  trip_direction?: 'outbound' | 'inbound' | null
+}
+
+export type DevelopmentUse = 'residential' | 'office' | 'school' | 'park'
+
+/** The four things a user can drop on the map. Each maps to a declared, fixed set of travel assumptions. */
+export type BuildingKind = 'park' | 'townhouse' | 'apartment' | 'skyscraper'
+
+export type DevelopmentWave = {
+  start_s: number
+  end_s: number
+  profile: 'uniform' | 'triangular'
+}
+
+export type DevelopmentSpec = {
+  name: string
+  land_use: DevelopmentUse
+  position: [number, number]
+  footprint_m: [number, number]
+  height_m: number
+  capacity: number
+  people_per_unit: number
+  trip_rate: number
+  car_share: number
+  walk_limit_m: number
+  zone_shares: Record<string, number>
+  first_wave: DevelopmentWave
+  return_wave: DevelopmentWave | null
+  seed: number
+}
+
+export type Development = {
+  development_id: string
+  spec: DevelopmentSpec
+  access: {
+    mode: 'passenger' | 'pedestrian'
+    edge_id: string
+    distance_m: number
+    zone_edges: Record<string, string[]>
+  }[]
+}
+
+export type DevelopmentPreview = {
+  preview_id: string
+  base_scenario_id: string
+  development: Development
+  participants: number
+  incumbent_trips: number
+  added_trips: number
+  inbound_trips: number
+  outbound_trips: number
+  car_trips: number
+  warnings: string[]
 }
 
 export type DemandSet = {
@@ -99,6 +154,9 @@ export type ScenarioSpec = {
   evidence_hash: string | null
   restrictions: Restriction[]
   hazards: HazardTrack[]
+  developments?: Development[]
+  /** Base-city buildings (OSM way / landmark ids) hidden in this scenario. Visual only; not part of run identity. */
+  demolished?: string[]
   constraints: {
     fleet: FleetVehicle[]
     horizon_s: number
@@ -202,8 +260,19 @@ export type CompileInfo = {
   }[]
 }
 
+export type CohortRecord = {
+  cohort: string[]
+  desired_depart: Record<string, number>
+  arrived: Record<string, number>
+  final_state?: Record<string, string | null>
+  waiting_seconds?: Record<string, number>
+}
+
 export type RunBundle = {
   run: SimulationRun
+  demand?: DemandSet
+  scenario?: ScenarioSpec
+  cohort?: CohortRecord
   tracks: Record<string, EntityTrack>
   events: PersonEvent[]
   occupancy: Record<string, [number, number][]>

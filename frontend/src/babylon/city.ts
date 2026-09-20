@@ -106,10 +106,33 @@ export interface CityMeshes {
   stops: Mesh
   shadowCasters: Mesh[]
   treePositions: TreePlacement[]
+  /** Shared textured materials so scenario overlays (saved developments) can look like the surrounding city. */
   materials: CityMaterials
+  foliage: StandardMaterial
   buildingRanges: Map<string, BuildingRange[]>
   setBuildingsHidden(keys: Iterable<string>, hidden: boolean): void
+  /**
+   * Scenario-local demolitions: hide exactly these base buildings / landmarks (ids as `BuildingIndex` reports them —
+   * OSM `source_id`, massing id or landmark id) and restore everything else.
+   */
+  hideBuildings(ids: Iterable<string>): void
+  isHidden(id: string): boolean
   dispose(): void
+}
+
+/** One building's architecture as per-texture batches, so a scenario overlay (a saved development) can be drawn exactly like the city. */
+export function architectureBatches(b: WorldBuilding, detailed = true): Map<TextureKind, Batch> {
+  const kinds = new Map<TextureKind, Batch>()
+  const batch = (kind: TextureKind): Batch => {
+    let existing = kinds.get(kind)
+    if (!existing) kinds.set(kind, (existing = new Batch(TEXTURE_RECIPES[kind].metres)))
+    return existing
+  }
+  addArchitecture({
+    facade: batch(facadeFor({ id: b.source_id ?? b.id, cat: b.cat, h: b.source_height ?? b.h })), roof: batch('roof'),
+    stone: batch('concrete'), glass: batch('glass'), metal: batch('industrial'),
+  }, b, buildingColor(b), detailed)
+  return kinds
 }
 
 export function meshFromBatch(name: string, batch: Batch, scene: Scene, material: Material, updatable = false): Mesh {
@@ -366,11 +389,30 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     for (const [suffix, batch, mat] of [['solid', lm, landmarkMat], ['glass', landmarkGlass, materials.get('glass')]] as const) {
       if (batch.isEmpty()) continue
       const mesh = meshFromBatch(`landmark-${l.kind}-${suffix}`, batch, scene, mat)
-      mesh.metadata = { landmarkKind: l.kind }
+      mesh.metadata = { landmarkKind: l.kind, landmarkId: l.id }
       mesh.receiveShadows = true
       chunks.push(mesh)
       casters.push(mesh)
     }
+  }
+
+  // --- demolitions: a scenario's demolished ids map onto the range keys above (or onto a landmark's meshes)
+  const landmarkById = new Map(world.landmarks.map((l) => [l.id, l]))
+  const keysFor = (id: string): string[] => [`osm:${id}`, massingKey(id)].filter((k) => buildingRanges.has(k))
+  const demolished = new Set<string>()
+  const hideBuildings = (ids: Iterable<string>): void => {
+    const next = new Set(ids)
+    if (next.size === demolished.size && [...next].every((id) => demolished.has(id))) return
+    for (const id of new Set([...demolished, ...next])) {
+      const show = !next.has(id)
+      setBuildingsHidden(keysFor(id), !show)
+      const landmark = landmarkById.get(id)
+      if (!landmark) continue
+      for (const mesh of chunks) if (mesh.metadata?.landmarkId === id && !(show && mesh.metadata?.modelLoaded)) mesh.setEnabled(show)
+      scene.getTransformNodeByName(`model-${landmark.kind}`)?.setEnabled(show)
+    }
+    demolished.clear()
+    for (const id of next) demolished.add(id)
   }
 
   // --- stops
@@ -386,8 +428,11 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     shadowCasters: casters,
     treePositions,
     materials,
+    foliage: foliageMat,
     buildingRanges,
     setBuildingsHidden,
+    hideBuildings,
+    isHidden: (id) => demolished.has(id),
     dispose() {
       ground.dispose()
       for (const c of chunks) c.dispose()

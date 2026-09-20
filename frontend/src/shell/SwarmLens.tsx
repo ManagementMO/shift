@@ -6,6 +6,7 @@ import { cohortSummaryAt, seriesAt, STATE_COLORS, type PersonState } from '../re
 import type { Investigation, Renderer } from '../types'
 import { fmt } from '../util'
 import Inspector from '../components/Inspector'
+import BranchOutcomes from './BranchOutcomes'
 
 const TABS: { id: LensTab; label: string }[] = [
   { id: 'people', label: 'People' },
@@ -16,7 +17,7 @@ const TABS: { id: LensTab; label: string }[] = [
 
 const ORDER: PersonState[] = ['not_departed', 'walking', 'waiting', 'riding', 'driving', 'arrived', 'unroutable']
 const LABEL: Record<PersonState, string> = {
-  not_departed: 'inside venue',
+  not_departed: 'not departed',
   walking: 'walking',
   waiting: 'waiting',
   riding: 'riding',
@@ -63,7 +64,7 @@ function PeopleLens() {
   return (
     <div className="lens-body">
       <div className="small dim">
-        {m?.cohort_size ?? total} synthetic travelers · states read from recorded journey events at +{fmt(t)}
+        {m?.cohort_size ?? total} synthetic one-way trips · states read from recorded journeys at +{fmt(t)}; return legs count separately
       </div>
       <div className="bars">
         {ORDER.map((k) => (
@@ -92,7 +93,7 @@ function PeopleLens() {
           <b>{m.unroutable}</b>
         </div>
       )}
-      {selection ? <Inspector /> : <div className="small dim">Click a traveler on the map for its recorded journey trace.</div>}
+      {selection && selection.kind !== 'development' ? <Inspector /> : <div className="small dim">Click a traveler on the map for its recorded journey trace.</div>}
     </div>
   )
 }
@@ -179,28 +180,28 @@ function TransportLens() {
   const pack = useStore((s) => s.pack)
   if (!rx || !scenario) return <div className="small dim">Open a completed run.</div>
   const m = rx.bundle.run.metrics
-  const stops = pack?.stops.filter((s) => scenario.constraints.allowed_stop_ids.includes(s.stop_id)) ?? []
+  const usedVehicles = new Set(m?.extra_fleet_ids ?? Object.keys(rx.occupancy))
+  const fleet = (rx.bundle.scenario ?? scenario).constraints.fleet.filter((f) => usedVehicles.has(f.vehicle_id))
+  const stops = pack?.stops.filter((s) => Object.hasOwn(rx.stopQueue, s.stop_id)) ?? []
   return (
     <div className="lens-body">
-      <div className="fleet">
-        {scenario.constraints.fleet.map((f) => {
-          const occ = seriesAt(rx.occupancy[f.vehicle_id], t) ?? 0
-          const peak = m?.max_occupancy[f.vehicle_id] ?? 0
-          return (
-            <button key={f.vehicle_id} className={`fleetcard ${selection?.kind === 'bus' && selection.id === f.vehicle_id ? 'on' : ''}`} onClick={() => select({ kind: 'bus', id: f.vehicle_id })}>
-              <b>{f.vehicle_id.replace('_', ' ')}</b>
-              <span className="track">
-                <i style={{ width: `${(occ / f.capacity) * 100}%` }} />
-              </span>
-              <span className="small dim">
-                {occ}/{f.capacity} aboard · peak {peak}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-      <div className="small">
-        <b>Stops in play</b>
+      <BranchOutcomes />
+      <details className="small">
+        <summary>Shuttles and stop queues · {fleet.length} vehicles, {stops.length} stops</summary>
+        {!fleet.length && <p className="dim">No extra shuttle vehicles were used in this run.</p>}
+        <div className="fleet">
+          {fleet.map((f) => {
+            const occ = seriesAt(rx.occupancy[f.vehicle_id], t) ?? 0
+            const peak = m?.max_occupancy[f.vehicle_id] ?? 0
+            return (
+              <button key={f.vehicle_id} className={`fleetcard ${selection?.kind === 'bus' && selection.id === f.vehicle_id ? 'on' : ''}`} onClick={() => select({ kind: 'bus', id: f.vehicle_id })}>
+                <b>{f.vehicle_id.replace('_', ' ')}</b>
+                <span className="track"><i style={{ width: `${(occ / f.capacity) * 100}%` }} /></span>
+                <span className="small dim">{occ}/{f.capacity} aboard · peak {peak}</span>
+              </button>
+            )
+          })}
+        </div>
         <div className="wrap">
           {stops.map((s) => (
             <button key={s.stop_id} className="tiny" onClick={() => select({ kind: 'stop', id: s.stop_id })}>
@@ -208,7 +209,7 @@ function TransportLens() {
             </button>
           ))}
         </div>
-      </div>
+      </details>
       {selection && (selection.kind === 'bus' || selection.kind === 'stop' || selection.kind === 'restriction') && <Inspector />}
     </div>
   )
@@ -248,6 +249,8 @@ function DiagnosticsLens({ renderer }: { renderer: Renderer }) {
         <b>{health?.schema_version ?? '—'}</b>
         <span>SUMO</span>
         <b>{health?.sumo ?? '—'}</b>
+        <span>persistence</span>
+        <b>{health?.storage ? `${health.storage.backend === 'mongodb' ? 'MongoDB Atlas' : 'local JSON (offline)'} · ${health.storage.available ? 'connected' : 'unavailable'}` : '—'}</b>
         <span>model</span>
         <b>
           {health ? `${health.providers.llm.model} via ${health.providers.llm.provider}${health.providers.llm.sponsor ? '' : ' (local fallback)'}` : '—'}

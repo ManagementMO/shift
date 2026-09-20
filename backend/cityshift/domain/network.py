@@ -135,9 +135,12 @@ def walk_distance_m(pack_id: str, from_edge_id: str, to_edge_id: str) -> float |
     net = load_net(pack_id)
     adj = _walk_graph(pack_id)
     try:
-        src = net.getEdge(from_edge_id).getFromNode().getID()
+        src_edge = net.getEdge(from_edge_id)
+        src = src_edge.getFromNode().getID()
         dst_edge = net.getEdge(to_edge_id)
     except KeyError:
+        return None
+    if not src_edge.allows("pedestrian") or not dst_edge.allows("pedestrian"):
         return None
     key = (pack_id, src)
     if key not in _walk_cache:

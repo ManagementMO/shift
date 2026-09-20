@@ -29,7 +29,7 @@ export default function TopStrip({ onOpenScenarios, onGlobe, active = true, rend
   const [shared, setShared] = useState<{ href: string; label: string } | null>(null)
 
   const st = runStatus(run?.status, run?.progress, loading)
-  const title = scenario ? shortLabel(scenario.label) : 'No scenario'
+  const title = scenario?.parent_scenario_id ? `Branch · ${(scenario.change_set.at(-1) ?? scenario.label).slice(0, 64)}` : scenario ? shortLabel(scenario.label) : 'No scenario'
 
   const share = async () => {
     if (!primaryRunId) return
