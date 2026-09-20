@@ -38,7 +38,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Concrete Consequences", version="0.1.0", lifespan=lifespan)
 app.include_router(live_router)
-app.add_middleware(GZipMiddleware, minimum_size=2048)
+# level 1: the 38 MB Toronto world compresses to 13.6 MB in ~0.2 s; the default level 9 spent ~3 s of CPU per request
+app.add_middleware(GZipMiddleware, minimum_size=2048, compresslevel=1)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

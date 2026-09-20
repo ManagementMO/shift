@@ -27,25 +27,33 @@ export default function WorldCanvas({ packId, onReady, onError, className, fixed
     let cancelled = false
     let ws: WorldScene | null = null
     setState({ phase: 'loading' })
+    // Load phases are recorded as performance marks (`world:*`) so slow arrivals can be read from the profiler.
+    const mark = (name: string) => performance.mark(`world:${name}:${packId}`)
+    mark('fetch')
     loadWorld(packId)
       .then((world: WorldData) => {
         if (cancelled) return
+        mark('fetched')
         setState({ phase: 'building' })
         // let the "building" frame paint before the (synchronous) geometry pass
         requestAnimationFrame(async () => {
           if (cancelled) return
           try {
             const worldScene = new WorldScene(canvas, world, { fixedCamera, quality })
+            mark('built')
             ws = worldScene
             worldScene.setDisplay(useDisplay.getState())
             const offDisplay = useDisplay.subscribe((settings) => worldScene.setDisplay(settings))
             worldScene.scene.onDisposeObservable.addOnce(offDisplay)
             await worldScene.assetsReady
             if (cancelled) return
+            mark('assets')
             await worldScene.scene.whenReadyAsync(true)
             if (cancelled) return
+            mark('shaders')
             await new Promise<void>((resolve) => worldScene.scene.onAfterRenderObservable.addOnce(() => resolve()))
             if (cancelled) return
+            mark('ready')
             setState({ phase: 'ready' })
             onReady?.(worldScene)
           } catch (e) {

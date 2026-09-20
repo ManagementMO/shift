@@ -5,6 +5,7 @@ import type { LiveSession } from '../live/types'
 import { useStore } from '../store'
 import { clock } from '../world/playback'
 import { cityPose } from '../babylon/camera'
+import { loadWorld } from '../babylon/worldData'
 import type { WorldScene } from '../babylon/scene'
 import { destinationPack, type Location } from './flight'
 import type { GlobePhase } from './Globe'
@@ -37,6 +38,9 @@ export default function Experience({ initialCity }: { initialCity: boolean }) {
   }, [])
 
   useEffect(() => {
+    // the 38 MB Toronto world starts downloading and parsing with the globe, so the scene build can begin the moment
+    // the city mounts instead of waiting on the network then
+    void loadWorld('toronto').catch(() => {})
     const preload = window.setTimeout(() => setMounted(true), 1800)
     const pop = () => {
       if (window.location.pathname.replace(/\/+$/, '') === '/world') {

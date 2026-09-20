@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { rememberedSharp, rememberSharp } from './adaptiveQuality'
 
 export interface DisplaySettings {
   shadows: boolean
@@ -13,11 +14,15 @@ export interface DisplaySettings {
 export const useDisplay = create<DisplaySettings & { set: (patch: Partial<DisplaySettings>) => void }>((set) => ({
   shadows: true,
   textures: true,
-  sharp: true,
+  // HD unless this browser has already shown it cannot hold the frame rate (see adaptiveQuality)
+  sharp: rememberedSharp() ?? true,
   projection: 'perspective',
   lighting: 'afternoon',
   swarmScale: 1,
-  set: (patch) => set(patch),
+  set: (patch) => {
+    if (patch.sharp !== undefined) rememberSharp(patch.sharp)
+    set(patch)
+  },
 }))
 
 export function renderScale(dpr: number, sharp: boolean, width = 0, height = 0): number {

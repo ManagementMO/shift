@@ -15,6 +15,8 @@ import DevelopmentMarkers from '../world/DevelopmentMarkers'
 import { clock } from '../world/playback'
 import { cameraTo, registerMap } from '../world/registry'
 import type { BuildingIndex } from './buildingIndex'
+import { useDisplay } from './display'
+import { watchFrameRate } from './adaptiveQuality'
 import { DevelopmentOverlay } from './developments'
 import { guideTrack, HazardEffects } from './hazardEffects'
 import { BabylonSyncMap } from './mapAdapter'
@@ -117,6 +119,11 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         if (!reducedMotion) weather.animate(Math.min(ws.engine.getDeltaTime(), 100) / 1000)
       })
       const unregister = registerMap(side, map)
+      // HD that this machine cannot hold (sub-28 fps once the city is on screen) switches itself off, and stays off here
+      const offFps = side === 'solo' ? watchFrameRate(ws, () => activeRef.current, () => useDisplay.getState().sharp, () => {
+        useDisplay.getState().set({ sharp: false })
+        useStore.getState().setError('HD rendering turned off: this device could not hold the frame rate. Turn it back on in Settings if you prefer.')
+      }) : () => {}
       if (side !== 'left') {
         // a development branch that loaded before any map was registered still gets its framing
         const pending = useStore.getState().pendingDevelopmentFocus
@@ -389,6 +396,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         unsub()
         unsubLive()
         unsubVisuals()
+        offFps()
         offFrame()
         unregister()
         nav.dispose()
