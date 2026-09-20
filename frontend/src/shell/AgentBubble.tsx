@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { DEVELOPMENT_USES, developmentCounts, developmentLabel } from '../development'
-import { live, liveClosuresAt, useLive } from '../live/session'
+import { applyNow, live, liveClosuresAt, useLive } from '../live/session'
 import { useStore } from '../store'
 import { clock } from '../world/playback'
 import { centroidOf, edgePath, fmt } from '../util'
@@ -32,7 +32,7 @@ export default function AgentBubble() {
   const corridors = useStore((s) => s.corridors)
   const cameraMode = useStore((s) => s.cameraMode)
   const t = useStore((s) => s.t)
-  const { primary, draft, busy } = useLive()
+  const { primary, draft, busy, error: liveError } = useLive()
   const session = primary?.state ?? null
   const [pt, setPt] = useState<{ x: number; y: number } | null>(null)
   const [snapshot, setSnapshot] = useState<{ heading: number; speed: number; state: number } | null>(null)
@@ -194,9 +194,8 @@ export default function AgentBubble() {
   }
 
   if (restriction) {
-    // A street closure has no timer: it stays until it is reopened here, as a live command previewed by SUMO first.
+    // A street closure has no timer: it stays until it is reopened here, in one step (SUMO validates, then applies).
     const r = restriction
-    const reopening = draft?.intervention.kind === 'reopen_road' && r.edge_ids.every((e) => (draft.intervention as { edge_ids: string[] }).edge_ids.includes(e))
     const frame = () => {
       const lead = leadMap()
       const pts = edgePath(roads, r.edge_ids)
@@ -215,20 +214,17 @@ export default function AgentBubble() {
         <div className="small dim">
           {r.edge_ids.length} segment{r.edge_ids.length === 1 ? '' : 's'} · cars and buses · since +{fmt(r.start_s)} · closed until you reopen it
         </div>
-        {reopening && !tool ? (
-          <LivePreviewCard applyLabel="Reopen & play" onApplied={() => select(null)} />
-        ) : (
-          <div className="row">
-            <button className="primary" onClick={() => void live.preview({ kind: 'reopen_road', edge_ids: r.edge_ids })} disabled={!!busy || !session}>
-              {busy ? 'Checking…' : 'Reopen street'}
+        {liveError && <div className="small bad">{liveError}</div>}
+        <div className="row">
+          <button className="primary" onClick={() => void applyNow({ kind: 'reopen_road', edge_ids: r.edge_ids }).then((ok) => ok && select(null))} disabled={!!busy || !session}>
+            {busy ? 'Reopening…' : 'Reopen street'}
+          </button>
+          {!locked && (
+            <button className="ghostbtn" onClick={frame}>
+              Frame
             </button>
-            {!locked && (
-              <button className="ghostbtn" onClick={frame}>
-                Frame
-              </button>
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
     )
   }

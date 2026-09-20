@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { environmentAt, live, liveClosuresAt, useLive } from '../live/session'
+import { applyNow, environmentAt, live, liveClosuresAt, useLive } from '../live/session'
 import { useStore, type ToolId } from '../store'
 import { AREAS, startPick } from '../world/areaSelect'
-import { leadMap } from '../world/registry'
+import { corridorPose, currentPose } from '../world/camera'
+import { cameraTo, leadMap } from '../world/registry'
+import { edgePath } from '../util'
 import DevelopmentTool from './DevelopmentTool'
 import LivePreviewCard from './LivePreviewCard'
 
@@ -31,7 +33,7 @@ export default function ToolPanel() {
       {tool === 'development' && <DevelopmentTool />}
       {tool === 'population' && <PopulationTool />}
       {tool === 'temperature' && <TemperatureTool />}
-      {tool !== 'development' && <LivePreviewCard onApplied={() => useStore.getState().setGhost(null)} />}
+      {tool !== 'development' && tool !== 'closure' && <LivePreviewCard onApplied={() => useStore.getState().setGhost(null)} />}
     </aside>
   )
 }
@@ -80,15 +82,17 @@ function AreaTool() {
 }
 
 /**
- * Close a street in the running city. Pick a named street here or click a drivable segment on the map; the
- * closure stays until it is reopened from its card (click the red street). Sidewalks stay open.
+ * Close a street in the running city. Pick a named street here (the camera flies to it) or click a drivable
+ * segment on the map, then Apply: SUMO validates and applies the closure in one step. It stays closed until it is
+ * reopened from the barricaded street's card. Sidewalks stay open.
  */
 function ClosureTool() {
   const corridors = useStore((s) => s.corridors)
+  const roads = useStore((s) => s.roads)
   const ghost = useStore((s) => s.ghost)
   const setGhost = useStore((s) => s.setGhost)
   const select = useStore((s) => s.select)
-  const { busy, draft, primary } = useLive()
+  const { busy, error, primary } = useLive()
   const t = useStore((s) => s.t)
   const picked = ghost?.edges ?? []
   const closures = useMemo(() => liveClosuresAt(primary?.state ?? null, t, (edges) => Object.values(corridors).find((c) => c.edge_ids.every((e) => edges.includes(e)))?.label ?? null), [primary, t, corridors])
@@ -110,11 +114,17 @@ function ClosureTool() {
     }
     live.discard()
     setGhost({ edges: corridors[k].edge_ids, stops: [], hazard: null })
+    const lead = leadMap()
+    const path = edgePath(roads, corridors[k].edge_ids)
+    if (lead && !lead.cameraLocked && path.length >= 2) cameraTo(corridorPose(path, currentPose(lead)), 'corridor')
+  }
+  const apply = async () => {
+    if (await applyNow({ kind: 'close_road', edge_ids: picked, until_s: null })) setGhost(null)
   }
 
   return (
     <div className="tool">
-      <div className="small dim">Choose a street below or click a drivable segment on the map. Closures stay until you reopen them from the red street’s card.</div>
+      <div className="small dim">Choose a street below or click a drivable segment on the map, then apply. Closed streets get barricades; click one to reopen it.</div>
       <div className="list">
         {Object.entries(corridors).map(([k, c]) => (
           <button key={k} className={`listitem ${pickedKey === k ? 'on' : ''}`} onClick={() => pick(k)} aria-pressed={pickedKey === k}>
@@ -126,11 +136,10 @@ function ClosureTool() {
         ))}
       </div>
       <div className="small dim">{picked.length ? `${picked.length} road segment${picked.length === 1 ? '' : 's'} selected` : 'Nothing selected yet'}</div>
-      {!draft && (
-        <button className="primary" disabled={!picked.length || !!busy || !primary} onClick={() => void live.preview({ kind: 'close_road', edge_ids: picked, until_s: null })}>
-          {busy ? 'Checking…' : picked.length ? 'Preview closure' : 'Choose a street'}
-        </button>
-      )}
+      {error && <div className="small bad">{error}</div>}
+      <button className="primary" disabled={!picked.length || !!busy || !primary} onClick={() => void apply()}>
+        {busy ? 'Closing…' : picked.length ? 'Apply closure' : 'Choose a street'}
+      </button>
     </div>
   )
 }

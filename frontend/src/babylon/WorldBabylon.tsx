@@ -216,11 +216,13 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
           return
         }
         const t = targetAt(p.x, p.y)
-        if (s.tool === 'closure' && (!t || t.kind === 'building') && !live.getSnapshot().draft) {
-          // the Road closures tool is open: a click on a drivable street selects it (both directions) for closing
+        if (s.tool === 'closure' && t?.kind !== 'incident') {
+          // the Road closures tool is open: a click on a drivable street selects it (both directions) for closing,
+          // ahead of any car or person standing on it; an existing closure still opens its card below
           const g = map.unprojectGround(p.x, p.y)
           const edges = g ? pickedRoad(streets, g[0], g[1]) : null
           if (edges) {
+            live.discard()
             s.setGhost({ edges, stops: [], hazard: null })
             return
           }
@@ -362,8 +364,8 @@ function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverla
   const view = live.getSnapshot()
   const closures = closuresAt(t)
   const closed = closures.flatMap((r) => r.edge_ids)
-  const focusId = s.selection?.kind === 'restriction' ? s.selection.id : null
-  const focus = focusId ? closures.find((r) => r.restriction_id === focusId)?.edge_ids ?? [] : []
+  // a selected closure is outlined by the navigation overlay; its barricades stay visible, so no focus ribbon here
+  const focus: string[] = []
   const change = view.draft?.intervention
   // a previewed closure / reopening ghosts its streets; otherwise the streets picked for the Road closures tool
   const ghost = change?.kind === 'close_road' || change?.kind === 'reopen_road' ? change.edge_ids : s.ghost?.edges ?? []
