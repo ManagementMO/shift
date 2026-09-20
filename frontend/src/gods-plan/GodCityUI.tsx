@@ -71,7 +71,7 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
     const key = (event: KeyboardEvent) => {
       if (event.repeat || event.ctrlKey || event.metaKey) return
       const inControl = event.target instanceof Element && !!event.target.closest('button,input,textarea,select,[contenteditable="true"]')
-      if (event.code === 'Space' && !inControl && !useGodVisuals.getState().armed) { event.preventDefault(); live.toggle() }
+      if (event.code === 'Space' && !inControl && !useGodVisuals.getState().armed && !useStore.getState().populationActive) { event.preventDefault(); live.toggle() }
       // Escape closes whatever is open even while a tab or tool button keeps focus after being clicked
       if (event.key === 'Escape' && !useGodVisuals.getState().armed) { setPanel('none'); useStore.getState().setTool(null); useStore.getState().select(null) }
     }

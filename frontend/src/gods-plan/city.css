@@ -213,8 +213,11 @@
 .gp-shell .gp-log-copy b { font-size: 14px; font-weight: 600; }
 .gp-shell .gp-log-copy p { margin: 0; font-size: 13px; line-height: 1.5; color: #c6dceb; }
 
-/* AI residents: the recorded-history dock sits bottom-right beside the command bar; resident details use the right panel slot */
-.gp-shell .gp-population-dock { position: absolute; right: 22px; bottom: 22px; z-index: 40; width: min(520px, calc(100vw - 640px)); pointer-events: auto; }
-.gp-shell .gp-population-dock .dock { background: linear-gradient(145deg, #779cbc66, #183e598c); border: 1px solid #dcf1ff70; border-radius: 15px; backdrop-filter: blur(18px) saturate(1.2); box-shadow: inset 0 1px 1px #f0f9ff33, 0 5px 20px #0f2e4826; color: #f5faff; }
+/* Resident playback has its own compact rows above the fixed command bar. */
+.gp-shell .gp-population-dock { position: absolute; right: var(--gp-edge); bottom: calc(var(--gp-edge) + 60px); z-index: 40; width: min(420px, calc(100% - 2 * var(--gp-edge))); pointer-events: auto; }
+.gp-shell .gp-population-dock .population-dock { background: linear-gradient(145deg, #547a96d9, #183e59e6); border: 1px solid #dcf1ff70; border-radius: 15px; backdrop-filter: blur(18px) saturate(1.2); box-shadow: inset 0 1px 1px #f0f9ff33, 0 5px 20px #0f2e4826; color: #f5faff; }
+.gp-shell[data-population-active] .god-chrome__dock { display: none; }
+.gp-shell[data-population-active] { --gp-resident-panel-bottom: calc(var(--gp-edge) + 232px); }
+.gp-shell[data-population-active] .gp-utility-panel { max-height: calc(100dvh - 126px - var(--gp-resident-panel-bottom)); }
 .gp-shell .resident-details { position: absolute; top: 126px; right: 22px; bottom: 96px; margin: 0; width: min(420px, calc(100vw - 132px)); z-index: 56; pointer-events: auto; }
-@media (max-width: 1100px) { .gp-shell .gp-population-dock { width: min(520px, calc(100vw - 44px)); bottom: 84px; } }
+.gp-shell[data-population-active] .resident-details { bottom: var(--gp-resident-panel-bottom); }

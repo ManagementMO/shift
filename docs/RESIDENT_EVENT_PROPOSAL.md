@@ -1,6 +1,8 @@
 # Proposal: residents perceive, communicate, and respond to city events
 
-Status: design proposal; this PR changes documentation only. Rebased onto
+Status: event integration remains a design proposal. This PR also includes a
+resident playback layout fix, described below; it does not implement the proposed
+event or conversation backend. Rebased onto
 `origin/main` at `73e1e45`, which merged
 [PR #7](https://github.com/ManagementMO/shift/pull/7). The proposal now targets
 main and its God's Plan command bar, Events menu, City log and resident panels.
@@ -291,7 +293,7 @@ and inspector at 1280×600, 390×844 and 320×568.
 
 ## Delivery plan and acceptance gates
 
-This proposal PR is documentation only. Implement the following as reviewable
+The event/conversation changes remain proposals. Implement the following as reviewable
 commits in the subsequent integration work; do not call the feature complete
 after only injecting prompt text.
 
@@ -364,4 +366,19 @@ src/gods-plan/CityLog.test.ts` passed **2 tests**. Validated **24** local source
 and documentation links across both proposals; `git diff --check` passed.
 These checks document existing behavior and an integration design; they do not
 prove the proposed native event/command feature. No runtime code, provider
-configuration, deployment or population budget ledger changed.
+configuration, deployment or population budget ledger changed during that
+proposal review.
+
+## Implemented playback layout correction
+
+The resident recording dock now has an independent, bounded layout rather than
+inheriting the full-width live dock's minimum column sizes. Time labels, a thin
+progress track, playback controls and compact counters remain inside the glass
+card. The card sits above the command bar; resident panels reserve space for it.
+The redundant live playback dock is hidden during resident inspection, and its
+Space shortcut defers to recorded playback.
+
+Verified the card at 1280×600, 390×844 and 320×568, including keyboard Home/End
+scrubbing. Frontend: 370 tests passed, lint passed with four existing City log
+Fast Refresh warnings, and TypeScript/production build passed with the existing
+chunk-size warning. This UI correction changes no model execution or budget.

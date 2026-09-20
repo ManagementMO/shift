@@ -1,6 +1,7 @@
 # Proposal: talk to the city and its resident swarms
 
-Status: documentation-only extension of the
+Status: proposed behavior, not implemented by the accompanying playback UI fix.
+This document extends the
 [resident event proposal](RESIDENT_EVENT_PROPOSAL.md), based on `origin/main`
 at `73e1e45`. The existing command bar, Events menu and City log are the product
 entry points. The native command/conversation behavior below remains to be built.
