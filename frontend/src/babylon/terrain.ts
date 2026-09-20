@@ -1,8 +1,8 @@
 /**
  * Placeholder countryside beyond the compiled pack: a rolling grassland heightfield, the lake carried on from
  * the pack's shoreline (`far_water`, compiled from the full Lake Ontario linework), the main roads leaving the
- * pack extended to the horizon, and sparse trees.  Purely presentational and deterministic: nothing here is
- * surveyed terrain, and nothing here feeds the simulation.
+ * pack extended to the horizon, filler suburb blocks where the mapped city thins out, farmland and sparse trees.
+ * Purely presentational and deterministic: nothing here is surveyed terrain, and nothing here feeds the simulation.
  */
 
 import { Mesh } from '@babylonjs/core/Meshes/mesh'
@@ -11,13 +11,15 @@ import type { Material } from '@babylonjs/core/Materials/material'
 import type { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import type { Scene } from '@babylonjs/core/scene'
 
-import { TEXTURE_RECIPES } from './appearance'
-import { hex, meshFromBatch, PALETTE, vertexColorMaterial, Y } from './city'
+import { facadeFor, TEXTURE_RECIPES, type TextureKind } from './appearance'
+import { addArchitecture } from './architecture'
+import { BuildingIndex } from './buildingIndex'
+import { buildingColor, hex, meshFromBatch, PALETTE, vertexColorMaterial, Y } from './city'
 import { boundaryDistance, pointInRing, PlacementGrid, TREE_HEIGHT, TREE_RADIUS, type TreePlacement } from './details'
-import { Batch, bounds, distanceToSegment, mix, signedArea, type RGB } from './geometry'
+import { Batch, bounds, centroid, distanceToSegment, mix, signedArea, type RGB } from './geometry'
 import type { CityMaterials } from './materials'
 import { buildVegetation } from './vegetation'
-import type { Flat, WorldData, WorldRoad } from './worldData'
+import type { BuildingCategory, Flat, WorldBuilding, WorldData, WorldRoad } from './worldData'
 
 export interface TerrainOptions {
   /** grid cells across the far box (per axis) */
@@ -35,10 +37,12 @@ export interface TerrainOptions {
   roadLimit: number
   treeLimit: number
   reservedTrees?: readonly TreePlacement[]
+  /** filler blocks carrying the street grid on past the mapped city (see `fringeBlocks`) */
+  fringe: boolean
 }
 
 export const TERRAIN_DEFAULTS: TerrainOptions = {
-  cells: 176, platePad: 0.3, hillAmplitude: 85, hillWavelength: 2000, hillRise: 1400, slope: 0.005, roadLimit: 8, treeLimit: 1500,
+  cells: 176, platePad: 0.3, hillAmplitude: 85, hillWavelength: 2000, hillRise: 1400, slope: 0.005, roadLimit: 8, treeLimit: 1500, fringe: true,
 }
 
 const GRASS_DRY = hex('#a3a86b')
@@ -340,8 +344,8 @@ export function isFarmland(shape: TerrainShape, x: number, z: number): boolean {
   return boxDistance(shape.plate, x, z) > 250 && !shape.inWater(x, z) && shape.shoreDistance(x, z, 250) >= 250 && rollingNoise(x + 2222, z - 777, 3200) > -0.05
 }
 
-/** Deterministic parcels on the concession lattice, skipping horizon roads. */
-export function farmParcels(shape: TerrainShape, roads: { shape: Flat; width: number }[]): Parcel[] {
+/** Deterministic parcels on the concession lattice, skipping horizon roads and anything `avoid` claims (the suburb). */
+export function farmParcels(shape: TerrainShape, roads: { shape: Flat; width: number }[], avoid?: (x: number, z: number) => boolean): Parcel[] {
   const [fx0, fz0, fx1, fz1] = shape.farBounds
   const corners = [[fx0, fz0], [fx1, fz0], [fx1, fz1], [fx0, fz1]].map(([x, z]) => toLattice(x, z))
   const u0 = Math.min(...corners.map((c) => c[0])), u1 = Math.max(...corners.map((c) => c[0]))
@@ -355,6 +359,7 @@ export function farmParcels(shape: TerrainShape, roads: { shape: Flat; width: nu
       if (centre[0] < fx0 + 300 || centre[0] > fx1 - 300 || centre[1] < fz0 + 300 || centre[1] > fz1 - 300) continue
       if (!isFarmland(shape, centre[0], centre[1])) continue
       if (roads.some((r) => segmentDistance(centre[0], centre[1], r.shape) < r.width / 2 + Math.hypot(LOT_U, LOT_V) / 2)) continue
+      if (avoid?.(centre[0], centre[1])) continue
       const h = hash2(i * 7 + 3, j * 11 - 5), h2 = hash2(i - 991, j + 577), h3 = hash2(i + 313, j - 131)
       const cornersWorld = ([[ua, va], [ub, va], [ub, vb], [ua, vb]] as [number, number][]).map(([u, v]) => fromLattice(u, v))
       const onLaneCorner = i % LOTS_PER_BLOCK_U === 0 && j % LOTS_PER_BLOCK_V === 0
@@ -542,7 +547,7 @@ function drapedStrip(batch: Batch, line: Flat, width: number, shape: TerrainShap
 }
 
 /** A house and a barn beside the lane corner of a parcel, footprints aligned to the lattice. */
-function farmstead(batch: Batch, parcel: Parcel, shape: TerrainShape, placements: PlacementGrid): [number, number][] {
+function farmstead(batch: Batch, parcel: Parcel, shape: TerrainShape, placements: PlacementGrid, obstacles?: SurfaceReservations): [number, number][] {
   const [u0, v0] = toLattice(parcel.corners[0][0], parcel.corners[0][1])
   const h = hash2(parcel.i * 3, parcel.j * 5)
   const lots: [number, number][] = []
@@ -554,6 +559,7 @@ function farmstead(batch: Batch, parcel: Parcel, shape: TerrainShape, placements
     }
     const [cx, cz] = fromLattice(u0 + du + w / 2, v0 + dv + d / 2)
     const levels = [0, 2, 4, 6].map((i) => shape.surface(ring[i], ring[i + 1]))
+    if (obstacles?.intersectsCircle(cx, cz, Math.hypot(w, d) / 2 + 0.3)) return
     if (!placements.reserve(cx, cz, Math.hypot(w, d) / 2 + 0.3, Math.min(...levels) - 0.5, Math.max(...levels) + height)) return
     batch.extrude(ring, undefined, Math.min(...levels) - 0.5, Math.max(...levels) + height, c.wall, c.roof)
     lots.push([cx, cz])
@@ -588,7 +594,9 @@ export function farmland(shape: TerrainShape, roads: { shape: Flat; width: numbe
     for (const road of roads) drapedStrip(occupiedRoads, road.shape, road.width, shape, PALETTE.asphaltMajor, 0.4, [], reservations)
   }
   const placements = new PlacementGrid()
-  const parcels = farmParcels(shape, roads)
+  // parcels mostly under the suburb are dropped; the rest are cut around its tiles like any other reservation
+  const claimed = reservations
+  const parcels = farmParcels(shape, roads, (x, z) => claimed.intersectsCircle(x, z, 150))
   const fields = new Batch(TEXTURE_RECIPES.grass.metres)
   const lanes = new Batch(TEXTURE_RECIPES.asphalt.metres)
   const buildings = new Batch()
@@ -606,7 +614,7 @@ export function farmland(shape: TerrainShape, roads: { shape: Flat; width: numbe
     }
     const near = Math.hypot(parcel.centre[0] - cx, parcel.centre[1] - cz)
     if (parcel.farmstead) {
-      for (const [x, z] of farmstead(buildings, parcel, shape, placements)) {
+      for (const [x, z] of farmstead(buildings, parcel, shape, placements, obstacles)) {
         for (let k = 0; k < 3; k++) {
           const a = hash2(parcel.i + k, parcel.j) * Math.PI * 2, r = 16 + 10 * hash2(parcel.j + k, parcel.i)
           const tx = x + Math.cos(a) * r, tz = z + Math.sin(a) * r
@@ -632,6 +640,312 @@ export function farmland(shape: TerrainShape, roads: { shape: Flat; width: numbe
     placed.push({ x, y, z, scale, shade })
   }
   return { fields, lanes, buildings, tinted, cuts, placements, obstacles, trees: placed }
+}
+
+// ---------------------------------------------------------------------------------------------- suburban fringe
+
+/**
+ * Filler blocks around the compiled city: the street grid carried on across the plate and up into the hills on the
+ * same survey tilt, fully built for `FRINGE_DENSE` metres from the last mapped buildings and then thinning out into
+ * the farm parcels by `FRINGE_REACH`, so the city does not stop on a survey line.  Blocks go wherever the land is
+ * unmapped (`surfaces.meadow` inside the pack, everything but water beyond it), are cut around every real road, path,
+ * rail line and horizon road, and each block has a character — tower cluster, mid-rise, walk-ups or house rows — so
+ * the skyline varies.  Purely presentational: nothing here is in the SUMO network, `BuildingIndex`, or the pack.
+ */
+const BLOCK_U = 150
+const BLOCK_V = 64
+const LOCAL_STREET = 11
+const ARTERIAL_STREET = 20
+const ARTERIALS_EVERY_U = 4
+const ARTERIALS_EVERY_V = 8
+/** metres from the mapped buildings the blocks stay fully built */
+export const FRINGE_DENSE = 2200
+/** metres from the mapped buildings by which the blocks have thinned out to nothing */
+export const FRINGE_REACH = 3800
+const ROAD_VERGE = 6
+const TILE_LIFT = 0.08
+const SLAB_LIFT = 0.16
+
+export type BlockKind = 'tower' | 'midrise' | 'walkup' | 'houses'
+
+export interface FringeBlock {
+  i: number
+  j: number
+  kind: BlockKind
+  /** metres from the nearest mapped buildings */
+  distance: number
+  /** 0 while fully built, 1 where the fringe has faded out */
+  t: number
+  /** the whole lattice cell, street centre-line to centre-line, clipped around the real roads */
+  tiles: Point2[][]
+  /** the block inside its streets, clipped the same way */
+  slabs: Point2[][]
+  slab: RGB
+  lots: WorldBuilding[]
+  trees: TreePlacement[]
+}
+
+const streetWidth = (index: number, every: number): number => (index % every === 0 ? ARTERIAL_STREET : LOCAL_STREET)
+
+function boxesOverlap(a: readonly number[], b: readonly number[]): boolean {
+  return a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1]
+}
+
+/** Point-in-surface lookup over compiled surface polygons (they are tiled, so a cell hash keeps this cheap). */
+class SurfaceIndex {
+  private readonly cells = new Map<string, { ring: Flat; holes: Flat[]; box: [number, number, number, number] }[]>()
+  constructor(polygons: readonly { ring: Flat; holes?: Flat[] }[]) {
+    for (const p of polygons) {
+      const box = bounds(p.ring)
+      const entry = { ring: p.ring, holes: p.holes ?? [], box }
+      for (let i = Math.floor(box[0] / 400); i <= Math.floor(box[2] / 400); i++) for (let j = Math.floor(box[1] / 400); j <= Math.floor(box[3] / 400); j++) {
+        const key = `${i}:${j}`
+        if (!this.cells.has(key)) this.cells.set(key, [])
+        this.cells.get(key)!.push(entry)
+      }
+    }
+  }
+  contains(x: number, z: number): boolean {
+    return (this.cells.get(`${Math.floor(x / 400)}:${Math.floor(z / 400)}`) ?? []).some((p) =>
+      x >= p.box[0] && x <= p.box[2] && z >= p.box[1] && z <= p.box[3] && pointInRing(x, z, p.ring) && !p.holes.some((h) => pointInRing(x, z, h)))
+  }
+}
+
+/** A convex no-build area (a road with its verge, a mapped building's box) with its signed clearance, positive outside. */
+interface Cut { ring: Point2[]; box: [number, number, number, number]; clearance(x: number, z: number): number }
+
+/** Convex cuts hashed by 200 m cell, so a block can be clipped around, and lots kept off, everything real nearby. */
+class CutIndex {
+  private readonly cells = new Map<string, Cut[]>()
+  private insert(cut: Cut): void {
+    for (let i = Math.floor(cut.box[0] / 200); i <= Math.floor(cut.box[2] / 200); i++) for (let j = Math.floor(cut.box[1] / 200); j <= Math.floor(cut.box[3] / 200); j++) {
+      const key = `${i}:${j}`
+      if (!this.cells.has(key)) this.cells.set(key, [])
+      this.cells.get(key)!.push(cut)
+    }
+  }
+  /** a straight strip of `width` plus `verge` either side */
+  strip(ax: number, az: number, bx: number, bz: number, width: number, verge = ROAD_VERGE): void {
+    const len = Math.hypot(bx - ax, bz - az)
+    if (len < 0.5) return
+    const half = width / 2 + verge
+    const ox = (-(bz - az) / len) * half, oz = ((bx - ax) / len) * half
+    const ring: Point2[] = [[ax + ox, az + oz], [ax - ox, az - oz], [bx - ox, bz - oz], [bx + ox, bz + oz]]
+    this.insert({ ring, box: bounds(ring.flat()), clearance: (x, z) => segmentDistance(x, z, [ax, az, bx, bz]) - half })
+  }
+  /** an axis-aligned box grown by `margin` */
+  box(inner: readonly number[], margin: number): void {
+    const box: [number, number, number, number] = [inner[0] - margin, inner[1] - margin, inner[2] + margin, inner[3] + margin]
+    this.insert({ ring: [[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]], box, clearance: (x, z) => boxDistance(box, x, z) })
+  }
+  near(box: readonly number[]): Cut[] {
+    const out = new Set<Cut>()
+    for (let i = Math.floor(box[0] / 200); i <= Math.floor(box[2] / 200); i++) for (let j = Math.floor(box[1] / 200); j <= Math.floor(box[3] / 200); j++) {
+      for (const cut of this.cells.get(`${i}:${j}`) ?? []) if (boxesOverlap(box, cut.box)) out.add(cut)
+    }
+    return [...out]
+  }
+  /** no cut within `margin` metres of the point (negative `margin` accepts points just inside a cut) */
+  clear(x: number, z: number, margin: number): boolean {
+    for (let i = Math.floor((x - margin) / 200); i <= Math.floor((x + margin) / 200); i++) for (let j = Math.floor((z - margin) / 200); j <= Math.floor((z + margin) / 200); j++) {
+      for (const cut of this.cells.get(`${i}:${j}`) ?? []) {
+        if (x < cut.box[0] - margin || x > cut.box[2] + margin || z < cut.box[1] - margin || z > cut.box[3] + margin) continue
+        if (cut.clearance(x, z) < margin) return false
+      }
+    }
+    return true
+  }
+}
+
+/**
+ * Metres to the nearest mapped building, on a 100 m grid over `box`: brushfire from every building's cell, each cell
+ * remembering its nearest source (near-exact Euclidean, one pass over a few ten-thousand cells).
+ */
+export function cityDistanceField(buildings: readonly Pick<WorldBuilding, 'ring'>[], box: readonly number[], cell = 100): (x: number, z: number) => number {
+  const x0 = Math.floor(box[0] / cell), z0 = Math.floor(box[1] / cell)
+  const nx = Math.ceil(box[2] / cell) - x0 + 1, nz = Math.ceil(box[3] / cell) - z0 + 1
+  const src = new Int32Array(nx * nz).fill(-1)
+  const queue: number[] = []
+  for (const b of buildings) {
+    if (b.ring.length < 6) continue
+    const [cx, cz] = centroid(b.ring)
+    const i = Math.floor(cx / cell) - x0, j = Math.floor(cz / cell) - z0
+    if (i < 0 || j < 0 || i >= nx || j >= nz) continue
+    const k = j * nx + i
+    if (src[k] !== k) {
+      src[k] = k
+      queue.push(k)
+    }
+  }
+  const dist2 = (k: number, s: number): number => {
+    const di = (k % nx) - (s % nx), dj = Math.floor(k / nx) - Math.floor(s / nx)
+    return di * di + dj * dj
+  }
+  for (let head = 0; head < queue.length; head++) {
+    const k = queue[head], s = src[k], i = k % nx, j = Math.floor(k / nx)
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const ni = i + di, nj = j + dj
+      if ((!di && !dj) || ni < 0 || nj < 0 || ni >= nx || nj >= nz) continue
+      const n = nj * nx + ni
+      if (src[n] === -1 || dist2(n, s) < dist2(n, src[n])) {
+        src[n] = s
+        queue.push(n)
+      }
+    }
+  }
+  return (x, z) => {
+    const i = Math.floor(x / cell) - x0, j = Math.floor(z / cell) - z0
+    if (i < 0 || j < 0 || i >= nx || j >= nz) return Infinity
+    const s = src[j * nx + i]
+    if (s < 0) return Infinity
+    return Math.max(0, Math.hypot(x - ((s % nx) + x0 + 0.5) * cell, z - (Math.floor(s / nx) + z0 + 0.5) * cell) - cell / 2)
+  }
+}
+
+type FringeWorld = Pick<WorldData, 'roads' | 'rail' | 'water' | 'buildings' | 'landmarks' | 'massing' | 'surfaces'>
+
+/** Deterministic filler blocks on the concession lattice around the mapped city. */
+export function fringeBlocks(shape: TerrainShape, horizon: { shape: Flat; width: number }[], world: FringeWorld): FringeBlock[] {
+  // Inside the plate the compiled surfaces say what is bare land (never a park, beach, rail yard or water); beyond
+  // it everything but the lake is.  Old packs without compiled surfaces only get the ring outside the pack.
+  const open = world.surfaces
+    ? new SurfaceIndex([...(world.surfaces.meadow ?? []), ...world.surfaces.ground])
+    : { contains: (x: number, z: number) => boxDistance(shape.pack, x, z) > 0 }
+  const openAt = (x: number, z: number): boolean => boxDistance(shape.plate, x, z) > 0 ? !shape.inWater(x, z) : open.contains(x, z)
+  const buildings = new BuildingIndex(world)
+  const cuts = new CutIndex(), rails = new CutIndex()
+  for (const r of horizon) cuts.strip(r.shape[0], r.shape[1], r.shape[2], r.shape[3], r.width, ROAD_VERGE + 6)
+  for (const r of world.roads) {
+    const verge = ROAD_VERGE + (/motorway|trunk/.test(r.type) ? 10 : 0)
+    for (let i = 0; i + 3 < r.shape.length; i += 2) cuts.strip(r.shape[i], r.shape[i + 1], r.shape[i + 2], r.shape[i + 3], Math.max(r.w, 3), verge)
+  }
+  for (const line of world.rail) for (let i = 0; i + 3 < line.length; i += 2) rails.strip(line[i], line[i + 1], line[i + 2], line[i + 3], 3)
+  for (const b of world.buildings) if (b.ring.length >= 6) cuts.box(bounds(b.ring), 5)
+  const [px0, pz0, px1, pz1] = shape.pack
+  const region = [px0 - FRINGE_REACH, pz0 - FRINGE_REACH, px1 + FRINGE_REACH, pz1 + FRINGE_REACH]
+  const cityDistance = cityDistanceField(world.buildings, region)
+  const water = world.water.map((w) => ({ ...w, box: bounds(w.ring) }))
+  const nearWater = (x: number, z: number, margin: number): boolean => water.some((w) =>
+    x > w.box[0] - margin && x < w.box[2] + margin && z > w.box[1] - margin && z < w.box[3] + margin
+    && (boundaryDistance(x, z, w.ring) < margin || w.holes?.some((h) => boundaryDistance(x, z, h) < margin)))
+  // Islands and spits stay green: how much of a 600 m circle around the block is water, from a 150 m raster of
+  // "not on any compiled land surface" inside the plate and the far lake beyond it.
+  const land = world.surfaces ? new SurfaceIndex(Object.values(world.surfaces).flat().filter((p) => p !== undefined)) : null
+  const waterCells = new Map<number, boolean>()
+  const isWater = (x: number, z: number): boolean => {
+    const key = Math.floor(x / 150) * 1048576 + Math.floor(z / 150)
+    let value = waterCells.get(key)
+    if (value === undefined) {
+      const sx = (Math.floor(x / 150) + 0.5) * 150, sz = (Math.floor(z / 150) + 0.5) * 150
+      value = land && boxDistance(shape.plate, sx, sz) <= 0 ? !land.contains(sx, sz) : shape.inWater(sx, sz)
+      waterCells.set(key, value)
+    }
+    return value
+  }
+  const waterFraction = (x: number, z: number): number => {
+    let n = 0
+    for (let k = 0; k < 24; k++) if (isWater(x + Math.cos((k / 24) * Math.PI * 2) * 600, z + Math.sin((k / 24) * Math.PI * 2) * 600)) n++
+    return n / 24
+  }
+  const corners = [[region[0], region[1]], [region[2], region[1]], [region[2], region[3]], [region[0], region[3]]].map(([x, z]) => toLattice(x, z))
+  const u0 = Math.min(...corners.map((c) => c[0])), u1 = Math.max(...corners.map((c) => c[0]))
+  const v0 = Math.min(...corners.map((c) => c[1])), v1 = Math.max(...corners.map((c) => c[1]))
+  const clear = (x: number, z: number, margin: number): boolean => openAt(x, z) && cuts.clear(x, z, margin) && rails.clear(x, z, margin)
+  const clip = (ring: Point2[]): Point2[][] => {
+    const box = bounds(ring.flat())
+    let pieces = [ring]
+    for (const cut of [...cuts.near(box), ...rails.near(box)]) {
+      // each cut only touches the pieces whose box it overlaps; the rest pass through untouched
+      pieces = pieces.flatMap((piece) => (boxesOverlap(bounds(piece.flat()), cut.box) ? subtractPolygon(piece, cut.ring) : [piece]))
+      if (!pieces.length) break
+    }
+    return pieces.filter((piece) => signedArea(piece.flat()) > 30)
+  }
+  // A point the cell may cover: bare land, or something the cell will be cut around anyway.  Corners and edge
+  // midpoints are shared between neighbouring cells, so they are looked up once by half-lattice index.
+  const usableCache = new Map<number, boolean>()
+  const usable = (iu: number, iv: number): boolean => {
+    const key = iu * 1048576 + iv
+    let value = usableCache.get(key)
+    if (value === undefined) {
+      const [x, z] = fromLattice(iu * BLOCK_U / 2, iv * BLOCK_V / 2)
+      usableCache.set(key, (value = openAt(x, z) || !cuts.clear(x, z, 0)))
+    }
+    return value
+  }
+  const out: FringeBlock[] = []
+  for (let i = Math.floor(u0 / BLOCK_U); i * BLOCK_U < u1; i++) {
+    for (let j = Math.floor(v0 / BLOCK_V); j * BLOCK_V < v1; j++) {
+      const ua = i * BLOCK_U + streetWidth(i, ARTERIALS_EVERY_U) / 2, ub = (i + 1) * BLOCK_U - streetWidth(i + 1, ARTERIALS_EVERY_U) / 2
+      const va = j * BLOCK_V + streetWidth(j, ARTERIALS_EVERY_V) / 2, vb = (j + 1) * BLOCK_V - streetWidth(j + 1, ARTERIALS_EVERY_V) / 2
+      const [cx, cz] = fromLattice((ua + ub) / 2, (va + vb) / 2)
+      const distance = cityDistance(cx, cz)
+      if (distance >= FRINGE_REACH || boxDistance(shape.farBounds, cx, cz) > -300) continue
+      // fully built out to FRINGE_DENSE, then thinning in clumps to nothing at FRINGE_REACH
+      const t = smooth((distance - FRINGE_DENSE) / (FRINGE_REACH - FRINGE_DENSE))
+      const h = hash2(i * 13 + 7, j * 31 - 3), h2 = hash2(i - 991, j + 577)
+      const mask = 0.5 + 0.5 * rollingNoise(cx + 4321, cz - 1234, 1100)
+      if (h >= (t > 0 ? 0.97 * (1 - t) * (0.7 + 0.3 * mask) : 0.97)) continue
+      // cheap rejections first: the mapped core, rail corridors, then the surfaces and water
+      if (buildings.overlapsCircle(cx, cz, 90, -1, 1000) || !rails.clear(cx, cz, 50) || !openAt(cx, cz)) continue
+      if (shape.shoreDistance(cx, cz) < 60 || nearWater(cx, cz, 60) || waterFraction(cx, cz) > 0.45) continue
+      if ([[0, 0], [1, 0], [2, 0], [2, 1], [2, 2], [1, 2], [0, 2], [0, 1]].some(([du, dv]) => !usable(2 * i + du, 2 * j + dv))) continue
+      const tile = ([[i * BLOCK_U, j * BLOCK_V], [(i + 1) * BLOCK_U, j * BLOCK_V], [(i + 1) * BLOCK_U, (j + 1) * BLOCK_V], [i * BLOCK_U, (j + 1) * BLOCK_V]] as Point2[]).map(([u, v]) => fromLattice(u, v))
+      const tiles = clip(tile)
+      if (!tiles.length) continue
+      const slabs = clip(([[ua, va], [ub, va], [ub, vb], [ua, vb]] as Point2[]).map(([u, v]) => fromLattice(u, v)))
+      // taller blocks cluster toward the city; heights ease down with distance
+      const rise = 1 - smooth(distance / FRINGE_REACH)
+      const kind: BlockKind = distance < 1200 && h2 < 0.06 ? 'tower' : distance < 2000 && h2 < 0.36 ? 'midrise' : distance < 3000 && h2 < 0.56 ? 'walkup' : 'houses'
+      const lots: WorldBuilding[] = []
+      const trees: TreePlacement[] = []
+      const rowDepth = (vb - va) / 2
+      for (const row of [0, 1]) {
+        const arterial = streetWidth(row ? j + 1 : j, ARTERIALS_EVERY_V) === ARTERIAL_STREET && t < 0.5
+        let u = ua + 2, k = 0
+        while (u < ub - 8) {
+          const r1 = hash2(i * 8191 + row, j * 131 + k), r2 = hash2(i * 8191 + row + 3, j * 131 + k + 7), r3 = hash2(i * 8191 + row + 5, j * 131 + k + 11)
+          const r4 = hash2(i * 8191 + row + 9, j * 131 + k + 13)
+          const shop = kind === 'houses' && arterial && r3 < 0.5
+          // house rows are a mix of detached lots and terraces of 3–8 units drawn as one strip
+          const terrace = kind === 'houses' && !shop && r4 < 0.6
+          const width = Math.min(ub - 2 - u,
+            kind === 'tower' ? 38 + r1 * 12 : kind === 'midrise' ? 26 + r1 * 14 : kind === 'walkup' ? 16 + r1 * 10 : shop ? 14 + r1 * 8 : terrace ? 22 + r1 * 36 : 11 + r1 * 6)
+          if (width < 9) break
+          const depth = Math.min(rowDepth - 4, kind === 'tower' ? 22 + r2 * 4 : kind === 'midrise' ? 17 + r2 * 5 : kind === 'walkup' ? 13 + r2 * 4 : shop ? 15 + r2 * 5 : 10 + r2 * 4)
+          const setback = kind === 'tower' ? 2 : kind === 'midrise' ? 2.5 : kind === 'walkup' ? 3 : shop ? 1.5 : 3 + r2 * 3
+          const gap = kind === 'tower' ? 6 : kind === 'midrise' ? 4 : shop || terrace ? 1 : 2.5
+          const near = row ? vb - setback - depth : va + setback, far = near + depth
+          const ring = ([[u + gap / 2, near], [u + width - gap / 2, near], [u + width - gap / 2, far], [u + gap / 2, far]] as Point2[]).map(([lu, lv]) => fromLattice(lu, lv))
+          const [lx, lz] = fromLattice(u + width / 2, (near + far) / 2)
+          const occupied = r2 < 0.97 - 0.5 * t
+          if (ring.every(([x, z]) => clear(x, z, 1.5)) && clear(lx, lz, 1.5)) {
+            if (occupied) {
+              // an occasional walk-up among the houses, and the odd slab among the walk-ups, keep the roofline uneven
+              const spike = (kind === 'houses' && r3 < 0.08) || (kind === 'walkup' && r3 < 0.06)
+              const jitter = 0.85 + 0.3 * r4
+              const height = kind === 'tower' ? (42 + r3 * 38) * (0.5 + 0.5 * rise) * jitter
+                : kind === 'midrise' ? (16 + r3 * 22) * (0.6 + 0.4 * rise) * jitter
+                : kind === 'walkup' ? (10 + r3 * 7) * (spike ? 2.2 : 1) * jitter
+                : shop ? (5 + r3 * 4) * jitter : (6 + r1 * 5) * (spike ? 1.9 : 1) * jitter
+              const cat: BuildingCategory = kind === 'tower' ? (r3 < 0.6 ? 'tower' : 'apartments')
+                : kind === 'midrise' ? (r3 < 0.55 ? 'apartments' : r3 < 0.75 ? 'commercial' : 'generic')
+                : kind === 'walkup' || spike ? (r4 < 0.5 ? 'generic' : 'apartments')
+                : shop ? 'retail' : r3 < 0.35 ? 'residential' : 'generic'
+              lots.push({ id: `fringe:${i}:${j}:${row}:${k}`, ring: ring.flat(), h: Math.round(height * 10) / 10, cat })
+            } else if (r3 < 0.6) {
+              trees.push({ x: lx, z: lz, y: shape.surface(lx, lz), scale: 1 + r1 * 0.5, shade: r2 })
+            }
+          }
+          u += width
+          k++
+        }
+      }
+      const slab = kind === 'houses' ? mix(PALETTE.land, PALETTE.meadow, 0.04 + 0.4 * t) : PALETTE.land
+      out.push({ i, j, kind, distance, t, tiles, slabs, slab, lots, trees })
+    }
+  }
+  return out
 }
 
 /** Heightfield vertex data; grid lines are pinned to the plate edges so the terrain meets the plate without a trench. */
@@ -698,6 +1012,8 @@ export function terrainVertexData(shape: TerrainShape, cutouts: Point2[][] = [])
 
 export interface Terrain {
   meshes: Mesh[]
+  /** filler buildings inside the pack, where the city's shadow map reaches */
+  shadowCasters: Mesh[]
   shape: TerrainShape
   dispose(): void
 }
@@ -735,6 +1051,68 @@ export function buildTerrain(scene: Scene, world: WorldData, materials: CityMate
   add('horizon-roads', asphalt, materials.get('asphalt'))
   performance.mark('terrain:roads')
 
+  // Filler blocks on the unmapped land, chunked so the camera only draws the side of town it is looking at.  Chunks
+  // inside the pack share the city's shadow map; the ring beyond it is unlit like the rest of the countryside.
+  const fringeTrees: TreePlacement[] = []
+  const shadowCasters: Mesh[] = []
+  if (o.fringe) {
+    // low boxes (houses, shops, walk-ups) are batched apart from the taller buildings, so only the latter cast shadows
+    const chunks = new Map<string, { batches: Map<TextureKind, Batch>; low: Map<TextureKind, Batch>; inPack: boolean }>()
+    const chunkAt = (x: number, z: number) => {
+      const key = `${Math.floor(x / 1500)}:${Math.floor(z / 1500)}`
+      let chunk = chunks.get(key)
+      if (!chunk) chunks.set(key, (chunk = { batches: new Map(), low: new Map(), inPack: false }))
+      return chunk
+    }
+    const batchFor = (chunk: ReturnType<typeof chunkAt>, kind: TextureKind, low = false): Batch => {
+      const batches = low ? chunk.low : chunk.batches
+      let batch = batches.get(kind)
+      if (!batch) batches.set(kind, (batch = new Batch(TEXTURE_RECIPES[kind].metres)))
+      return batch
+    }
+    for (const block of fringeBlocks(shape, roads, world)) {
+      const [cx, cz] = centroid(block.tiles[0].flat())
+      const chunk = chunkAt(cx, cz)
+      chunk.inPack ||= boxDistance(shape.pack, cx, cz) < 0
+      // streets and slabs follow the surface (flat on the plate, the hills beyond it), and the land beneath goes
+      for (const tile of block.tiles) {
+        drape(batchFor(chunk, 'asphalt'), tile, shape, PALETTE.asphaltMinor, TILE_LIFT)
+        reservations.add(tile)
+        cuts.push(tile)
+      }
+      for (const slab of block.slabs) drape(batchFor(chunk, 'concrete'), slab, shape, block.slab, SLAB_LIFT)
+      for (const lot of block.lots) {
+        // sit on the highest corner, sunk half a metre into the lowest, so a slope never shows under a wall
+        const levels = [0, 2, 4, 6].map((k) => shape.surface(lot.ring[k], lot.ring[k + 1]))
+        const floor = Math.min(...levels) - 0.6, top = Math.max(...levels) + lot.h
+        const colour = buildingColor(lot), low = lot.h <= 20
+        const facade = batchFor(chunk, facadeFor(lot), low), roof = batchFor(chunk, 'roof', low)
+        if (low) {
+          // houses, shops and walk-ups are plain boxes; there are a great many of them
+          facade.walls(lot.ring, undefined, floor, top, colour.wall, 1)
+          roof.polygon(lot.ring, undefined, top, colour.roof)
+          continue
+        }
+        const base = Math.max(0, floor - 0.3)
+        addArchitecture({ facade, roof, stone: batchFor(chunk, 'concrete'), glass: batchFor(chunk, 'glass'), metal: batchFor(chunk, 'industrial') },
+          { ...lot, base, h: top - 0.3 - base }, colour, false)
+      }
+      fringeTrees.push(...block.trees)
+    }
+    for (const [key, chunk] of chunks) {
+      for (const [group, batches] of [['', chunk.batches], ['low-', chunk.low]] as const) {
+        for (const [kind, batch] of batches) {
+          if (batch.isEmpty()) continue
+          const mesh = meshFromBatch(`fringe-${key}-${group}${kind}`, batch, scene, materials.get(kind))
+          mesh.receiveShadows = chunk.inPack
+          if (chunk.inPack && !group && kind !== 'asphalt' && kind !== 'concrete') shadowCasters.push(mesh)
+          meshes.push(mesh)
+        }
+      }
+    }
+  }
+
+  performance.mark('terrain:fringe')
   const farm = farmland(shape, roads, Math.round(o.treeLimit * 0.8), reservations)
   add('fields', farm.fields, materials.get('grass'))
   add('lanes', farm.lanes, materials.get('asphalt'))
@@ -759,10 +1137,17 @@ export function buildTerrain(scene: Scene, world: WorldData, materials: CityMate
     tree.receiveShadows = false
   }
   meshes.push(...trees)
+  const yards = buildVegetation(scene, fringeTrees, foliage, shape.plateY, 1500)
+  for (const tree of yards) {
+    tree.name = `fringe-${tree.name}`
+    tree.receiveShadows = false
+  }
+  meshes.push(...yards)
   performance.mark('terrain:trees')
 
   return {
     meshes,
+    shadowCasters,
     shape,
     dispose() {
       for (const m of meshes) m.dispose()
