@@ -7,13 +7,15 @@ import { agentPose, currentPose } from '../world/camera'
 import { useDisplay } from '../babylon/display'
 import type { WorldScene } from '../babylon/scene'
 import TornadoPlacement from '../babylon/TornadoPlacement.tsx'
+import OrbitalLaserPlacement from '../babylon/OrbitalLaserPlacement'
+import { LASER_DURATION, laserRadius, MAX_LASER_STRIKES } from '../babylon/orbitalLaserModel'
 import { DEFAULT_TORNADO, placedTornado, tornadoRadius, type TornadoSettings, type GroundPoint } from '../babylon/tornadoPlacement'
 import ToolPanel from '../shell/ToolPanel'
 import AgentBubble from '../shell/AgentBubble'
 import GodChrome from './GodChrome'
 import LivePeoplePanel from './LivePeoplePanel'
 import CityLogPanel from './CityLog'
-import { EventMenu, EventConfigPanel, ActiveEventPanel, DisasterAlert } from './EventPanels'
+import { EventMenu, EventConfigPanel, ActiveEventPanel, DisasterAlert, OrbitalLaserPanel } from './EventPanels'
 import { CitizenPanel, type CitizenTab } from './PeoplePanels'
 import { GlassSurface, GlassButton, GlassIconButton } from './ui'
 import { GodIcon } from './icons'
@@ -46,6 +48,8 @@ export default function GodCityUI({ world, active, onHome, recordingControls }: 
   const error = useStore(s => s.error)
   const display = useDisplay()
   const events = useGodVisuals(s => s.events)
+  const lasers = useGodVisuals(s => s.lasers)
+  const lastKind = useGodVisuals(s => s.lastKind)
   const armed = useGodVisuals(s => s.armed)
   const weatherAim = useGodVisuals(s => s.weather)
   const [panel, setPanel] = useState<Panel>(() => new URLSearchParams(location.search).get('panel') === 'events' ? 'events' : 'none')
@@ -94,10 +98,13 @@ export default function GodCityUI({ world, active, onHome, recordingControls }: 
     // road closures and developments are live city tools, reached from the Events menu
     if (kind === 'closure') { openTool('closure'); return }
     if (kind === 'development') { openTool('development'); return }
-    setDraft(d => ({ ...d, kind })); open('event-config')
+    setDraft(d => ({ ...d, kind, radiusM: kind === 'orbital' ? laserRadius(d.radiusM) : kind === 'tornado' ? tornadoRadius(d.radiusM) : d.radiusM, durationS: kind === 'orbital' ? LASER_DURATION : d.kind === 'orbital' ? 300 : d.durationS }))
+    open('event-config')
+    if (kind === 'orbital') void world?.orbital.prepare().catch(() => setNotice('The laser could not be prepared. Reload the city and try again.'))
   }
   const commandAction = (text: string) => {
     setCommand(text)
+    if (/\b(orbital|laser)\b/i.test(text)) { selectEvent('orbital'); return }
     const action = cityCommand(text, AGENT_DEMO_LOCKED)
     if (action === 'plane') {
       if (!world) { setNotice('Wait for the city to finish loading, then send the plane again.'); return }
@@ -124,11 +131,13 @@ export default function GodCityUI({ world, active, onHome, recordingControls }: 
     if (AGENT_DEMO_LOCKED && patch.autoRespond) { setNotice(AGENT_UNAVAILABLE_MESSAGE); return }
     const next = { ...draft, ...patch }
     if (next.kind === 'tornado') { next.radiusM = tornadoRadius(next.radiusM); next.durationS = Math.max(100, Math.min(600, next.durationS)) }
+    if (next.kind === 'orbital') { next.radiusM = laserRadius(next.radiusM); next.durationS = LASER_DURATION }
     setDraft(next)
     setSettings(s => ({ ...s, radius: next.radiusM, power: intensityPower(next.intensity), duration: next.durationS / 10, heading: next.heading }))
   }
   const arm = () => {
-    if (!world || !session) { setNotice('Wait for the live city to finish loading.'); return }
+    if (useGodVisuals.getState().armed) return
+    if (!world || (draft.kind !== 'orbital' && !session)) { setNotice('Wait for the live city to finish loading.'); return }
     const hazard = LIVE_HAZARD[draft.kind]
     if (hazard) {
       // a real incident: the cloud follows the cursor and the next click on the city posts it to SUMO
@@ -137,10 +146,13 @@ export default function GodCityUI({ world, active, onHome, recordingControls }: 
       useGodVisuals.getState().setWeather({ hazard, radius_m: draft.radiusM, duration_s: draft.durationS, label: '' })
       return
     }
-    if (draft.kind !== 'tornado') { setNotice('This event interface is ready; its effect is not connected yet.'); return }
-    if (events.length >= 4) { setNotice('Choose Normal Conditions to clear existing visual events first.'); return }
-    resume.current = clock.playing
-    void live.pause()
+    if (draft.kind !== 'tornado' && draft.kind !== 'orbital') { setNotice('This event interface is ready; its effect is not connected yet.'); return }
+    if (draft.kind === 'orbital' ? lasers.length >= MAX_LASER_STRIKES : events.length >= 4) { setNotice('Choose Normal Conditions to clear existing visual events first.'); return }
+    if (draft.kind === 'tornado') {
+      setSettings(s => ({ ...s, radius: draft.radiusM, power: intensityPower(draft.intensity), duration: draft.durationS / 10, heading: draft.heading }))
+      resume.current = clock.playing
+      void live.pause()
+    }
     useStore.getState().setTool(null)
     useStore.getState().select(null)
     useGodVisuals.getState().setArmed(true)
@@ -151,8 +163,15 @@ export default function GodCityUI({ world, active, onHome, recordingControls }: 
     const track = placedTornado(world.frame, point, direction, chosen, clock.t, id)
     if (useGodVisuals.getState().addEvent({ id, track, area: pack?.name.split(',')[0] ?? 'City centre', intensity: powerIntensity(chosen.power) })) { setPanel('event-active'); resume.current = false; void live.play() }
   }
+  const fireLaser = (point: GroundPoint) => {
+    if (!world || !useGodVisuals.getState().armed || draft.kind !== 'orbital' || !world.frame.contains(point.x, point.z)) return
+    const strike = { id: `god-laser-${crypto.randomUUID()}`, ...point, radius: laserRadius(draft.radiusM), firedAt: performance.now() / 1000 }
+    if (useGodVisuals.getState().addLaser({ strike, area: pack?.name.split(',')[0] ?? 'City centre' })) setPanel('event-active')
+    else setNotice('Restore an existing laser strike or choose Normal Conditions before firing again.')
+  }
   const liveIncident = [...(session?.incidents ?? [])].reverse().find(i => i.hazard in LIVE_EVENT_KIND && t >= i.start_s && t < i.end_s) ?? null
-  const chosen = events.at(-1)
+  const laser = lastKind === 'orbital' ? lasers.at(-1) : undefined
+  const chosen = lastKind === 'tornado' ? events.at(-1) : undefined
   const liveStatus: GodEventStatus | null = liveIncident ? { id: liveIncident.event_id, kind: LIVE_EVENT_KIND[liveIncident.hazard] ?? 'custom', label: liveIncident.label, area: pack?.name.split(',')[0] ?? 'City centre', start: liveIncident.start_s, end: liveIncident.end_s, radiusM: liveIncident.radius_m, intensity: liveIncident.radius_m >= 300 ? 'high' : liveIncident.radius_m >= 150 ? 'medium' : 'low', affectedBuildings: 0, failedBuildings: 0, affectedAgents: session?.metrics?.swarm?.aware_total ?? null, visualOnly: false } : null
   const status: GodEventStatus | null = liveStatus ?? (chosen ? { id: chosen.id, kind: 'tornado', label: 'Tornado Event', area: chosen.area, start: chosen.track.start_s, end: chosen.track.end_s, radiusM: chosen.track.radius_m, intensity: chosen.intensity, affectedBuildings: world?.storm.storm(chosen.track)?.damage.plan.length ?? 0, failedBuildings: 0, affectedAgents: null, visualOnly: true } : null)
   const focusEvent = () => {
@@ -171,11 +190,13 @@ export default function GodCityUI({ world, active, onHome, recordingControls }: 
   return <>
     <GodChrome recordingControls={recordingControls} city={pack?.name ?? ''} activeTab="live" openTab={panel === 'events' || panel === 'event-config' ? 'events' : panel === 'log' ? 'log' : panel === 'agents' ? 'agents' : panel === 'analytics' ? 'analytics' : null} activeTool={panel === 'agents' || tool === 'residents' ? 'people' : panel.startsWith('event') || tool === 'closure' || tool === 'development' ? 'events' : tool === 'temperature' ? 'weather' : tool === 'population' ? 'population' : tool === 'area' ? 'map' : 'select'} dateLabel="" timeLabel={simClock(t)} weatherLabel="Clear" temperatureLabel={environment ? `${environment.temperature}°C` : '—'} weatherNote="Simulation temperature, not a weather forecast" statusLabel={statusLabel} agentCount={counts?.total ?? 0} playing={playing || !ready} speed={useStore.getState().speed} speeds={PLAYBACK_SPEEDS} ready={ready} onSpeed={speed => live.setSpeed(speed)} is2D={display.projection === 'isometric'} command={command} onTab={onTab} onTool={onTool} onHome={onHome} onCommandChange={setCommand} onCommand={() => commandAction(command)} onSuggestion={commandAction} onTogglePlay={() => live.toggle()} onView={() => {}} />
     {panel === 'log' && <CityLogPanel session={session ?? null} pack={pack} corridors={corridors} visuals={events} time={t} onClose={close} />}
-    {panel === 'events' && <EventMenu onClose={close} onSelect={selectEvent} selectedEvent={liveStatus ? liveStatus.kind : chosen ? 'tornado' : 'normal'} supportedEvents={['normal','closure','development','tornado','rain','storm','flood','wildfire']} />}
-    {panel === 'event-config' && <EventConfigPanel draft={draft} supported={draft.kind === 'tornado' || draft.kind in LIVE_HAZARD} placing={armed || !!weatherAim} onChange={updateDraft} onCancel={armed || weatherAim ? cancel : close} onPlace={arm} />}
-    {armed && world && <TornadoPlacement scene={world} armed settings={settings} onSettings={patch => { setSettings(s => ({ ...s, ...patch })); setDraft(d => ({ ...d, radiusM: patch.radius ?? d.radiusM, heading: patch.heading ?? d.heading, intensity: patch.power === undefined ? d.intensity : powerIntensity(patch.power) })) }} onCast={cast} onCancel={cancel} />}
+    {panel === 'events' && <EventMenu onClose={close} onSelect={selectEvent} selectedEvent={liveStatus ? liveStatus.kind : lastKind ?? 'normal'} supportedEvents={['normal','closure','development','tornado','orbital','rain','storm','flood','wildfire']} />}
+    {panel === 'event-config' && !(armed && draft.kind === 'orbital') && <EventConfigPanel draft={draft} supported={draft.kind === 'tornado' || draft.kind === 'orbital' || draft.kind in LIVE_HAZARD} placing={armed || !!weatherAim} onChange={updateDraft} onCancel={armed || weatherAim ? cancel : close} onPlace={arm} />}
+    {armed && world && draft.kind === 'tornado' && <TornadoPlacement scene={world} armed settings={settings} onSettings={patch => { setSettings(s => ({ ...s, ...patch })); setDraft(d => ({ ...d, radiusM: patch.radius ?? d.radiusM, heading: patch.heading ?? d.heading, intensity: patch.power === undefined ? d.intensity : powerIntensity(patch.power) })) }} onCast={cast} onCancel={cancel} />}
+    {armed && world && draft.kind === 'orbital' && <OrbitalLaserPlacement scene={world} radius={draft.radiusM} onRadius={radiusM => updateDraft({ radiusM })} onFire={fireLaser} onCancel={cancel} />}
+    {panel === 'event-active' && laser && <OrbitalLaserPanel event={laser} onClose={close} onAgain={() => selectEvent('orbital')} onRestore={() => { useGodVisuals.getState().removeLaser(laser.strike.id); setPanel('events') }} />}
     {status && t >= status.start && t <= status.end && <DisasterAlert status={status} onFocus={() => { setPanel('event-active'); focusEvent() }} />}
-    {panel === 'event-active' && status && <ActiveEventPanel status={status} currentTime={t} showControls={status.visualOnly} paused={!playing} onClose={close} onFocus={focusEvent}
+    {panel === 'event-active' && status && !laser && <ActiveEventPanel status={status} currentTime={t} showControls={status.visualOnly} paused={!playing} onClose={close} onFocus={focusEvent}
       onStop={() => { if (liveStatus) setNotice('A live event runs for its declared duration; it cannot be stopped early.'); else { useGodVisuals.getState().removeEvent(status.id); if (useGodVisuals.getState().events.length === 0) close() } }}
       responsesEnabled onResponse={action => { if (action === 'pause' || action === 'resume') live.toggle(); else if (AGENT_DEMO_LOCKED && action !== 'close-roads' && action !== 'redirect-traffic') setNotice(AGENT_UNAVAILABLE_MESSAGE); else openTool('closure') }} onViewImpact={() => { focusEvent(); close() }} />}
     {AGENT_DEMO_LOCKED && (panel === 'agents' || selection?.kind === 'person') && <PanelBox title="Agents & swarms" onClose={close}><p role="status">{AGENT_UNAVAILABLE_MESSAGE}</p><p className="gp-panel-note">Agent features are unavailable in this demo.</p></PanelBox>}
@@ -190,7 +211,7 @@ export default function GodCityUI({ world, active, onHome, recordingControls }: 
       <GlassButton variant="primary" disabled={!pack || !!view.busy} onClick={() => { if (pack) { void newCity(pack.pack_id, { initial_population: fresh.travelers, fleet_size: fresh.buses }); close() } }}>{view.busy ? 'Working…' : 'Start a fresh city'}</GlassButton>
       <p className="gp-panel-note">Restarts SUMO from the beginning with this crowd. The current city stays saved and listed on the globe.</p>
       <h3 className="gp-section-title">Appearance</h3>{(['textures','shadows','sharp'] as const).map(key => <label key={key} className="gp-setting-row"><span>{key === 'sharp' ? 'High resolution' : key === 'textures' ? 'Building textures' : 'Shadows'}</span><input type="checkbox" checked={display[key]} onChange={event => display.set({ [key]: event.target.checked })} /></label>)}<GlassButton onClick={() => display.set({ projection: display.projection === 'perspective' ? 'isometric' : 'perspective' })}>Switch to {display.projection === 'perspective' ? '2D' : '3D'}</GlassButton><GlassButton onClick={() => openTool('development')}>Add a development</GlassButton><GlassButton onClick={() => openTool('population')}>Add travelers</GlassButton></PanelBox>}
-    {panel === 'analytics' && <PanelBox title="City analytics" onClose={close}><div className="gp-kpi-grid">{([['Travelers',counts?.total],['Arrived',counts?.arrived],['Waiting',counts?.waiting]] as const).map(([label,value]) => <div key={label}><span>{label}</span><strong>{value ?? '—'}</strong></div>)}</div><div className="gp-facts"><span>Walking</span><b>{counts?.walking ?? '—'}</b><span>Driving</span><b>{counts?.driving ?? '—'}</b><span>Riding</span><b>{counts?.riding ?? '—'}</b><span>Messages passed</span><b>{session?.metrics?.swarm?.messages ?? '—'}</b><span>Informed agents</span><b>{session?.metrics?.swarm?.aware_total ?? '—'}</b></div><p className="gp-panel-note">Actual live-session measurements. Decorative tornadoes do not change these outcomes.</p></PanelBox>}
+    {panel === 'analytics' && <PanelBox title="City analytics" onClose={close}><div className="gp-kpi-grid">{([['Travelers',counts?.total],['Arrived',counts?.arrived],['Waiting',counts?.waiting]] as const).map(([label,value]) => <div key={label}><span>{label}</span><strong>{value ?? '—'}</strong></div>)}</div><div className="gp-facts"><span>Walking</span><b>{counts?.walking ?? '—'}</b><span>Driving</span><b>{counts?.driving ?? '—'}</b><span>Riding</span><b>{counts?.riding ?? '—'}</b><span>Messages passed</span><b>{session?.metrics?.swarm?.messages ?? '—'}</b><span>Informed agents</span><b>{session?.metrics?.swarm?.aware_total ?? '—'}</b></div><p className="gp-panel-note">Actual live-session measurements. Visual events do not change these outcomes.</p></PanelBox>}
     {(notice || error || view.error) && <GlassSurface className="gp-toast" role="status"><GodIcon name="info" size={18} /><span>{notice || error || view.error}</span><GlassIconButton icon="close" label="Dismiss notification" onClick={() => { setNotice(null); useStore.getState().setError(null); live.discard() }} /></GlassSurface>}
   </>
 }

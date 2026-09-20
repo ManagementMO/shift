@@ -601,12 +601,15 @@ export class Damage {
   }
 
   update(t: number, c: StormCenter | null): void {
-    for (const b of this.live) b.pose(t, c, this.path.radius)
+    for (const b of this.live) {
+      b.root.setEnabled(!this.city.isHidden(b.d.key.slice(b.d.key.indexOf(':') + 1)))
+      if (b.root.isEnabled()) b.pose(t, c, this.path.radius)
+    }
     let nf = 0
     const dust: SmokePuff[] = []
     for (const b of this.live) {
       const d = b.d
-      if (!d.collapse || t < d.tCollapse) continue
+      if (!b.root.isEnabled() || !d.collapse || t < d.tCollapse) continue
       const td = (t - d.tCollapse) / DISPLAY_SCALE
       const nFrag = fragmentCount(d.radius, d.h)
       for (let j = 0; j < nFrag; j++) {

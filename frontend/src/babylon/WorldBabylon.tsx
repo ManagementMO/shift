@@ -156,6 +156,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         let best: { id: string; name: string } | null = null
         let bestD = STOP_PICK_PX * STOP_PICK_PX
         for (const st of ws.world.stops) {
+          if (ws.orbital.clearedAt(st.x, st.z)) continue
           const p = project(st.x, 0, st.z)
           const d = (p.x - sx) * (p.x - sx) + (p.y - sy) * (p.y - sy)
           if (d < bestD) {
@@ -168,13 +169,13 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         if (!g) return null
         const tol = CORRIDOR_PICK_PX * map.metresPerPixel(sx, sy)
         const incident = nav.incidentAt(g[0], g[1], tol, new Set(closuresAt(clock.t).map((r) => r.restriction_id)))
-        if (incident) return incident
+        if (incident && !ws.orbital.clearedAt(g[0], g[1])) return incident
         if (navMode) return nav.regionAt(g[0], g[1], tol)
         // saved developments are drawn as their own meshes; base buildings come from the prism index
         const dev = ws.scene.pick(sx, sy, (mesh) => !!mesh.metadata?.development_id)
         const devId = dev?.pickedMesh?.metadata?.development_id
         if (devId) return { kind: 'development', id: String(devId), name: String(devId) }
-        const b = buildings.pick(map.pickRay(sx, sy))
+        const b = buildings.pick(map.pickRay(sx, sy), 20000, id => ws.city.isHidden(id))
         return b && !ws.city.isHidden(b.info.id) ? { kind: 'building', id: b.info.id, name: b.info.name ?? b.info.id } : null
       }
       const applyHover = (t: Target): void => {
@@ -267,7 +268,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
           // the Road closures tool is open: a click on a drivable street selects it (both directions) for closing,
           // ahead of any car or person standing on it; an existing closure still opens its card below
           const g = map.unprojectGround(p.x, p.y)
-          const edges = g ? pickedRoad(streets, g[0], g[1]) : null
+          const edges = g && !ws.orbital.clearedAt(g[0], g[1]) ? pickedRoad(streets, g[0], g[1]) : null
           if (edges) {
             live.discard()
             s.setGhost({ edges, stops: [], hazard: null })
@@ -367,6 +368,8 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         nav.setSelected(selectedGround(sel, nav, buildings))
         marks(ws, overlay, developments, weather, clock.t, side)
       }
+      ws.orbital.onImpact = () => { useStore.getState().select(null); applyHover(null); sync() }
+      ws.orbital.onComplete = (id, impact) => useGodVisuals.getState().completeLaser(id, impact)
       syncRef.current = sync
       sync()
       ws.simT = clock.t
@@ -433,6 +436,8 @@ function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverla
     return
   }
   const view = live.getSnapshot()
+  const savedDevelopments = view.primary?.state.developments ?? []
+  ws.orbital.setStrikes(side === 'left' ? [] : useGodVisuals.getState().lasers.map(event => event.strike), savedDevelopments)
   const closures = closuresAt(t)
   const closed = closures.flatMap((r) => r.edge_ids)
   // a selected closure is outlined by the navigation overlay; its barricades stay visible, so no focus ribbon here
@@ -443,7 +448,7 @@ function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverla
   const access = change?.kind === 'development' ? view.draft?.access?.map((a) => a.edge_id) ?? [] : []
   overlay.set({ closed, ghost: side === 'left' ? [] : [...ghost, ...access], focus, ghostStops: side === 'left' ? [] : s.ghost?.stops ?? [] })
   const draft = side !== 'left' ? s.developmentDraft : null
-  developments.set({ developments: view.primary?.state.developments ?? [], draft, placed: s.developmentPlaced,
+  developments.set({ developments: savedDevelopments.filter(d => !ws.orbital.isDevelopmentHidden(d.development_id)), draft, placed: s.developmentPlaced,
     ghostPosition: draft ? s.developmentPlaced ? draft.position : s.developmentHover : null, invalidDraft: !!s.developmentError && s.developmentPlaced,
     focusedId: s.selection?.kind === 'development' ? s.selection.id : null, zones: s.pack?.zones ?? [], t })
   ws.storm.setHazards([...(s.ghost?.hazard ? [s.ghost.hazard] : []), ...(side === 'left' ? [] : useGodVisuals.getState().events.map(event => event.track))])

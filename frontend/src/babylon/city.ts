@@ -110,12 +110,12 @@ export interface CityMeshes {
   materials: CityMaterials
   foliage: StandardMaterial
   buildingRanges: Map<string, BuildingRange[]>
-  setBuildingsHidden(keys: Iterable<string>, hidden: boolean): void
+  setBuildingsHidden(keys: Iterable<string>, hidden: boolean, owner?: string): void
   /**
    * Scenario-local demolitions: hide exactly these base buildings / landmarks (ids as `BuildingIndex` reports them —
    * OSM `source_id`, massing id or landmark id) and restore everything else.
    */
-  hideBuildings(ids: Iterable<string>): void
+  hideBuildings(ids: Iterable<string>, owner?: string): void
   isHidden(id: string): boolean
   dispose(): void
 }
@@ -353,13 +353,17 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     if (ranges.length) buildingRanges.set(key, ranges)
   }
   const originals = new Map<Mesh, Float32Array>()
-  const hidden = new Set<string>()
-  const setBuildingsHidden = (keys: Iterable<string>, hide: boolean): void => {
+  const hidden = new Map<string, Set<string>>()
+  const setBuildingsHidden = (keys: Iterable<string>, hide: boolean, owner = 'damage'): void => {
     const dirty = new Set<Mesh>()
     for (const key of keys) {
-      if (hide === hidden.has(key)) continue
-      if (hide) hidden.add(key)
+      const owners = hidden.get(key) ?? new Set<string>()
+      const wasHidden = owners.size > 0
+      if (hide) owners.add(owner)
+      else owners.delete(owner)
+      if (owners.size) hidden.set(key, owners)
       else hidden.delete(key)
+      if (wasHidden === (owners.size > 0)) continue
       for (const r of buildingRanges.get(key) ?? []) {
         const positions = r.mesh.getVerticesData(VertexBuffer.PositionKind) as Float32Array | null
         if (!positions) continue
@@ -400,19 +404,23 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
   const landmarkById = new Map(world.landmarks.map((l) => [l.id, l]))
   const keysFor = (id: string): string[] => [`osm:${id}`, massingKey(id)].filter((k) => buildingRanges.has(k))
   const demolished = new Set<string>()
-  const hideBuildings = (ids: Iterable<string>): void => {
+  const demolitionOwners = new Map<string, Set<string>>()
+  const hideBuildings = (ids: Iterable<string>, owner = 'demolition'): void => {
     const next = new Set(ids)
-    if (next.size === demolished.size && [...next].every((id) => demolished.has(id))) return
-    for (const id of new Set([...demolished, ...next])) {
-      const show = !next.has(id)
-      setBuildingsHidden(keysFor(id), !show)
+    const previous = demolitionOwners.get(owner) ?? new Set<string>()
+    if (next.size === previous.size && [...next].every((id) => previous.has(id))) return
+    if (next.size) demolitionOwners.set(owner, next)
+    else demolitionOwners.delete(owner)
+    demolished.clear()
+    for (const group of demolitionOwners.values()) for (const id of group) demolished.add(id)
+    for (const id of new Set([...previous, ...next])) {
+      const show = !demolished.has(id)
+      setBuildingsHidden(keysFor(id), next.has(id), owner)
       const landmark = landmarkById.get(id)
       if (!landmark) continue
       for (const mesh of chunks) if (mesh.metadata?.landmarkId === id && !(show && mesh.metadata?.modelLoaded)) mesh.setEnabled(show)
       scene.getTransformNodeByName(`model-${landmark.kind}`)?.setEnabled(show)
     }
-    demolished.clear()
-    for (const id of next) demolished.add(id)
   }
 
   // --- stops

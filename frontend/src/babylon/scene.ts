@@ -38,6 +38,7 @@ import type { WorldData } from './worldData'
 import { buildStreetDetails } from './streetDetails'
 import { loadLandmarkModels } from './landmarkModels'
 import { StormSystem } from './tornado'
+import { OrbitalLaserSystem } from './orbitalLaser'
 import { PlaneFlyover, planeShadowHeight } from './plane'
 
 export interface WorldSceneOptions {
@@ -65,6 +66,7 @@ export class WorldScene {
   readonly buildings: BuildingIndex
   readonly traffic: Traffic
   readonly storm: StormSystem
+  readonly orbital: OrbitalLaserSystem
   readonly plane: PlaneFlyover
   readonly fill: HemisphericLight
   readonly assetsReady: Promise<void>
@@ -238,8 +240,10 @@ export class WorldScene {
     this.buildings = new BuildingIndex(world)
     this.traffic = new Traffic(scene, this.frame, balanced ? null : this.shadows, world.surfaces ? Y.road : Y.path)
     this.storm = new StormSystem(scene, this.frame, world, this.city, balanced ? null : this.shadows)
+    this.orbital = new OrbitalLaserSystem(scene, this.frame, this.city, this.buildings, this.traffic, () => this.invalidateShadows())
     this.plane = new PlaneFlyover(scene, this.shadows, world.crs.bounds_world, roofHeight)
     scene.onBeforeRenderObservable.add(() => {
+      this.orbital.update(performance.now() / 1000)
       const p = this.camera.cam.globalPosition
       this.traffic.update(this.simT, { x: p.x, y: p.y, z: p.z, radius: this.camera.cam.radius })
       this.storm.update(this.simT)
@@ -301,6 +305,7 @@ export class WorldScene {
     window.removeEventListener('resize', this.resize)
     this.engine.stopRenderLoop()
     this.camera.cancel()
+    this.orbital.dispose()
     this.plane.dispose()
     this.storm.dispose()
     this.traffic.dispose()

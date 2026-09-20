@@ -55,6 +55,19 @@ describe('building index', () => {
     expect(courtyard.overlapsCircle(12, 0, 6, 0.5, 12)).toBe(true)
   })
 
+  it('returns each struck building once, including footprint edges, massing and landmarks', () => {
+    expect(index.inCircle(70, 0, 20)).toEqual(['tower'])
+    expect(index.inCircle(300, 0, 250).sort()).toEqual(['cn', 'm1', 'tower'])
+    const courtyard = new BuildingIndex({ buildings: [{ id: 'court', cat: 'office', h: 20, ring: square(0, 0, 30), holes: [square(0, 0, 15)] }], landmarks: [] })
+    expect(courtyard.inCircle(0, 0, 10)).toEqual([])
+    expect(courtyard.inCircle(0, 0, 16)).toEqual(['court'])
+  })
+
+  it('picks through erased buildings rather than letting invisible geometry block the ray', () => {
+    expect(index.pick(ray([-200, 5, 0], [600, 5, 0]), 20000, id => id === 'low')?.info.id).toBe('tower')
+    expect(index.pick(ray([-200, 5, 0], [600, 5, 0]), 20000, () => true)).toBeNull()
+  })
+
   it('picks the building whose roof the ray looks down onto', () => {
     expect(index.pick(ray([0, 500, -300], [0, 0, 0]))?.info.id).toBe('low')
     expect(index.pick(ray([100, 500, -300], [100, 0, 0]))?.info.id).toBe('tower')

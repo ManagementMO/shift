@@ -197,7 +197,47 @@
 .gp-shell.gp-live .live-panel.gp-glass form { gap: 10px; }
 .gp-shell.gp-live .live-panel.gp-glass :is(select, input:not([type=range])) { min-height: 32px; padding: 6px 9px; font-size: 12px; }
 .gp-shell.gp-live .live-panel.gp-glass .live-submit { min-height: 34px; padding: 7px 10px; font-size: 12px; }
-@media (max-width: 900px) { .gp-shell { --gp-panel-top: calc(var(--gp-edge) + 96px); } }
+.gp-shell .gp-laser-reticle { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 48; pointer-events: none; overflow: hidden; }
+.gp-shell .gp-laser-reticle polygon { fill: #41ed7418; stroke: #a5ffbd; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.gp-shell .gp-laser-reticle path { fill: none; stroke: #d2ffdf; stroke-width: 2; }
+.gp-shell .gp-laser-targeting { position: absolute; top: var(--gp-panel-top); right: var(--gp-edge); z-index: 60; width: var(--gp-popover-width); max-height: var(--gp-panel-max-height); overflow-y: auto; display: grid; gap: 9px; padding: 12px; border-radius: 15px; border-color: #adf7c75c; pointer-events: auto; }
+.gp-shell .gp-laser-targeting header { display: flex; align-items: center; gap: 8px; }
+.gp-shell .gp-laser-targeting header strong { flex: 1; font-size: 14px; }
+.gp-shell .gp-laser-targeting header > svg { color: #9cf8b9; }
+.gp-shell .gp-laser-targeting header button { width: 28px; min-width: 28px; height: 28px; min-height: 28px; padding: 4px; }
+.gp-shell .gp-laser-targeting p { margin: 0; font-size: 12px; line-height: 1.5; }
+.gp-shell .gp-laser-targeting small { color: #c6e7d3; font-size: 10px; }
+.gp-shell .gp-laser-targeting > button { min-height: 32px; padding: 5px 8px; font-size: 12px; }
+.gp-shell .gp-laser-radius { display: grid; gap: 7px; font-size: 12px; }
+.gp-shell .gp-laser-radius > span { display: flex; justify-content: space-between; gap: 10px; }
+.gp-shell .gp-laser-radius input { accent-color: #94f4b0; margin: 0; }
+.gp-shell .gp-laser-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr); gap: 8px; }
+.gp-shell .gp-laser-actions button { min-width: 0; min-height: 40px; padding: 8px; font-size: 12px; white-space: normal; }
+.gp-shell .gp-laser-actions button svg { flex-shrink: 0; }
+.gp-shell .gp-laser-actions .gp-laser-fire { color: #123823; background: #bbf7ca; border-color: #d9ffe3; }
+.gp-shell .gp-laser-actions .gp-laser-fire:disabled { opacity: .45; }
+.gp-shell .gp-laser-status { margin: 0; color: #c4ffd5; font-size: 13px; }
+.gp-shell .gp-laser-result h2 { min-width: 0; font-size: 18px; }
+.gp-shell .gp-laser-result .gp-facts { font-size: 12px; gap: 10px; }
+.gp-shell .gp-laser-result .gp-laser-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.gp-shell .gp-laser-config .gp-event-config-actions { grid-template-columns: minmax(0, .8fr) minmax(0, 1.4fr); gap: 8px; }
+.gp-shell .gp-laser-config .gp-event-config-actions button { min-width: 0; padding: 8px 9px; gap: 6px; font-size: 12px; white-space: normal; }
+@media (max-width: 600px) and (max-height: 700px) {
+  .gp-shell .gp-laser-config .gp-event-placement-hint { display: none; }
+  .gp-shell .gp-laser-config .gp-event-config-heading { padding-bottom: 10px; }
+}
+@media (max-width: 900px) {
+  .gp-shell { --gp-panel-top: calc(var(--gp-edge) + 96px); }
+  .gp-shell :is(.gp-laser-config, .gp-laser-result).gp-glass { max-height: calc(100dvh - var(--gp-panel-top) - var(--gp-edge) - 124px); }
+}
+@media (max-width: 600px) {
+  .gp-shell .gp-laser-targeting { top: auto; bottom: calc(var(--gp-edge) + 114px); left: calc(var(--gp-edge) + var(--gp-rail-width) + 8px); width: auto; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 6px 8px; padding: 10px; }
+  .gp-shell .gp-laser-targeting :is(header, p, label) { grid-column: 1 / -1; }
+  .gp-shell .gp-laser-targeting .gp-laser-radius { grid-template-columns: 96px minmax(0, 1fr); align-items: center; }
+  .gp-shell .gp-laser-targeting .gp-laser-actions { grid-template-columns: 1fr; }
+  .gp-shell .gp-laser-targeting .gp-laser-actions > button:first-child, .gp-shell .gp-laser-targeting > small { display: none; }
+  .gp-shell .gp-laser-targeting > button, .gp-shell .gp-laser-targeting .gp-laser-actions button { min-width: 0; min-height: 36px; white-space: normal; line-height: 1.3; }
+}
 
 /* city log: announcements in the voice of the department that would issue them, newest first */
 .gp-shell .gp-city-log { display: grid; gap: 14px; align-content: start; }
