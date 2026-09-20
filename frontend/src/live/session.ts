@@ -20,11 +20,17 @@ export function useLive(): LiveViewState {
 /** Default city: the live page's setup form values, so arriving from the globe needs no form. */
 export const DEFAULT_LIVE_CONFIG: Omit<LiveConfig, 'pack_id'> = { seed: 7, horizon_s: 3600, initial_population: 600, fleet_size: 2, temperature_c: 20, car_share: 0.35 }
 
-const reusable = (s: LiveSession) => s.status !== 'failed' && s.status !== 'completed' && s.available_until_s >= 0 && s.available_until_s < s.horizon_s
+/** A restore re-simulates the whole recording; beyond this much history a fresh city starts faster than waiting. */
+const QUICK_RESTORE_S = 120
+/** Continue a city whose SUMO is alive, or a closed one short enough to restore quickly; anything else starts anew. */
+const reusable = (s: LiveSession) =>
+  s.available_until_s >= 0 && s.available_until_s < s.horizon_s
+  && (s.status === 'paused' || s.status === 'running' || s.status === 'starting' || (s.status === 'closed' && s.available_until_s <= QUICK_RESTORE_S))
 
 /**
  * Enter the city: continue the most recent usable session of this pack, else start a fresh one, and keep it
- * playing. Starting SUMO takes a few seconds; the controller reports progress through `busy`.
+ * playing. Starting SUMO takes a few seconds; the controller reports progress through `busy`. Closed sessions with a
+ * long history stay listed on the globe for an explicit resume rather than blocking arrival on a slow restore.
  */
 export async function enterCity(packId: string): Promise<void> {
   live.start()
