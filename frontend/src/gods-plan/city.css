@@ -59,6 +59,8 @@
 .gp-shell .gp-legacy-inline .toolpanel { position: relative; inset: auto; transform: none; width: 100%; max-height: none; border: 0; background: none; box-shadow: none; backdrop-filter: none; padding: 0; }
 .gp-shell .gp-legacy-inline .toolpanel-head { display: none; }
 .gp-shell .gp-legacy-inline .tool { display: grid; gap: 13px; padding: 5px 0; }
+/* the tool lists (District / Corridor, the streets) are glass buttons: give them room to read as separate rows */
+.gp-shell .gp-legacy-inline .list { gap: 8px; max-height: none; }
 .gp-shell .gp-legacy-inline label { color: #c9dfef; }
 .gp-shell .gp-legacy-inline select,.gp-shell .gp-legacy-inline input:not([type=checkbox]):not([type=range]),.gp-shell .gp-legacy-inline textarea { width: 100%; background: #13374f4d; color: #f0f7ff; border: 1px solid #d9efff40; border-radius: 12px; padding: 10px 12px; margin-top: 7px; font: inherit; }
 .gp-shell select option { background: #315b78; color: white; }
