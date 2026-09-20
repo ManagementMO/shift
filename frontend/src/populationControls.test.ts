@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { defaultPopulationSpec, populationCountLimit, populationDefinitionReason, populationScaleReason, populationUnavailableReason } from './populationControls'
+import { defaultPopulationModelIds, defaultPopulationSpec, populationCountLimit, populationDefinitionReason, populationScaleReason, populationUnavailableReason } from './populationControls'
 import { claude, openai, populationStatus as status } from './population.testData'
 import { parsePopulationStatus } from './populationValidation'
 
 describe('explicit native population controls', () => {
-  it('uses the default city, seed, horizon, all five classes and public configured brains', () => {
+  it('uses a short default run, all five classes and one reviewed model within a $5 cap', () => {
     const spec = defaultPopulationSpec(status())
-    expect(spec).toMatchObject({ pack_id: 'toronto', seed: 7, count: 12, horizon_s: 600, enabled_classes: ['pedestrian', 'bicycle', 'passenger', 'delivery', 'truck'], brains: [claude, openai] })
-    expect(spec.budget.max_cost_usd).toBe(20)
+    expect(spec).toMatchObject({ pack_id: 'toronto', seed: 7, count: 12, horizon_s: 600, enabled_classes: ['pedestrian', 'bicycle', 'passenger', 'delivery', 'truck'], brains: [claude] })
+    expect(spec.budget.max_cost_usd).toBe(5)
+    expect(defaultPopulationSpec(status(), { modelIds: [claude.model_id, openai.model_id] }).brains).toEqual([claude, openai])
+    expect(defaultPopulationModelIds({ ...status(), models: [openai] })).toEqual([openai.model_id])
     expect(() => defaultPopulationSpec(status(), { count: 240 })).toThrow(/20 residents/)
     expect(defaultPopulationSpec({ ...status(), initial_scale_gate: 300 }, { count: 240 }).count).toBe(240)
   })
@@ -15,7 +17,7 @@ describe('explicit native population controls', () => {
   it('never turns unavailable native cognition or rules fixtures into a successful native spec', () => {
     const unavailable = { ...status(), available: false, reason: 'JiuwenSwarm not installed' }
     expect(populationUnavailableReason(unavailable)).toContain('JiuwenSwarm not installed')
-    expect(defaultPopulationSpec(unavailable).brains).toEqual([claude, openai])
+    expect(defaultPopulationSpec(unavailable).brains).toEqual([claude])
     const rules = { ...status(), models: [{ ...claude, control_mode: 'rules' as const }] }
     expect(populationUnavailableReason(rules)).toMatch(/rules/i)
     expect(() => defaultPopulationSpec(rules)).toThrow(/rules/i)
