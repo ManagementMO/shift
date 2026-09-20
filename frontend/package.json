@@ -19,6 +19,7 @@
     "@deck.gl/layers": "^9.4.0",
     "@deck.gl/mapbox": "^9.4.0",
     "@deck.gl/mesh-layers": "^9.4.0",
+    "@fontsource-variable/geist": "5.3.0",
     "@luma.gl/core": "^9.4.1",
     "@luma.gl/engine": "^9.4.1",
     "deck.gl": "^9.4.0",

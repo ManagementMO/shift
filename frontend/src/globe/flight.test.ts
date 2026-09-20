@@ -3,7 +3,7 @@ import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector'
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine'
 import { Scene } from '@babylonjs/core/scene'
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera'
-import { destinationPack, flightPose, geoPoint, pointGeo, orbitRadius, lockOrbit, LOCATIONS, type Orbit } from './flight'
+import { destinationPack, flightPose, focusPose, searchLocations, geoPoint, pointGeo, orbitRadius, lockOrbit, GLOBE_FOV, LOCATIONS, type Orbit } from './flight'
 
 describe('Globe entry flight', () => {
   it('puts pins on the sphere and round-trips geographic coordinates', () => {
@@ -27,9 +27,16 @@ describe('Globe entry flight', () => {
   })
 
   it('backs away on narrow screens so the globe fits', () => {
-    expect(orbitRadius(1000, 650)).toBe(3.25)
-    expect(orbitRadius(390, 588)).toBeGreaterThan(4.5)
-    expect(orbitRadius(0, 0)).toBe(3.25)
+    expect(orbitRadius(1000, 650)).toBeGreaterThan(3.25)
+    expect(orbitRadius(390, 588)).toBeGreaterThan(orbitRadius(1000, 650))
+    expect(orbitRadius(0, 0)).toBe(orbitRadius(1000, 650))
+  })
+
+  it.each([[900, 450], [660, 360], [320, 520], [288, 240], [1600, 380], [120, 640]])('fits the globe inside the actual %i × %i workspace', (width, height) => {
+    const radius = orbitRadius(width, height)
+    const diameter = height / (Math.tan(GLOBE_FOV / 2) * Math.sqrt(radius * radius - 1))
+    expect(diameter).toBeGreaterThan(0)
+    expect(diameter).toBeLessThan(Math.min(width, height))
   })
 
   it('locks manual wheel and pinch zoom while leaving rotation and scripted descent available', () => {
@@ -63,6 +70,29 @@ describe('Globe entry flight', () => {
     for (const place of [...LOCATIONS, { id: 'custom', name: 'Selected location', region: 'Globe', lat: 0, lon: 180 }]) {
       expect(destinationPack(place)).toBe('toronto')
     }
+  })
+
+  it('finds cities and countries regardless of case, surrounding spaces, or accents', () => {
+    expect(searchLocations('')).toEqual(LOCATIONS)
+    expect(searchLocations('  LoNDoN  ').map((place) => place.id)).toEqual(['london'])
+    expect(searchLocations('sao paulo').map((place) => place.id)).toEqual(['sao-paulo'])
+    expect(searchLocations('canada').map((place) => place.id)).toEqual(['toronto'])
+    expect(searchLocations('Atlantis')).toEqual([])
+  })
+
+  it('rotates toward a chosen city without zooming or starting an entry flight', () => {
+    const from = { alpha: Math.PI - 0.01, beta: 1.1, radius: 3.25 }
+    const place = { lat: 35, lon: 1 }
+    expect(focusPose(from, place, 0)).toEqual(from)
+    for (let step = 0; step <= 20; step++) {
+      const pose = focusPose(from, place, step / 20)
+      expect(pose.radius).toBe(from.radius)
+      expect(Math.abs(pose.alpha - from.alpha)).toBeLessThan(Math.PI)
+      expect(Object.values(pose).every(Number.isFinite)).toBe(true)
+    }
+    const final = focusPose(from, place, 1)
+    expect(final.beta).toBeCloseTo(Math.PI / 2 - place.lat * Math.PI / 180)
+    expect(focusPose(from, place, 2)).toEqual(final)
   })
 
   it('approaches the selected point without entering the globe or jumping at the date line', () => {
