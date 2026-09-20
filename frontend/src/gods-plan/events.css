@@ -268,19 +268,19 @@
 }
 
 .gp-shell .gp-event-glyph-orbital {
-  color: #fb784b;
+  color: #258e54;
 }
 
 .gp-shell .gp-event-glyph-orbital stop:first-child {
-  stop-color: #ffa276;
+  stop-color: #d1ffe0;
 }
 
 .gp-shell .gp-event-glyph-orbital stop:nth-child(2) {
-  stop-color: #ff845b;
+  stop-color: #65ea91;
 }
 
 .gp-shell .gp-event-glyph-orbital stop:last-child {
-  stop-color: #ef6d45;
+  stop-color: #258e54;
 }
 
 .gp-shell .gp-event-glyph-tornado {

@@ -112,7 +112,7 @@ export class BuildingIndex {
     return this.info.get(id)
   }
 
-  overlapsCircle(x: number, z: number, radius: number, y0: number, y1: number): boolean {
+  private *circlePrisms(x: number, z: number, radius: number): Generator<Prism> {
     const seen = new Set<number>()
     for (let cx = Math.floor((x - radius) / CELL); cx <= Math.floor((x + radius) / CELL); cx++) {
       for (let cz = Math.floor((z - radius) / CELL); cz <= Math.floor((z + radius) / CELL); cz++) {
@@ -120,16 +120,23 @@ export class BuildingIndex {
           if (seen.has(k)) continue
           seen.add(k)
           const p = this.prisms[k]
-          if (p.y1 <= y0 || p.y0 >= y1) continue
-          if (inside(x, z, p.ring, p.holes) || boundaryDistance(x, z, p.ring) < radius || p.holes?.some(h => boundaryDistance(x, z, h) < radius)) return true
+          if (inside(x, z, p.ring, p.holes) || boundaryDistance(x, z, p.ring) <= radius || p.holes?.some(h => boundaryDistance(x, z, h) <= radius)) yield p
         }
       }
     }
+  }
+
+  inCircle(x: number, z: number, radius: number): string[] {
+    return [...new Set([...this.circlePrisms(x, z, radius)].map(p => p.building))]
+  }
+
+  overlapsCircle(x: number, z: number, radius: number, y0: number, y1: number): boolean {
+    for (const p of this.circlePrisms(x, z, radius)) if (p.y1 > y0 && p.y0 < y1) return true
     return false
   }
 
   /** The nearest building the ray meets, or null; `maxT` bounds the search along the ray (metres). */
-  pick(ray: Ray, maxT = 20000): { info: BuildingInfo; t: number } | null {
+  pick(ray: Ray, maxT = 20000, hidden?: (id: string) => boolean): { info: BuildingInfo; t: number } | null {
     const { origin: o, dir: d } = ray
     // Height band all buildings can occupy: [0, tallest]. The ray's stretch inside it is what can hit anything.
     const band = tRange(o.y, d.y, 0, this.tallest, maxT)
@@ -144,6 +151,7 @@ export class BuildingIndex {
         for (const k of this.cells.get(cellKey(cx, cz)) ?? []) {
           if (seen.has(k)) continue
           seen.add(k)
+          if (hidden?.(this.prisms[k].building)) continue
           const t = hitPrism(this.prisms[k], o, d, maxT)
           if (t !== null && (!best || t < best.t)) best = { info: this.info.get(this.prisms[k].building)!, t }
         }

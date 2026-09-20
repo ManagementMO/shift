@@ -179,7 +179,7 @@ const eventPalettes: Record<string, EventPalette> = {
   riot: ['#b1a5db', '#8679ba', '#62538e'],
   transit: ['#85c9ed', '#519ac8', '#386eaa'],
   custom: ['#bcd8ff', '#9297e2', '#7661b1'],
-  orbital: ['#d7c3ff', '#a487e4', '#6658ba'],
+  orbital: ['#d1ffe0', '#65ea91', '#258e54'],
   normal: ['#ffed9a', '#ffd56c', '#efb64f'],
 }
 
@@ -277,12 +277,12 @@ function eventArtwork(kind: string, paint: string, light: string, shade: string)
     case 'orbital':
       return (
         <>
-          <path d="M24 25 39 4m-9 25L45 8M19 18 33 3" fill="none" stroke={light} strokeWidth="3" strokeLinecap="round" />
-          <path d="M12 40c-7-4-8-12-3-18 5-5 11-6 17-2l11-8-5 16c-1 10-12 17-20 12Z" fill={paint} />
-          <circle cx="17" cy="29" r="8" fill={paint} stroke="#e7d9ff" strokeWidth="1.2" />
-          <circle cx="15" cy="26" r="2.2" fill={shade} opacity=".5" />
-          <circle cx="20" cy="31" r="2.7" fill={shade} opacity=".35" />
-          <path d="m38 30 1.5 3.5L43 35l-3.5 1.5L38 40l-1.5-3.5L33 35l3.5-1.5L38 30Z" fill={light} />
+          <ellipse cx="24" cy="39" rx="17" ry="6" fill={shade} opacity=".2" />
+          <ellipse cx="24" cy="38" rx="13" ry="4" fill={paint} stroke={light} strokeWidth="1.5" />
+          <path d="M17 3h14v33c0 4-14 4-14 0V3Z" fill={paint} opacity=".9" />
+          <path d="M22 3v33m4-33v33" stroke="#eaffef" strokeWidth="2.5" />
+          <path d="M12 12v13m24-17v15" stroke={light} strokeWidth="1.6" strokeLinecap="round" opacity=".75" />
+          <ellipse cx="24" cy="4" rx="7" ry="2" fill={light} />
         </>
       )
     default:
