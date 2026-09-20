@@ -30,6 +30,15 @@ from cityshift.providers import LLMClient
 from cityshift.store import Store, create_store
 
 
+class PopulationScenarioError(ValueError):
+    pass
+
+
+def require_transport(scenario: ScenarioSpec) -> None:
+    if scenario.scenario_kind != "transport":
+        raise PopulationScenarioError("Population scenarios use the population API, not transport planning or interventions.")
+
+
 class Service:
     def __init__(self, store: Store | None = None, workers: int = 2):
         self.store = store if store is not None else create_store()
@@ -62,6 +71,7 @@ class Service:
         return self.register_scenario(scenario, demand)
 
     def register_scenario(self, scenario: ScenarioSpec, demand: DemandSet) -> ScenarioSpec:
+        require_transport(scenario)
         with self.store.lock:
             existing = self.store.get_scenario(scenario.scenario_id)
             if existing is not None and (
@@ -92,6 +102,7 @@ class Service:
 
     # plans ---------------------------------------------------------------------------------------
     def register_plan(self, scenario: ScenarioSpec, plan: ServicePlan) -> ValidationReport:
+        require_transport(scenario)
         pack = self.pack(scenario.pack_id)
         report = validate_plan(pack, scenario, plan, self.store.get_demand(scenario.scenario_id))
         self.store.put_plan(scenario.scenario_id, plan, report)
@@ -106,6 +117,7 @@ class Service:
     # runs ----------------------------------------------------------------------------------------
     def submit_run(self, sid: str, pid: str, seed: int) -> SimulationRun:
         scenario = self.scenario(sid)
+        require_transport(scenario)
         plan = self.plan(sid, pid)
         demand = self.demand(sid)
         pack = self.pack(scenario.pack_id)
@@ -144,20 +156,24 @@ class Service:
     # prompt-to-edit ------------------------------------------------------------------------------
     def preview_edit(self, sid: str, prompt: str, use_ai: bool = True) -> InterventionProposal:
         scenario = self.scenario(sid)
+        require_transport(scenario)
         return edits.preview(self.pack(scenario.pack_id), scenario, prompt, llm=LLMClient() if use_ai else None)
 
     def apply_edit(self, sid: str, proposal: InterventionProposal) -> ScenarioSpec:
         scenario = self.scenario(sid)
+        require_transport(scenario)
         child = edits.apply(self.pack(scenario.pack_id), scenario, proposal)
         return self.register_scenario(child, self.demand(sid))
 
     def preview_development(self, sid: str, spec: DevelopmentSpec) -> DevelopmentPreview:
         scenario = self.scenario(sid)
+        require_transport(scenario)
         proposal, _ = developments.prepare_development(self.pack(scenario.pack_id), scenario, self.demand(sid), spec)
         return proposal
 
     def apply_development(self, sid: str, proposal: DevelopmentPreview) -> ScenarioSpec:
         scenario = self.scenario(sid)
+        require_transport(scenario)
         child, demand = developments.apply_development(self.pack(scenario.pack_id), scenario, self.demand(sid), proposal)
         with self.store.lock:
             saved = self.register_scenario(child, demand)
@@ -168,12 +184,16 @@ class Service:
 
     def remove_development(self, sid: str, development_id: str) -> ScenarioSpec:
         with self.store.lock:
-            scenario, demand = developments.remove_development(self.scenario(sid), self.demand(sid), development_id)
+            original = self.scenario(sid)
+            require_transport(original)
+            scenario, demand = developments.remove_development(original, self.demand(sid), development_id)
             return self._rewrite_scenario(scenario, demand)
 
     def demolish_building(self, sid: str, building_id: str) -> ScenarioSpec:
         with self.store.lock:
-            scenario = developments.demolish_building(self.scenario(sid), building_id)
+            original = self.scenario(sid)
+            require_transport(original)
+            scenario = developments.demolish_building(original, building_id)
             return self._rewrite_scenario(scenario, self.demand(sid))
 
     def _rewrite_scenario(self, scenario: ScenarioSpec, demand: DemandSet) -> ScenarioSpec:
@@ -189,7 +209,11 @@ class Service:
 
     def current_runs(self, sid: str) -> list[SimulationRun]:
         """Runs whose identity still matches the scenario's current content; in-place edits make older ones stale."""
-        scenario, demand = self.scenario(sid), self.demand(sid)
+        scenario = self.scenario(sid)
+        if scenario.scenario_kind == "population":
+            return [run for run in self.store.list_runs(sid)
+                    if run.run_kind == "population" and run.population_id == scenario.population_id]
+        demand = self.demand(sid)
         current = []
         for run in self.store.list_runs(sid):
             plan = self.store.get_plan(sid, run.plan_id)
@@ -200,6 +224,7 @@ class Service:
     # agents --------------------------------------------------------------------------------------
     def investigate(self, sid: str, problem: str, constraint: str, options: InvestigationOptions | None = None) -> Investigation:
         scenario = self.scenario(sid)
+        require_transport(scenario)
         demand = self.demand(sid)
         pack = self.pack(scenario.pack_id)
         inv = new_investigation(sid, problem, constraint, options)

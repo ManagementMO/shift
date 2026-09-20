@@ -115,19 +115,48 @@ def ensure_extra_stops(net, stops_xml: Path, specs: tuple[ExtraStopSpec, ...]) -
     return added
 
 
-def nearest_edge(net, lonlat: tuple[float, float], vclass: str, radius: float = 250.0):
+def connected_sidewalks(net) -> set[str]:
+    """Edge ids of the largest connected sidewalk network, walking either way along an edge. Plaza and stadium
+    footpath fragments that never join it would leave a traveler standing still, so zones and the venue avoid them."""
+    graph: dict[str, list[tuple[str, str]]] = {}
+    for e in net.getEdges():
+        if e.isSpecial() or not e.allows("pedestrian"):
+            continue
+        a, b = e.getFromNode().getID(), e.getToNode().getID()
+        graph.setdefault(a, []).append((e.getID(), b))
+        graph.setdefault(b, []).append((e.getID(), a))
+    seen: set[str] = set()
+    best: set[str] = set()
+    for start in graph:
+        if start in seen:
+            continue
+        seen.add(start)
+        component: set[str] = set()
+        stack = [start]
+        while stack:
+            for eid, other in graph[stack.pop()]:
+                component.add(eid)
+                if other not in seen:
+                    seen.add(other)
+                    stack.append(other)
+        if len(component) > len(best):
+            best = component
+    return best
+
+
+def nearest_edge(net, lonlat: tuple[float, float], vclass: str, radius: float = 250.0, allowed: set[str] | None = None):
     x, y = net.convertLonLat2XY(*lonlat)
     cands = net.getNeighboringEdges(x, y, radius)
-    cands = [(d, e) for e, d in cands if e.allows(vclass) and not e.isSpecial()]
+    cands = [(d, e) for e, d in cands if e.allows(vclass) and not e.isSpecial() and (allowed is None or e.getID() in allowed)]
     if not cands:
         raise ValueError(f"no {vclass} edge within {radius} m of {lonlat}")
     cands.sort(key=lambda t: t[0])
     return cands[0][1]
 
 
-def edges_near(net, lonlat: tuple[float, float], vclass: str, radius: float, limit: int = 8) -> list[str]:
+def edges_near(net, lonlat: tuple[float, float], vclass: str, radius: float, limit: int = 8, allowed: set[str] | None = None) -> list[str]:
     x, y = net.convertLonLat2XY(*lonlat)
-    cands = [(d, e) for e, d in net.getNeighboringEdges(x, y, radius) if e.allows(vclass) and not e.isSpecial()]
+    cands = [(d, e) for e, d in net.getNeighboringEdges(x, y, radius) if e.allows(vclass) and not e.isSpecial() and (allowed is None or e.getID() in allowed)]
     cands.sort(key=lambda t: t[0])
     return [e.getID() for _, e in cands[:limit]]
 
@@ -158,7 +187,8 @@ class ZoneSpec:
     name: str
     share: float
     anchor_stop_id: str | None = None  # explicit stop id, or
-    anchor_lonlat: tuple[float, float] | None = None  # nearest bus stop to this point
+    anchor_lonlat: tuple[float, float] | None = None  # nearest bus stop to this point, or
+    anchor_point: tuple[float, float] | None = None  # exactly this point (a district with no bus stop of its own)
 
 
 @dataclass(frozen=True)
@@ -223,11 +253,18 @@ TORONTO = CityConfig(
     venue_lonlat=(-79.3893, 43.6414),  # Rogers Centre, beside the CN Tower
     venue_name="Rogers Centre",
     zones=(
-        ZoneSpec("Z_UNION", "Union Station", 0.30, anchor_lonlat=(-79.3807, 43.6453)),
-        ZoneSpec("Z_FIN", "Financial District (King / Bay)", 0.20, anchor_lonlat=(-79.3817, 43.6489)),
-        ZoneSpec("Z_HARBOUR", "Harbourfront (Queens Quay)", 0.15, anchor_lonlat=(-79.3800, 43.6390)),
-        ZoneSpec("Z_STLAW", "St. Lawrence Market", 0.15, anchor_lonlat=(-79.3716, 43.6487)),
-        ZoneSpec("Z_LIBERTY", "Liberty Village", 0.20, anchor_lonlat=(-79.4180, 43.6385)),
+        # Three quarters of the declared demand stays in the CN Tower / Rogers Centre district so the crowd is in
+        # view; the district has no bus stop of its own, so its zones anchor on exact points.
+        ZoneSpec("Z_ROGERS", "Rogers Centre", 0.20, anchor_point=(-79.3893, 43.6414)),
+        ZoneSpec("Z_CN_TOWER", "CN Tower / Ripley's Aquarium", 0.20, anchor_point=(-79.3871, 43.6426)),
+        ZoneSpec("Z_ROUNDHOUSE", "Roundhouse Park / Steam Whistle", 0.15, anchor_point=(-79.3855, 43.6408)),
+        ZoneSpec("Z_CONVENTION", "Convention Centre (Front St W)", 0.10, anchor_point=(-79.3855, 43.6438)),
+        ZoneSpec("Z_BLUEJAYS", "Blue Jays Way / Front St W", 0.10, anchor_point=(-79.3925, 43.6432)),
+        ZoneSpec("Z_UNION", "Union Station", 0.10, anchor_lonlat=(-79.3807, 43.6453)),
+        ZoneSpec("Z_FIN", "Financial District (King / Bay)", 0.05, anchor_lonlat=(-79.3817, 43.6489)),
+        ZoneSpec("Z_HARBOUR", "Harbourfront (Queens Quay)", 0.05, anchor_lonlat=(-79.3800, 43.6390)),
+        ZoneSpec("Z_STLAW", "St. Lawrence Market", 0.025, anchor_lonlat=(-79.3716, 43.6487)),
+        ZoneSpec("Z_LIBERTY", "Liberty Village", 0.025, anchor_lonlat=(-79.4180, 43.6385)),
     ),
     corridors=(
         CorridorSpec("front_west", "Front St W, Blue Jays Way → York", "Front Street West", (43.6420, 43.6460), (-79.3950, -79.3825)),
@@ -292,18 +329,25 @@ def build_pack(cfg: CityConfig, pack_dir: Path) -> CityPack:
     stops = load_stops(net, stops_xml)
     by_id = {s.stop_id: s for s in stops}
 
+    sidewalks = connected_sidewalks(net)
     zones: list[DestinationZone] = []
     for z in cfg.zones:
         if z.anchor_stop_id is not None:
             st = by_id[z.anchor_stop_id]
+            lonlat = (st.lon, st.lat)
         elif z.anchor_lonlat is not None:
             st = _nearest_stop(stops, z.anchor_lonlat)
+            lonlat = (st.lon, st.lat)
+        elif z.anchor_point is not None:
+            lonlat = z.anchor_point
         else:
             raise ValueError(f"zone {z.zone_id} needs an anchor")
-        walk_edges = edges_near(net, (st.lon, st.lat), "pedestrian", 180.0)
-        zones.append(DestinationZone(zone_id=z.zone_id, name=z.name, edge_ids=walk_edges, lon=st.lon, lat=st.lat, share=z.share))
+        walk_edges = edges_near(net, lonlat, "pedestrian", 180.0, allowed=sidewalks)
+        if not walk_edges:
+            raise ValueError(f"zone {z.zone_id} has no connected sidewalk within 180 m of {lonlat}")
+        zones.append(DestinationZone(zone_id=z.zone_id, name=z.name, edge_ids=walk_edges, lon=lonlat[0], lat=lonlat[1], share=z.share))
 
-    venue_edge = nearest_edge(net, cfg.venue_lonlat, "pedestrian", 300.0)
+    venue_edge = nearest_edge(net, cfg.venue_lonlat, "pedestrian", 300.0, allowed=sidewalks)
     bmin = net.convertXY2LonLat(*net.getBoundary()[:2])
     bmax = net.convertXY2LonLat(*net.getBoundary()[2:])
     pack = CityPack(

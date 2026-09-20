@@ -23,6 +23,16 @@ from traci import constants as tc
 from cityshift.contracts import EntityTrack, PersonEvent, RunMetrics
 from cityshift.transport.sumo_env import binary
 
+EntityKind = Literal["bus", "car", "person", "bicycle", "delivery", "truck"]
+TRACK_KINDS: dict[str, EntityKind] = {
+    "bus": "bus", "passenger": "car", "pedestrian": "person",
+    "bicycle": "bicycle", "delivery": "delivery", "truck": "truck",
+}
+
+
+def classify_vehicle(vehicle_class: str) -> EntityKind:
+    return TRACK_KINDS.get(vehicle_class, "car")
+
 
 def _finite(value: float, fallback: float) -> float:
     return value if math.isfinite(value) else fallback
@@ -125,7 +135,8 @@ class SumoRunner:
         waiting_seconds: dict[str, float] = {pid: 0.0 for pid in cohort_ids}
         arrived: dict[str, int] = {}
         seen_persons: set[str] = set()
-        kinds: dict[str, str] = {}
+        kinds: dict[str, EntityKind] = {}
+        vehicle_classes: dict[str, str] = {}
         departed_gone: set[str] = set()
         teleports = 0
         warnings: list[str] = []
@@ -150,14 +161,15 @@ class SumoRunner:
                 # vehicles (subscriptions are registered on departure)
                 for vid in conn.simulation.getDepartedIDList():
                     conn.vehicle.subscribe(vid, VEH_VARS)
-                    kinds[vid] = "bus" if conn.vehicle.getVehicleClass(vid) == "bus" else "car"
+                    vehicle_classes[vid] = conn.vehicle.getVehicleClass(vid)
+                    kinds[vid] = classify_vehicle(vehicle_classes[vid])
                 for vid, d in conn.vehicle.getAllSubscriptionResults().items():
                     x, y = d[tc.VAR_POSITION]
                     lon, lat = self.to_lonlat(x, y)
-                    kind: Literal["bus", "car", "person"] = "bus" if kinds.get(vid) == "bus" else "car"
+                    kind = kinds.get(vid, "car")
                     tr = tracks.get(vid)
                     if tr is None:
-                        tr = tracks[vid] = EntityTrack(entity_id=vid, kind=kind, samples=[])
+                        tr = tracks[vid] = EntityTrack(entity_id=vid, kind=kind, samples=[], vehicle_class=vehicle_classes.get(vid))
                     if t % self.sample_every_s == 0:
                         sample(tr, t, lon, lat, d[tc.VAR_ANGLE], d[tc.VAR_SPEED])
                     if kind == "bus":

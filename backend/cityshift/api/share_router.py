@@ -17,7 +17,7 @@ from cityshift.providers import r2_configured
 
 router = APIRouter(prefix="/api", tags=["share"])
 EXPORT_ROOT = RUN_ROOT.parent / "exports"
-REPLAY_FILES = ("manifest.json", "metrics.json", "tracks.json", "events.json", "occupancy.json", "stop_queue.json", "cohort.json", "compile.json", "validation.json")
+REPLAY_FILES = ("manifest.json", "metrics.json", "tracks.json", "events.json", "occupancy.json", "stop_queue.json", "cohort.json", "compile.json", "validation.json", "population.json", "native.json")
 
 
 def build_export(rid: str) -> Path:

@@ -68,8 +68,11 @@ HAZARDS: dict[str, HazardProfile] = {
     "flood": HazardProfile("Flash flood", EVERYONE, 2.0, 3600, "Streets and sidewalks inside the footprint are impassable until the water recedes."),
     "tornado": HazardProfile("Tornado", EVERYONE, 4.0, 600, "A wide warning radius: everyone who sees it leaves the footprint and spreads the word."),
     "gas_leak": HazardProfile("Gas leak", EVERYONE, 3.0, 1200, "The footprint is evacuated and closed to all traffic."),
+    # weather: rain blocks nothing (people see it and hear about it; the visual is the point), a storm closes its streets
+    "rain": HazardProfile("Heavy rain", (), 1.5, 600, "Streets stay open under the downpour. People inside see it; the visual is illustrative."),
+    "storm": HazardProfile("Storm", ("passenger", "bus"), 2.0, 600, "Streets inside the footprint close to cars and buses until the storm passes. Sidewalks stay open."),
 }
-Hazard = Literal["crash", "fire", "flood", "tornado", "gas_leak"]
+Hazard = Literal["crash", "fire", "flood", "tornado", "gas_leak", "rain", "storm"]
 
 
 class IncidentChange(InputModel):

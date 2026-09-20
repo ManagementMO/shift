@@ -17,6 +17,9 @@ import { SKY_RADIUS } from './sky'
 type Bounds = WorldCrs['bounds_world']
 type FadeRange = [start: number, end: number, edgeWidth: number]
 
+/** Materials whose names start with one of these are never blended toward the sky: weather effects and scenario marks. */
+export const ATMOSPHERE_EXEMPT_PREFIXES = ['hazard-', 'overlay-']
+
 export function worldFadeRange(bounds: Bounds, radius: number, maxZ: number): FadeRange {
   const span = Math.max(1, Math.min(bounds[2] - bounds[0], bounds[3] - bounds[1]))
   return [Math.min(radius + span * 0.25, maxZ * 0.6), Math.min(radius + span, maxZ * 0.85), span * 0.1]
@@ -129,6 +132,8 @@ export function applyWorldAtmosphere(scene: Scene, bounds: Bounds, sky: Mesh): v
   scene.onBeforeRenderObservable.add(update)
   const attach = (material: Material) => {
     if (material.getScene() !== scene || material === skyMaterial) return
+    // Weather visuals and scenario marks are highlights, not scenery: they must stay legible rather than fade into the sky.
+    if (ATMOSPHERE_EXEMPT_PREFIXES.some((prefix) => material.name.startsWith(prefix))) return
     if (!(material instanceof StandardMaterial || material instanceof PBRBaseMaterial)) return
     if (!material.pluginManager?.getPlugin('WorldAtmosphere')) new WorldAtmosphere(material, state)
   }

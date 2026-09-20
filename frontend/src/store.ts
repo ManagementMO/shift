@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { api } from './api'
 import { DEFAULT_HORIZON_S, developmentError as validateDevelopment, developmentKind, developmentPreset, validDevelopmentGeometry } from './development'
 import { enterCity, live } from './live/session'
+import { createPopulationSlice, type PopulationState } from './populationState'
+import { selectionForEntity } from './selection'
 import { clock } from './world/playback'
 import { cityPose, currentPose, developmentPose, type CameraMode } from './world/camera'
 import { cameraTo, leadMap, watchCameraMode } from './world/registry'
@@ -11,6 +13,8 @@ export type Selection =
   | { kind: 'bus'; id: string }
   | { kind: 'person'; id: string }
   | { kind: 'car'; id: string }
+  | { kind: 'bicycle' | 'delivery' | 'truck'; id: string }
+  | { kind: 'resident'; id: string }
   | { kind: 'stop'; id: string }
   /** A closure in force in the live city (id = the close command); `at` is the clicked lon/lat so its card opens there. */
   | { kind: 'restriction'; id: string; at?: [number, number] }
@@ -20,7 +24,7 @@ export type Selection =
   | { kind: 'building'; id: string }
   | null
 
-export type ToolId = 'area' | 'closure' | 'development' | 'population' | 'temperature'
+export type ToolId = 'area' | 'closure' | 'development' | 'population' | 'temperature' | 'residents'
 
 /** What a tool is aiming at, drawn on the world before anything is applied: picked streets, stops, a hazard track. */
 export type Ghost = {
@@ -29,7 +33,7 @@ export type Ghost = {
   hazard: HazardTrack | null
 }
 
-type State = {
+export type State = PopulationState & {
   health: Health | null
   packs: { pack_id: string; name: string }[]
   pack: CityPack | null
@@ -92,7 +96,8 @@ export function liveDevelopments(): Development[] {
   return live.session?.developments ?? []
 }
 
-export const useStore = create<State>((set, get) => ({
+export const useStore = create<State>((set, get, store) => ({
+  ...createPopulationSlice(set, get, store),
   health: null,
   packs: [],
   pack: null,
@@ -112,15 +117,20 @@ export const useStore = create<State>((set, get) => ({
 
   async boot(requestedPackId) {
     const request = ++packSelectionRequest
+    performance.mark('boot:start')
     try {
-      const [health, packs] = await Promise.all([api.health(), api.packs()])
+      // The health probe waits on storage / provider checks (an unreachable Atlas costs seconds); the city never does.
+      void api.health().then((health) => { if (request === packSelectionRequest) set({ health }) }).catch(() => {})
+      const packs = await api.packs()
       if (request !== packSelectionRequest) return
-      set({ health, packs })
+      set({ packs })
       const packId = packs.find((p) => p.pack_id === requestedPackId)?.pack_id ?? packs.find((p) => p.pack_id === 'toronto')?.pack_id ?? packs[0]?.pack_id ?? 'toronto'
       const loaded = await loadPack(packId)
       if (request !== packSelectionRequest) return
       set(loaded)
+      performance.mark('boot:pack')
       await enterCity(packId)
+      performance.mark('boot:city')
     } catch (e) {
       if (request === packSelectionRequest) set({ error: String(e) })
     }
@@ -140,11 +150,19 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  select: (selection) => set({ selection, ...(selection?.kind === 'development' ? EMPTY_DEVELOPMENT : {}) }),
+  select: (selection) => {
+    const state = get()
+    const rx = state.primaryRunId ? state.replays[state.primaryRunId] : null
+    if (state.populationActive && rx && selection && ['bus', 'car', 'person', 'bicycle', 'delivery', 'truck'].includes(selection.kind)) {
+      selection = selectionForEntity(rx, selection.id, selection.kind as 'bus' | 'car' | 'person' | 'bicycle' | 'delivery' | 'truck', clock.t)
+    }
+    set({ selection, ...(selection?.kind === 'development' ? EMPTY_DEVELOPMENT : {}) })
+  },
   setError: (error) => set({ error }),
   // Picking a different tool ends an Area select pick (closing the panel does not: the pick runs with it closed),
   // drops the aim of any tool, and opening the development tool starts a fresh draft for the current city.
   setTool: (tool) => {
+    if (get().populationActive && tool && tool !== 'residents' && tool !== 'area') return
     const { pack } = get()
     if (tool !== get().tool) live.discard()
     set({ tool, ghost: null, ...EMPTY_DEVELOPMENT,

@@ -1,0 +1,58 @@
+{
+  "format": "exact-replacements-v1",
+  "profile": "cityshift-stateful-failures-v1",
+  "base_commit": "ad0c9dfbbd577423cc60f73edffa0a4699cc53f9",
+  "file": "openjiuwen/agent_teams/workflow/engine/primitives.py",
+  "base_sha256": "978a8c302265531f8a71d395c0fa515d74f88b14c9a823346904822a3c5ea369",
+  "patched_sha256": "af2c2bd5c55d43c4906d0d7b3a5f0a5e747cf8197f54d9ded9462ce7d464f7cf",
+  "edits": [
+    {
+      "old": "    raw_text: str | None = None\n    tokens: int | None = None\n\n\ndef _task_id():",
+      "new": "    raw_text: str | None = None\n    tokens: int | None = None\n    replayable_failure: bool = False\n\n\ndef _task_id():"
+    },
+    {
+      "old": "async def _attempt_calls(rt, opts, json_schema, model, make_call) -> _BackendCallResult:",
+      "new": "async def _attempt_calls(rt, opts, json_schema, model, make_call, *, stateful=False) -> _BackendCallResult:"
+    },
+    {
+      "old": "    burned_tokens = 0\n    for attempt in range(1, attempts + 1):",
+      "new": "    burned_tokens = 0\n    unsafe_failure = False\n    for attempt in range(1, attempts + 1):"
+    },
+    {
+      "old": "        except Exception as e:  # backend / timeout error -> retry, then skip\n            last_err = e\n",
+      "new": "        except Exception as e:  # backend / timeout error -> retry, then skip\n            last_err = e\n            unsafe_failure = unsafe_failure or isinstance(e, TimeoutError)\n"
+    },
+    {
+      "old": "            return _BackendCallResult(result=None, succeeded=False, error_detail=detail)\n        if json_schema is not None:",
+      "new": "            return _BackendCallResult(\n                result=None, succeeded=False, error_detail=detail,\n                tokens=(burned_tokens + (res.tokens or 0)) if stateful else None,\n                replayable_failure=stateful and not unsafe_failure,\n            )\n        if json_schema is not None:"
+    },
+    {
+      "old": "                    result=coerced, succeeded=True, raw_text=res.text, tokens=res.tokens\n",
+      "new": "                    result=coerced, succeeded=True, raw_text=res.text,\n                    tokens=(burned_tokens + (res.tokens or 0)) if stateful else res.tokens,\n"
+    },
+    {
+      "old": "            except Exception as e:  # validation failure -> retry\n                last_err = e\n",
+      "new": "            except Exception as e:  # validation failure -> retry\n                last_err = e\n                if stateful:\n                    burned_tokens += res.tokens or 0\n"
+    },
+    {
+      "old": "            result=res.text, succeeded=True, raw_text=res.text, tokens=res.tokens\n",
+      "new": "            result=res.text, succeeded=True, raw_text=res.text,\n            tokens=(burned_tokens + (res.tokens or 0)) if stateful else res.tokens,\n"
+    },
+    {
+      "old": "        tokens=burned_tokens if burned_tokens > 0 else None,\n    )\n\n\ndef _rehydrate",
+      "new": "        tokens=burned_tokens if burned_tokens > 0 else None,\n        replayable_failure=stateful and not unsafe_failure,\n    )\n\n\ndef _rehydrate"
+    },
+    {
+      "old": "                rt.log_sink(f\"[wf] session {opts.get('label') or 'session'!r} key={ks} CACHE_HIT sig={sig[:12]}\")\n                await rt.journal.use(ks, cached)\n",
+      "new": "                rt.log_sink(f\"[wf] session {opts.get('label') or 'session'!r} key={ks} CACHE_HIT sig={sig[:12]}\")\n                if \"stateful_failure\" in cached:\n                    failure = cached[\"stateful_failure\"]\n                    if (\n                        self._human or not isinstance(failure, dict)\n                        or set(failure) != {\"version\", \"member_name\", \"error\"}\n                        or type(failure.get(\"version\")) is not int or failure[\"version\"] != 1\n                        or not isinstance(failure.get(\"member_name\"), str)\n                        or failure[\"member_name\"] != self._member_name\n                        or not isinstance(failure.get(\"error\"), str)\n                        or cached.get(\"kind\") != \"null\" or cached.get(\"result\") is not None\n                    ):\n                        raise WorkflowError(\"stateful failure journal identity or format mismatch\")\n                    await rt.journal.use(ks, cached)\n                    cached_tokens = cached.get(\"tokens\")\n                    if isinstance(cached_tokens, int) and cached_tokens > 0:\n                        rt.workflow_budget.add(cached_tokens)\n                    _emit_agent_failed(\n                        rt, opts, failure[\"error\"], agent_id=ks,\n                        tokens=cached_tokens if isinstance(cached_tokens, int) else None,\n                        budget_snapshot=_budget_snapshot(rt.budget),\n                    )\n                    return None\n                await rt.journal.use(ks, cached)\n"
+    },
+    {
+      "old": "                if call_result.error_detail:\n                    msg = f\"{msg}: {call_result.error_detail}\"\n                _emit_agent_failed(\n",
+      "new": "                if call_result.error_detail:\n                    msg = f\"{msg}: {call_result.error_detail}\"\n                if not self._human and call_result.replayable_failure and self._member_name is not None:\n                    _check_abort(rt)\n                    record = _make_record(_JournalRecordInput(\n                        key=ks, sig=sig, opts=opts, result=None, model=None,\n                        run_id=rt.run_id, tokens=call_result.tokens,\n                    ))\n                    record[\"stateful_failure\"] = {\n                        \"version\": 1, \"member_name\": self._member_name, \"error\": msg,\n                    }\n                    await rt.journal.use(ks, record)\n                _emit_agent_failed(\n"
+    },
+    {
+      "old": "                correlation_id=req.correlation_id,\n            ),\n        )\n\n    def _correlation_id",
+      "new": "                correlation_id=req.correlation_id,\n            ),\n            stateful=not self._human,\n        )\n\n    def _correlation_id"
+    }
+  ]
+}

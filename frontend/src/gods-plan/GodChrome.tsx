@@ -6,7 +6,7 @@ import './chrome.css'
 
 const tabs: { value: GodTab; label: string }[] = [
   { value: 'live', label: 'Live' },
-  { value: 'simulate', label: 'Simulate' },
+  { value: 'log', label: 'City log' },
   { value: 'agents', label: 'Agents' },
   { value: 'events', label: 'Events' },
   { value: 'analytics', label: 'Analytics' },
@@ -16,13 +16,13 @@ const tools: { value: GodTool; icon: string; label: string }[] = [
   { value: 'select', icon: 'cursor', label: 'Select objects' },
   { value: 'map', icon: 'map', label: 'Map' },
   { value: 'people', icon: 'people', label: 'People and agent groups' },
-  { value: 'transport', icon: 'bus', label: 'Transit' },
+  { value: 'population', icon: 'users', label: 'Population' },
   { value: 'events', icon: 'warning', label: 'Events' },
   { value: 'weather', icon: 'cloud', label: 'Weather' },
   { value: 'layers', icon: 'layers', label: 'Map layers' },
 ]
 
-export default function GodChrome({ activeTab, openTab = null, activeTool, timeLabel, weatherLabel, temperatureLabel, weatherNote, command, commandBusy = false, onTab, onTool, onHome, onCommandChange, onCommand }: GodHUDProps) {
+export default function GodChrome({ activeTab, openTab = null, activeTool, timeLabel, weatherLabel, temperatureLabel, weatherNote, statusLabel, playing, speed, speeds = [], ready = true, command, commandBusy = false, recordingControls, onTab, onTool, onHome, onCommandChange, onCommand, onTogglePlay, onSpeed }: GodHUDProps) {
   const selectedTab = openTab ?? activeTab
 
   function submitCommand(event: FormEvent<HTMLFormElement>) {
@@ -70,6 +70,14 @@ export default function GodChrome({ activeTab, openTab = null, activeTool, timeL
         {tools.map((tool) => <GlassIconButton key={tool.value} icon={tool.icon} label={tool.label} size={21} className="god-chrome__tool" data-tool={tool.value} aria-pressed={activeTool === tool.value} onClick={() => onTool(tool.value)} />)}
       </GlassSurface>
 
+      <GlassSurface tone="dark" className="god-chrome__dock" role="group" aria-label="Simulation playback">
+        <GlassIconButton icon={playing ? 'pause' : 'play'} label={playing ? 'Pause simulation' : 'Resume simulation'} size={18} className="god-chrome__play" aria-pressed={playing} disabled={!ready} onClick={onTogglePlay} />
+        {speeds.length > 0 && <div className="god-chrome__speeds" role="group" aria-label="Simulation speed">
+          {speeds.map((value) => <GlassButton key={value} variant="ghost" className="god-chrome__speed" aria-pressed={speed === value} disabled={!ready} onClick={() => onSpeed?.(value)}>{value}×</GlassButton>)}
+        </div>}
+        {statusLabel && <span className="god-chrome__status">{statusLabel}</span>}
+      </GlassSurface>
+
       <div className="god-chrome__command-zone">
         <form className="god-chrome__command-form" onSubmit={submitCommand} aria-label="City command" aria-busy={commandBusy}>
           <GlassSurface tone="dark" className="god-chrome__command-dock">
@@ -78,6 +86,7 @@ export default function GodChrome({ activeTab, openTab = null, activeTool, timeL
             <GlassIconButton icon="arrow-right" label={commandBusy ? 'Sending command' : 'Send command'} size={19} className="god-chrome__submit" type="submit" disabled={commandBusy || !command.trim()} />
           </GlassSurface>
         </form>
+        {recordingControls && <div className="gp-population-dock">{recordingControls}</div>}
       </div>
     </div>
   )

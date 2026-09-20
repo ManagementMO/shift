@@ -11,14 +11,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from decimal import ROUND_CEILING, Context, Decimal, localcontext
 from pathlib import Path
-from typing import ClassVar
+from types import MappingProxyType
+from typing import Any, ClassVar
 
 import httpx
 from dotenv import load_dotenv
@@ -294,3 +297,212 @@ def provider_status() -> dict:
         "map": {"mapbox_token_present": bool(os.environ.get("MAPBOX_TOKEN") or os.environ.get("VITE_MAPBOX_TOKEN"))},
         "share": {"r2_configured": r2_configured(), "mode": "cloudflare-r2" if r2_configured() else "local-export"},
     }
+
+
+POPULATION_OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+POPULATION_KEY_URL = f"{POPULATION_OPENROUTER_BASE}/key"
+POPULATION_KEY_DOCUMENTATION_URL = "https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key"
+POPULATION_LIMITS_DOCUMENTATION_URL = "https://openrouter.ai/docs/api_reference/limits"
+POPULATION_CATALOG_URL = f"{POPULATION_OPENROUTER_BASE}/models"
+POPULATION_CATALOG_CHECKED_AT = "2026-09-19T22:41:28Z"
+POPULATION_GATEWAY_BASE = f"http://127.0.0.1:{API_PORT}/api/population/model/v1"
+
+
+@dataclass(frozen=True)
+class PopulationProviderConfig:
+    enabled: bool = False
+    api_key: str = field(default="", repr=False)
+    approved_40_key_policy: bool = False
+
+
+def population_provider_config() -> PopulationProviderConfig:
+    return PopulationProviderConfig(
+        enabled=os.environ.get("CITYSHIFT_POPULATION_LIVE") == "1",
+        api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+        approved_40_key_policy=os.environ.get("CITYSHIFT_POPULATION_APPROVED_40_KEY") == "1",
+    )
+
+
+@dataclass(frozen=True)
+class PopulationModel:
+    model_id: str
+    canonical_slug: str
+    family: str
+    endpoint_tag: str
+    endpoint_provider: str
+    context_length: int
+    max_completion_tokens: int
+    pricing_json: str
+    catalog_parameters: tuple[str, ...]
+    endpoint_parameters: tuple[str, ...]
+    implicit_caching: bool = False
+    reasoning: bool = False
+    ceiling_pricing_json: str = ""
+
+    def catalog_entry(self) -> dict[str, Any]:
+        return {
+            "id": self.model_id,
+            "canonical_slug": self.canonical_slug,
+            "context_length": self.context_length,
+            "pricing": json.loads(self.pricing_json),
+            "top_provider": {
+                "context_length": self.context_length,
+                "max_completion_tokens": self.max_completion_tokens,
+            },
+            "supported_parameters": list(self.catalog_parameters),
+        }
+
+    def endpoint_entry(self) -> dict[str, Any]:
+        return {
+            "name": f"{self.endpoint_provider} | {self.canonical_slug}",
+            "provider_name": self.endpoint_provider,
+            "tag": self.endpoint_tag,
+            "context_length": self.context_length,
+            "max_prompt_tokens": None,
+            "max_completion_tokens": self.max_completion_tokens,
+            "pricing": json.loads(self.pricing_json) | {"discount": 0},
+            "supported_parameters": list(self.endpoint_parameters),
+            "status": 0,
+            "supports_implicit_caching": self.implicit_caching,
+        }
+
+    def reservation_pricing(self) -> dict[str, Any]:
+        return json.loads(self.ceiling_pricing_json or self.pricing_json)
+
+    def _maximum_rate(self, *names: str) -> Decimal:
+        prices = self.reservation_pricing()
+        tiers = [prices, *prices.get("overrides", [])]
+        return max(Decimal(str(tier.get(name, "0"))) for tier in tiers for name in names)
+
+    def price_caps(self) -> dict[str, int]:
+        with localcontext(Context(prec=64, rounding=ROUND_CEILING)):
+            return {
+                name: int((self._maximum_rate(name) * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
+                for name in ("prompt", "completion")
+            } | {"request": 0}
+
+    @property
+    def input_rate(self) -> Decimal:
+        with localcontext(Context(prec=64, rounding=ROUND_CEILING)):
+            return (Decimal(self.price_caps()["prompt"]) / 1_000_000
+                    + self._maximum_rate("input_cache_read")
+                    + self._maximum_rate("input_cache_write", "input_cache_write_1h"))
+
+    @property
+    def output_rate(self) -> Decimal:
+        with localcontext(Context(prec=64, rounding=ROUND_CEILING)):
+            return (Decimal(self.price_caps()["completion"]) / 1_000_000
+                    + self._maximum_rate("internal_reasoning"))
+
+    def provenance(self) -> dict[str, Any]:
+        frozen = {"catalog": self.catalog_entry(), "endpoint": self.endpoint_entry(),
+                  "reservation_pricing": self.reservation_pricing(),
+                  "reservation_endpoint_scope": "all_public_endpoints_including_region_priority_and_context_tiers"}
+        digest = hashlib.sha256(json.dumps(frozen, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        return {
+            "model_id": self.model_id,
+            "canonical_slug": self.canonical_slug,
+            "family": self.family,
+            "api_provider": "openrouter",
+            "catalog_url": POPULATION_CATALOG_URL,
+            "endpoint_catalog_url": f"{POPULATION_CATALOG_URL}/{self.model_id}/endpoints",
+            "checked_at": POPULATION_CATALOG_CHECKED_AT,
+            "snapshot_sha256": digest,
+            "selection_basis": "cost_and_capability_breadth_not_rankings",
+            "reservation_basis": "full_catalog_context_plus_capped_output_with_tiers_and_cache_writes",
+            "input_ceiling_dollars_per_token": str(self.input_rate),
+            "output_ceiling_dollars_per_token": str(self.output_rate),
+            **frozen,
+        }
+
+
+POPULATION_MODELS = MappingProxyType({
+    "anthropic/claude-haiku-4.5": PopulationModel(
+        model_id="anthropic/claude-haiku-4.5",
+        canonical_slug="anthropic/claude-4.5-haiku-20251001",
+        family="claude", endpoint_tag="anthropic", endpoint_provider="Anthropic",
+        context_length=200_000, max_completion_tokens=64_000,
+        pricing_json=json.dumps({
+            "prompt": "0.000001", "completion": "0.000005", "web_search": "0.01",
+            "input_cache_read": "0.0000001", "input_cache_write": "0.00000125",
+            "input_cache_write_1h": "0.000002",
+        }),
+        catalog_parameters=("include_reasoning", "max_completion_tokens", "max_tokens", "reasoning",
+                            "response_format", "stop", "structured_outputs", "temperature",
+                            "tool_choice", "tools", "top_k", "top_p"),
+        endpoint_parameters=("max_tokens", "top_p", "temperature", "stop", "reasoning",
+                             "include_reasoning", "tools", "tool_choice", "top_k",
+                             "structured_outputs", "response_format"),
+        reasoning=True,
+        ceiling_pricing_json=json.dumps({
+            "prompt": "0.0000011", "completion": "0.0000055", "web_search": "0.01",
+            "input_cache_read": "0.00000011", "input_cache_write": "0.000001375",
+            "input_cache_write_1h": "0.0000022",
+        }),
+    ),
+    "openai/gpt-4.1-mini": PopulationModel(
+        model_id="openai/gpt-4.1-mini", canonical_slug="openai/gpt-4.1-mini-2025-04-14",
+        family="openai", endpoint_tag="openai", endpoint_provider="OpenAI",
+        context_length=1_047_576, max_completion_tokens=32_768,
+        pricing_json=json.dumps({
+            "prompt": "0.0000004", "completion": "0.0000016", "web_search": "0.01",
+            "input_cache_read": "0.0000001",
+        }),
+        catalog_parameters=("max_completion_tokens", "max_tokens", "response_format", "seed",
+                            "structured_outputs", "temperature", "tool_choice", "tools", "top_p"),
+        endpoint_parameters=("seed", "max_tokens", "response_format", "structured_outputs", "tools",
+                             "tool_choice", "temperature", "top_p"),
+        ceiling_pricing_json=json.dumps({
+            "prompt": "0.00000044", "completion": "0.00000176", "web_search": "0.01",
+            "input_cache_read": "0.00000011",
+        }),
+    ),
+    "google/gemini-3.1-flash-lite": PopulationModel(
+        model_id="google/gemini-3.1-flash-lite",
+        canonical_slug="google/gemini-3.1-flash-lite-20260507", family="gemini",
+        endpoint_tag="google-ai-studio", endpoint_provider="Google AI Studio",
+        context_length=1_048_576, max_completion_tokens=65_536,
+        pricing_json=json.dumps({
+            "prompt": "0.00000025", "completion": "0.0000015", "image": "0.00000025",
+            "audio": "0.0000005", "input_audio_cache": "0.00000005", "web_search": "0.014",
+            "internal_reasoning": "0.0000015", "input_cache_read": "0.000000025",
+            "input_cache_write": "0.0000000833333333333333",
+        }),
+        catalog_parameters=("include_reasoning", "max_tokens", "reasoning", "reasoning_effort",
+                            "response_format", "seed", "stop", "structured_outputs", "temperature",
+                            "tool_choice", "tools", "top_p"),
+        endpoint_parameters=("reasoning", "include_reasoning", "max_tokens", "temperature", "top_p",
+                             "seed", "response_format", "structured_outputs", "tool_choice", "tools",
+                             "reasoning_effort"),
+        implicit_caching=True, reasoning=True,
+        ceiling_pricing_json=json.dumps({
+            "prompt": "0.00000045", "completion": "0.0000027", "image": "0.00000045",
+            "audio": "0.0000009", "input_audio_cache": "0.00000009", "web_search": "0.014",
+            "internal_reasoning": "0.0000027", "input_cache_read": "0.000000045",
+            "input_cache_write": "0.00000015",
+        }),
+    ),
+    "x-ai/grok-4.3": PopulationModel(
+        model_id="x-ai/grok-4.3", canonical_slug="x-ai/grok-4.3-20260430", family="grok",
+        endpoint_tag="xai", endpoint_provider="xAI", context_length=1_000_000,
+        max_completion_tokens=900_000,
+        pricing_json=json.dumps({
+            "prompt": "0.00000125", "completion": "0.0000025", "web_search": "0.005",
+            "input_cache_read": "0.0000002", "overrides": [{
+                "min_prompt_tokens": 200_000, "prompt": "0.0000025", "completion": "0.000005",
+                "input_cache_read": "0.0000004",
+            }],
+        }),
+        catalog_parameters=("include_reasoning", "logprobs", "max_tokens", "reasoning", "reasoning_effort",
+                            "response_format", "seed", "structured_outputs", "temperature", "tool_choice",
+                            "tools", "top_logprobs", "top_p"),
+        endpoint_parameters=("reasoning", "include_reasoning", "structured_outputs", "response_format",
+                             "max_tokens", "temperature", "top_p", "seed", "logprobs", "top_logprobs",
+                             "tools", "tool_choice", "reasoning_effort"),
+        reasoning=True,
+        ceiling_pricing_json=json.dumps({
+            "prompt": "0.000005", "completion": "0.00001", "web_search": "0.005",
+            "input_cache_read": "0.0000008",
+        }),
+    ),
+})
