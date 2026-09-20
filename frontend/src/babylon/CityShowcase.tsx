@@ -23,6 +23,7 @@ export default function CityShowcase() {
   const rx = replay.phase === 'ready' ? replay.rx : null
   const onReady = useCallback((ws: WorldScene) => {
     scene.current = ws
+    ws.camera.setPreferredProjection('isometric')
     if (window.__cityshift) window.__cityshift.babylon = ws
     ws.scene.onDisposeObservable.addOnce(() => {
       if (window.__cityshift?.babylon === ws) window.__cityshift.babylon = undefined
@@ -88,9 +89,9 @@ export default function CityShowcase() {
         <span data-landmark="union_station">Union Station</span>
       </div>
       <header className="cityscape-header cityscape-ui">
-        <a className="cityscape-wordmark" href="/" aria-label="Open CITY SHIFT simulation">CITY<span>//</span>SHIFT</a>
+        <a className="cityscape-wordmark" href="/" aria-label="Open Concrete Consequences globe">Concrete Consequences</a>
         <div className="cityscape-location"><i /> Toronto, Ontario <span>Canada</span></div>
-        <a className="cityscape-simulation" href="/">Open simulation <span>↗</span></a>
+        <a className="cityscape-simulation" href="/world">Open simulation</a>
       </header>
       <section className="cityscape-title cityscape-ui" aria-label="Toronto cityscape">
         <span className="cityscape-eyebrow">Downtown & the waterfront</span>

@@ -54,6 +54,21 @@ describe('Batch texture coordinates', () => {
 const CCW = [0, 0, 20, 0, 20, 10, 0, 10]
 const CW = [0, 0, 0, 10, 20, 10, 20, 0]
 
+describe('Surface lighting', () => {
+  it('does not bake a second directional light into wall colors', () => {
+    const b = new Batch()
+    b.walls(CCW, undefined, 0, 10, [0.8, 0.7, 0.6], 1)
+    for (let i = 0; i < b.colors.length; i += 4) expect(b.colors.slice(i, i + 3)).toEqual([0.8, 0.7, 0.6])
+  })
+
+  it('uses slope-aware unit normals on tapered solids', () => {
+    const b = new Batch()
+    b.lathe(0, 0, [[10, 0], [5, 10]], [1, 1, 1], 16, 1)
+    expect(b.normals[1]).toBeCloseTo(1 / Math.sqrt(5))
+    for (let i = 0; i < b.normals.length; i += 3) expect(Math.hypot(...b.normals.slice(i, i + 3))).toBeCloseTo(1)
+  })
+})
+
 describe('Batch winding', () => {
   it('polygons face up regardless of ring orientation', () => {
     expect(signedArea(CCW)).toBeGreaterThan(0)

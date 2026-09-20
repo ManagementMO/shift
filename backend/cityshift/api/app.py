@@ -31,7 +31,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         close_registry()
 
 
-app = FastAPI(title="CITY//SHIFT", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Concrete Consequences", version="0.1.0", lifespan=lifespan)
 app.include_router(live_router)
 app.add_middleware(GZipMiddleware, minimum_size=2048)
 app.add_middleware(
@@ -53,7 +53,7 @@ RUN_ARTIFACTS = {
     "manifest": "manifest.json",
     "tripinfo_summary": "tripinfo_summary.json",
 }
-PACK_ARTIFACTS = {"roads": "roads.geojson", "walk": "walk.geojson", "corridors": "corridors.json", "world": "world.json"}
+PACK_ARTIFACTS = {"roads": "roads.geojson", "walk": "walk.geojson", "corridors": "corridors.json", "world": "world.json", "massing": "massing.json"}
 
 
 def _not_found(what: str) -> HTTPException:

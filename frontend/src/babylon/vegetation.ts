@@ -20,7 +20,7 @@ function treeGeometry(detailed: boolean): Batch {
   return prototype
 }
 
-export function buildVegetation(scene: Scene, trees: TreePlacement[], material: StandardMaterial): Mesh[] {
+export function buildVegetation(scene: Scene, trees: TreePlacement[], material: StandardMaterial, y = 0.25): Mesh[] {
   const prototypes = [treeGeometry(true), treeGeometry(false)]
   const cells = new Map<string, TreePlacement[]>()
   for (const tree of trees) {
@@ -37,7 +37,7 @@ export function buildVegetation(scene: Scene, trees: TreePlacement[], material: 
     group.forEach((tree, i) => {
       const o = i * 16
       const a = tree.shade * Math.PI * 2, c = Math.cos(a) * tree.scale, s = Math.sin(a) * tree.scale
-      matrices.set([c, 0, -s, 0, 0, tree.scale, 0, 0, s, 0, c, 0, tree.x, 0.25, tree.z, 1], o)
+      matrices.set([c, 0, -s, 0, 0, tree.scale, 0, 0, s, 0, c, 0, tree.x, y, tree.z, 1], o)
       colors.set([0.76 + tree.shade * 0.3, 0.84 + tree.shade * 0.16, 0.7 + tree.shade * 0.26, 1], i * 4)
     })
     const pair = prototypes.map((prototype, lod) => {

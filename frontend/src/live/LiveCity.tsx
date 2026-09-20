@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
 
 import { api } from '../api'
+import { BrandMark } from '../components/Icon'
 import type { Pose } from '../babylon/camera'
 import type { BabylonSyncMap } from '../babylon/mapAdapter'
 import type { WorldScene } from '../babylon/scene'
@@ -190,7 +191,7 @@ export default function LiveCity() {
     </div>}
 
     <header className="live-topbar">
-      <a className="live-wordmark" href="/">CITY<span>//</span>SHIFT</a>
+      <a className="live-wordmark" href="/"><BrandMark size={22} /><span>Concrete Consequences</span></a>
       <div className="live-mode"><i />Live city</div>
       <span className="live-city-name">{pack?.name.split(',')[0] ?? 'Loading city'}</span>
       {environment && <span className="live-weather">{environment.temperature}°C</span>}

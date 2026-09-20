@@ -1,8 +1,8 @@
-# CITY//SHIFT
+# Concrete Consequences
 
 Give the city a problem and a resource constraint. Watch agents test possible responses.
 
-CITY//SHIFT is a transportation scenario laboratory: a city problem (a concert letting out
+Concrete Consequences is a transportation scenario laboratory: a city problem (a concert letting out
 during a road closure) plus a fixed resource limit (two extra buses, one operating window)
 becomes a set of candidate service plans, each compiled into a real SUMO simulation and
 measured on the same cohort of travelers.  Agents propose; deterministic validators reject
@@ -35,8 +35,9 @@ npm ci --legacy-peer-deps
 npm run dev -- --host 127.0.0.1 --port 5174 --strictPort
 ```
 
-Open <http://127.0.0.1:5174/> for the **Babylon.js default interface**. `/world` opens the same
-interface, including Babylon comparison views. `/world/lab` is the bare Babylon workbench.
+Open <http://127.0.0.1:5174/> for the **interactive globe**. Select any location to descend into
+the Toronto prototype. `/world` opens the city directly, with automatic playback, free camera
+controls, and city camera presets. `/world/lab` is the bare Babylon workbench.
 Generate the city pack before opening the default renderer; its `world.json` is local data.
 
 The **Mapbox Standard 3D alternative** is at <http://127.0.0.1:5174/mapbox>. To use it, set

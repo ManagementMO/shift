@@ -16,7 +16,7 @@ function distanceToSegment(x: number, z: number, ax: number, az: number, bx: num
   return Math.hypot(x - ax - t * dx, z - az - t * dz)
 }
 
-function boundaryDistance(x: number, z: number, ring: Flat): number {
+export function boundaryDistance(x: number, z: number, ring: Flat): number {
   let d = Infinity
   for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
     d = Math.min(d, distanceToSegment(x, z, ring[j], ring[j + 1], ring[i], ring[i + 1]))
@@ -59,7 +59,9 @@ export function roadDashes(shape: Flat, offset: number): Flat[] {
   return dashes
 }
 
-type TreeWorld = Pick<WorldData, 'green' | 'buildings' | 'roads' | 'water' | 'junctions'>
+export const TREE_CLEARANCE = 6
+
+type TreeWorld = Pick<WorldData, 'green' | 'buildings' | 'roads' | 'water' | 'junctions' | 'surfaces'>
 export interface TreePlacement { x: number; z: number; scale: number; shade: number }
 type Obstacle = { box: [number, number, number, number]; contains: (x: number, z: number) => boolean }
 
@@ -82,12 +84,12 @@ export function treePlacements(world: TreeWorld, limit = 6000): TreePlacement[] 
     const [x0, z0, x1, z1] = bounds(ring)
     insert({ box: [x0 - margin, z0 - margin, x1 + margin, z1 + margin], contains: (x, z) => pointInRing(x, z, ring) || boundaryDistance(x, z, ring) < margin })
   }
-  for (const b of world.buildings) polygon(b.ring, 3)
-  for (const w of world.water) polygon(w.ring, 3)
-  for (const j of world.junctions) polygon(j.ring, 3)
+  for (const b of world.buildings) polygon(b.ring, TREE_CLEARANCE)
+  for (const w of world.water) polygon(w.ring, TREE_CLEARANCE)
+  for (const j of world.junctions) polygon(j.ring, TREE_CLEARANCE)
   for (const road of world.roads) {
     for (const lane of road.lanes?.length ? road.lanes : [{ shape: road.shape, w: road.w }]) {
-      const margin = lane.w / 2 + 3
+      const margin = lane.w / 2 + TREE_CLEARANCE
       for (let i = 0; i + 3 < lane.shape.length; i += 2) {
         const ax = lane.shape[i], az = lane.shape[i + 1], bx = lane.shape[i + 2], bz = lane.shape[i + 3]
         insert({ box: [Math.min(ax, bx) - margin, Math.min(az, bz) - margin, Math.max(ax, bx) + margin, Math.max(az, bz) + margin], contains: (x, z) => distanceToSegment(x, z, ax, az, bx, bz) < margin })
@@ -97,7 +99,8 @@ export function treePlacements(world: TreeWorld, limit = 6000): TreePlacement[] 
   const out: (TreePlacement & { priority: number })[] = []
   const used = new Set<string>()
   const spacing = 11
-  for (const ring of world.green) {
+  const parks = world.surfaces?.grass ?? world.green.map((ring) => ({ ring, holes: [] }))
+  for (const { ring, holes } of parks) {
     const [x0, z0, x1, z1] = bounds(ring)
     for (let ix = Math.ceil(x0 / spacing); ix * spacing < x1; ix++) {
       for (let iz = Math.ceil(z0 / spacing); iz * spacing < z1; iz++) {
@@ -105,7 +108,8 @@ export function treePlacements(world: TreeWorld, limit = 6000): TreePlacement[] 
         if (used.has(key)) continue
         const h = hash01(key)
         const x = (ix + h * 0.45) * spacing, z = (iz + hash01(`${key}:z`) * 0.45) * spacing
-        if (!pointInRing(x, z, ring) || boundaryDistance(x, z, ring) < 3) continue
+        if (!pointInRing(x, z, ring) || boundaryDistance(x, z, ring) < TREE_CLEARANCE) continue
+        if (holes?.some((hole) => pointInRing(x, z, hole) || boundaryDistance(x, z, hole) < TREE_CLEARANCE)) continue
         if (cells.get(`${Math.floor(x / cell)}:${Math.floor(z / cell)}`)?.some((o) => x >= o.box[0] && z >= o.box[1] && x <= o.box[2] && z <= o.box[3] && o.contains(x, z))) continue
         used.add(key)
         out.push({ x, z, scale: 0.75 + h * 0.65, shade: hash01(`${key}:shade`), priority: hash01(`${key}:budget`) })

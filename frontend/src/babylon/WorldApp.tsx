@@ -40,6 +40,7 @@ export default function WorldApp() {
 
   const onReady = useCallback((ws: WorldScene) => {
     sceneRef.current = ws
+    ws.camera.setPreferredProjection('isometric')
     if (window.__cityshift) window.__cityshift.babylon = ws
     setReady(ws)
   }, [])
@@ -70,11 +71,11 @@ export default function WorldApp() {
   const world = ready?.world
   return (
     <div className="bworld-shell">
-      <WorldCanvas packId={packId} onReady={onReady} />
+      <WorldCanvas packId={packId} onReady={onReady} fixedCamera={false} />
 
       <div className="bworld-top">
         <div className="bworld-brand">
-          <b>CITY//SHIFT</b>
+          <b>Concrete Consequences</b>
           <span className="small dim">world · {packId}</span>
         </div>
         {world && (
@@ -89,7 +90,7 @@ export default function WorldApp() {
         )}
         <div className="bworld-top-right">
           <span className="small dim">Babylon.js preview</span>
-          <a className="bworld-link small" href="/">
+          <a className="bworld-link small" href={`/world?pack=${encodeURIComponent(packId)}`}>
             Full simulation
           </a>
         </div>

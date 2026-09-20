@@ -12,25 +12,34 @@ const MODES: { id: CameraMode; label: string; key: string }[] = [
   { id: 'incident', label: 'Incident', key: '5' },
 ]
 
-export default function CameraModes() {
+export default function CameraModes({ active = true }: { active?: boolean }) {
   const cameraMode = useStore((s) => s.cameraMode)
   const setCameraMode = useStore((s) => s.setCameraMode)
 
   const primaryRunId = useStore((s) => s.primaryRunId)
+  const pack = useStore((s) => s.pack)
+  const [ready, setReady] = useState(false)
   const [hero, setHero] = useState(false)
 
   useEffect(() => watchCameraMode(setCameraMode), [setCameraMode])
 
   // The Babylon world offers the Blue Jays egress framing once a replay with recorded releases is loaded.
   useEffect(() => {
-    const id = setInterval(() => setHero(Boolean(leadMap()?.egress)), 500)
+    const update = () => {
+      const lead = leadMap()
+      setReady(Boolean(lead && (!lead.cameraLocked || lead.setCameraPreset)))
+      setHero(Boolean(lead?.egress) && !lead?.cameraLocked)
+    }
+    update()
+    const id = setInterval(update, 500)
     return () => clearInterval(id)
-  }, [primaryRunId])
+  }, [primaryRunId, pack])
 
   useEffect(() => {
+    if (!active) return
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      const target = e.target instanceof HTMLElement ? e.target : null
+      if (e.defaultPrevented || e.repeat || e.ctrlKey || e.metaKey || e.altKey || target?.isContentEditable || target?.closest('input, textarea, select, button')) return
       if (e.key === '6') {
         egress()
         return
@@ -40,12 +49,12 @@ export default function CameraModes() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [active])
 
   return (
     <nav className="cams" aria-label="Camera">
       {MODES.map((m) => (
-        <button key={m.id} className={cameraMode === m.id ? 'on' : ''} onClick={() => go(m.id)} title={`${m.label} (${m.key})`}>
+        <button key={m.id} className={cameraMode === m.id ? 'on' : ''} aria-pressed={cameraMode === m.id} disabled={!ready || !pack || (m.id === 'agent' && !primaryRunId)} onClick={() => go(m.id)} title={`${m.label} (${m.key})`}>
           {m.label}
         </button>
       ))}
@@ -69,7 +78,7 @@ function go(mode: CameraMode) {
   if (!lead) return
   const s = useStore.getState()
   const pack = s.pack
-  const base = currentPose(lead)
+  const base = pack ? cityPose(pack.pack_id, pack.center) : currentPose(lead)
   const scenario = s.scenarios.find((x) => x.scenario_id === s.scenarioId)
   const rx = s.primaryRunId ? s.replays[s.primaryRunId] : null
   const venue: [number, number] | null = pack ? [pack.venue_lonlat[0], pack.venue_lonlat[1]] : null

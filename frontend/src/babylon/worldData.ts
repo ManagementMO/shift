@@ -61,7 +61,11 @@ export interface WorldBuilding {
   id: string
   ring: Flat
   holes?: Flat[]
+  base?: number
   h: number
+  source_id?: string
+  source_height?: number
+  roofs?: { ring: Flat; holes?: Flat[] }[]
   cat: BuildingCategory
   lm?: string
   name?: string
@@ -132,10 +136,12 @@ export interface WorldData {
   landmarks: WorldLandmark[]
   green: Flat[]
   sand: Flat[]
+  surfaces?: Record<'ground' | 'grass' | 'sand' | 'pavement' | 'asphalt' | 'rail', { ring: Flat; holes?: Flat[] }[]>
   rail: Flat[]
   water: { ring: Flat; holes?: Flat[] }[]
   counts: Record<string, number>
   provenance: string[]
+  massing_url?: string
   massing?: MassingData
 }
 
@@ -147,16 +153,19 @@ export function loadWorld(packId: string): Promise<WorldData> {
     p = fetch(`/api/packs/${packId}/world`).then(async (r) => {
       if (!r.ok) throw new Error(`world.json for ${packId}: HTTP ${r.status} (run make_pack ${packId} --pack-only)`)
       const world = await r.json() as WorldData
-      if (packId === 'toronto') {
+      if (world.massing_url) {
         try {
-          const asset = await fetch('/assets/city/toronto-massing.json')
+          const asset = await fetch(world.massing_url)
           if (asset.ok && asset.headers.get('content-type')?.includes('json')) {
             const massing = await asset.json() as MassingData
-            if (massing.version === 1 && massing.network_fingerprint === world.network_fingerprint) world.massing = massing
+            if (massing.version === 1 && massing.prepared && massing.network_fingerprint === world.network_fingerprint) world.massing = massing
           }
         } catch { /* City packs remain usable when the optional appearance asset is absent. */ }
       }
       return world
+    }).catch((error: unknown) => {
+      cache.delete(packId)
+      throw error
     })
     cache.set(packId, p)
   }

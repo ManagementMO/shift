@@ -4,9 +4,14 @@ import { Scene } from '@babylonjs/core/scene'
 
 import { Ray } from '@babylonjs/core/Culling/ray'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
+import { PBRMaterial } from '@babylonjs/core/Materials/PBR/pbrMaterial'
 
-import { buildCity, Y } from './city'
+import { buildCity, PALETTE, Y } from './city'
 import { cityPose } from './camera'
+import { Overlay, MARK } from './overlay'
+import { RoadIndex } from './roadIndex'
+import { WorldFrame } from './coords'
+import { facadeFor } from './appearance'
 import type { WorldData, WorldLandmark } from './worldData'
 import { cityPose as mapCityPose } from '../world/camera'
 
@@ -23,6 +28,108 @@ const fixture = (): WorldData => ({
 })
 
 describe('New-city rendering without appearance configuration', () => {
+  it('preserves building clearance and does not widen source road lanes', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const world = fixture()
+    world.buildings = [{ id: 'raised', cat: 'office', base: 10, h: 20, ring: [4100, 7100, 4130, 7100, 4130, 7130, 4100, 7130] }]
+    world.green = []
+    world.roads = [{ id: 'r', shape: [4200, 7200, 4300, 7200], w: 4, kind: 'road', type: 'residential', allow: ['car'], prio: 1, speed: 10, from: 'a', to: 'b', lanes: [{ shape: [4200, 7200, 4300, 7200], w: 4, allow: ['car'] }] }]
+    const city = buildCity(scene, world)
+    const wall = city.chunks.find((m) => m.material?.name === `city-${facadeFor(world.buildings[0])}`)!
+    const ys = wall.getVerticesData('position')!.filter((_, i) => i % 3 === 1)
+    expect(Math.min(...ys)).toBeCloseTo(Y.building + 10)
+    expect(Math.max(...ys)).toBeCloseTo(Y.building + 30)
+    const road = city.chunks.find((m) => m.material?.name === 'city-asphalt')!
+    const zs = road.getVerticesData('position')!.filter((_, i) => i % 3 === 2)
+    expect(Math.max(...zs) - Math.min(...zs)).toBeCloseTo(4)
+    const overlay = new Overlay(scene, new RoadIndex(world), new WorldFrame(world.crs))
+    overlay.set({ closed: ['r', 'r'], ghost: ['r'], focus: ['r'], ghostStops: [] })
+    const mark = scene.getMeshByName('overlay')!
+    expect(mark.getTotalVertices()).toBe(4)
+    mark.getVerticesData('color')!.slice(0, 3).forEach((v, i) => expect(v).toBeCloseTo(MARK.focus[i]))
+    overlay.dispose()
+    city.dispose()
+    scene.dispose()
+    engine.dispose()
+  })
+
+  it('keeps reconciled thin building bands exact and omits covered roofs and trim', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const world = fixture()
+    world.green = []
+    world.buildings = [{ id: 'tower:band', source_id: 'tower', source_height: 120, cat: 'tower', base: 13.2, h: 0.6, roofs: [], ring: [4100, 7100, 4130, 7100, 4130, 7130, 4100, 7130] }]
+    const city = buildCity(scene, world)
+    const walls = city.chunks.filter((m) => m.name.startsWith('buildings-'))
+    expect(walls).toHaveLength(1)
+    expect(walls[0].material?.name).toBe(`city-${facadeFor({ id: 'tower', cat: 'tower', h: 120 })}`)
+    const ys = walls[0].getVerticesData('position')!.filter((_, i) => i % 3 === 1)
+    expect(Math.min(...ys)).toBeCloseTo(Y.building + 13.2)
+    expect(Math.max(...ys)).toBeCloseTo(Y.building + 13.8)
+    city.dispose()
+    scene.dispose()
+    engine.dispose()
+  })
+
+  it('uses one shared height for partitioned terrain without drawing legacy overlapping layers', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const world = fixture()
+    world.buildings = []
+    world.surfaces = {
+      ground: [{ ring: [4000, 7000, 4400, 7000, 4400, 7400, 4000, 7400], holes: [[4200, 7200, 4300, 7200, 4300, 7300, 4200, 7300]] }],
+      grass: [{ ring: [4200, 7200, 4240, 7200, 4240, 7300, 4200, 7300] }],
+      pavement: [{ ring: [4240, 7200, 4250, 7200, 4250, 7300, 4240, 7300] }],
+      sand: [{ ring: [4250, 7200, 4300, 7200, 4300, 7300, 4250, 7300] }],
+      asphalt: [], rail: [],
+    }
+    const city = buildCity(scene, world)
+    const surfaces = [city.ground, ...city.chunks.filter((m) => m.name.startsWith('surface-'))]
+    for (const x of [4100, 4220, 4245, 4270]) {
+      const ray = new Ray(new Vector3(x, 100, 7243), new Vector3(0, -1, 0), 200)
+      const hits = surfaces.map((m) => ray.intersectsMesh(m)).filter((h) => h.hit)
+      expect(hits).toHaveLength(1)
+      expect(hits[0].pickedPoint!.y).toBeCloseTo(Y.road)
+    }
+    const colors = city.ground.getVerticesData('color')!
+    for (let i = 0; i < 3; i++) expect(colors[i]).toBeCloseTo(PALETTE.land[i])
+    city.dispose()
+    scene.dispose()
+    engine.dispose()
+  })
+
+  it('textures the entire base plate and preserves its land tint under bright lighting', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const city = buildCity(scene, fixture())
+    const ground = city.ground
+    const material = ground.material as PBRMaterial
+    expect(material).toBeInstanceOf(PBRMaterial)
+    expect(material.albedoTexture?.name).toBe('city-concrete-albedo')
+    expect(ground.getVerticesData('uv')).toHaveLength(ground.getTotalVertices() * 2)
+    const colors = ground.getVerticesData('color')!
+    for (let i = 0; i < 3; i++) expect(colors[i]).toBeCloseTo(PALETTE.land[i])
+    const brdf = material.environmentBRDFTexture
+    city.dispose()
+    expect(scene.textures).toEqual([brdf])
+    scene.dispose()
+    expect(scene.textures).toHaveLength(0)
+    engine.dispose()
+  })
+
+  it.each([512, 1024])('preserves the requested %i px facade quality', (resolution) => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const city = buildCity(scene, fixture(), resolution)
+    const facade = scene.getMaterialByName('city-masonry') as PBRMaterial
+    expect(facade.albedoTexture?.getSize().width).toBe(resolution)
+    expect((city.ground.material as PBRMaterial).albedoTexture?.getSize().width).toBe(512)
+    city.dispose()
+    scene.dispose()
+    engine.dispose()
+  })
+
   it('keeps water below the base plate with open lake cutouts, solid islands and shoreline walls', () => {
     const engine = new NullEngine()
     const scene = new Scene(engine)

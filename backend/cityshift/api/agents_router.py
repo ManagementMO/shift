@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from cityshift.api.service import get_service
+from cityshift.contracts import InvestigationOptions
 
 router = APIRouter(prefix="/api", tags=["agents"])
 
@@ -13,12 +14,13 @@ router = APIRouter(prefix="/api", tags=["agents"])
 class InvestigateRequest(BaseModel):
     problem: str = Field(min_length=3, max_length=2000)
     constraint: str = Field(default="", max_length=2000)
+    options: InvestigationOptions = Field(default_factory=InvestigationOptions)
 
 
 @router.post("/scenarios/{sid}/investigate")
 def investigate(sid: str, req: InvestigateRequest) -> dict:
     try:
-        return get_service().investigate(sid, req.problem, req.constraint).model_dump(mode="json")
+        return get_service().investigate(sid, req.problem, req.constraint, req.options).model_dump(mode="json")
     except KeyError:
         raise HTTPException(404, f"scenario {sid} not found")
 

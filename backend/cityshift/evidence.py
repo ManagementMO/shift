@@ -9,6 +9,7 @@ advisories. Claims carry the corridor edge ids resolved from the city pack's cor
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from datetime import UTC, datetime
 from typing import Literal
@@ -271,10 +272,10 @@ def ensure_indexed(pack_id: str) -> dict:
         return {"indexed": False, "provider": elastic_provider_name(), "reason": str(exc)[:200]}
 
 
-def search(pack_id: str, query: str, size: int = 8) -> tuple[list[dict], dict]:
+def search(pack_id: str, query: str, size: int = 8, use_elasticsearch: bool = True) -> tuple[list[dict], dict]:
     """Scoped retrieval: only this pack's index/corpus. Returns (hits, query_record)."""
     docs = CORPORA.get(pack_id, [])
-    es = elastic_client()
+    es = elastic_client() if use_elasticsearch else None
     record: dict = {"pack_id": pack_id, "query": query, "size": size, "at": datetime.now(UTC).isoformat()}
     if es is not None:
         status = ensure_indexed(pack_id)
@@ -297,16 +298,17 @@ def search(pack_id: str, query: str, size: int = 8) -> tuple[list[dict], dict]:
             scored.append((overlap / (len(toks) ** 0.5), d))
     scored.sort(key=lambda x: -x[0])
     hits = [dict(d, _score=round(s, 4)) for s, d in scored[:size]]
-    record.update(provider="local-corpus (Elasticsearch unavailable)", engine="token-overlap", hit_count=len(hits))
+    reason = "unavailable" if use_elasticsearch else "disabled"
+    record.update(provider=f"local-corpus (Elasticsearch {reason})", engine="token-overlap", hit_count=len(hits))
     return hits, record
 
 
-def build_bundle(pack_id: str, queries: list[str]) -> EvidenceBundle:
+def build_bundle(pack_id: str, queries: list[str], use_elasticsearch: bool = True) -> EvidenceBundle:
     corridors = load_corridors(pack_id)
     seen: dict[str, dict] = {}
     records: list[dict] = []
     for q in queries:
-        hits, rec = search(pack_id, q)
+        hits, rec = search(pack_id, q, use_elasticsearch=use_elasticsearch)
         records.append(rec)
         for h in hits:
             seen.setdefault(h["source_id"], h)
@@ -332,7 +334,9 @@ def build_bundle(pack_id: str, queries: list[str]) -> EvidenceBundle:
             supersedes=d.get("supersedes"),
             location_candidates=[d["corridor"]] if d.get("corridor") else [],
         ))
-    bundle_id = "eb-" + hashlib.sha1((pack_id + "|" + "|".join(sorted(seen))).encode()).hexdigest()[:12]
+    retrieval = [{k: v for k, v in record.items() if k != "at"} for record in records]
+    identity = json.dumps({"pack": pack_id, "sources": sorted(seen), "queries": retrieval}, sort_keys=True)
+    bundle_id = "eb-" + hashlib.sha1(identity.encode()).hexdigest()[:12]
     bundle = EvidenceBundle(
         bundle_id=bundle_id,
         corpus_snapshot=CORPUS_SNAPSHOT,

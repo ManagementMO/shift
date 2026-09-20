@@ -6,7 +6,15 @@ export interface BuildingBatches { facade: Batch; roof: Batch; stone: Batch; gla
 
 /** A setback must remain inside the source footprint, including concave lots and courtyards. */
 export function setback(ring: Flat, holes: Flat[] | undefined, factor: number): Flat | null {
-  if (holes?.length) return null
+  if (holes?.length || ring.length < 6 || factor <= 0 || factor >= 1) return null
+  let turn = 0
+  for (let i = 0; i < ring.length; i += 2) {
+    const j = (i + 2) % ring.length, k = (i + 4) % ring.length
+    const cross = (ring[j] - ring[i]) * (ring[k + 1] - ring[j + 1]) - (ring[j + 1] - ring[i + 1]) * (ring[k] - ring[j])
+    if (Math.abs(cross) < 1e-6) continue
+    if (turn && Math.sign(cross) !== turn) return null
+    turn = Math.sign(cross)
+  }
   const [cx, cz] = centroid(ring)
   if (!pointInRing(cx, cz, ring)) return null
   const inset = ring.map((v, i) => (i % 2 ? cz : cx) + (v - (i % 2 ? cz : cx)) * factor)
@@ -20,43 +28,52 @@ export function setback(ring: Flat, holes: Flat[] | undefined, factor: number): 
 }
 
 export function addArchitecture(out: BuildingBatches, b: WorldBuilding, c: { wall: RGB; roof: RGB }, detailed: boolean): void {
-  const base = 0.3, top = base + Math.max(3, b.h)
-  const seed = hash01(b.id), tall = b.h > 48
+  const reconciled = b.roofs !== undefined || Boolean(b.source_id)
+  const height = reconciled ? b.h : Math.max(3, b.h)
+  const base = 0.3 + Math.max(0, b.base ?? 0), top = base + height
+  const seed = hash01(b.source_id ?? b.id), tall = (b.source_height ?? b.h) > 48
   const area = Math.abs(signedArea(b.ring))
+  const embellish = detailed && !reconciled && !(b.base && b.base > 0)
   let tower = b.ring
-  const podium = tall && area > 450 ? setback(b.ring, b.holes, 0.78 + seed * 0.11) : null
-  const podiumTop = Math.min(top * 0.27, 17 + seed * 9)
+  const podium = !reconciled && !b.base && tall && area > 450 ? setback(b.ring, b.holes, 0.78 + seed * 0.11) : null
+  const podiumTop = base + Math.min(height * 0.27, 17 + seed * 9)
   if (podium) {
     out.facade.walls(b.ring, b.holes, base, podiumTop, mix(c.wall, [0.84, 0.81, 0.73], 0.35), 1)
     out.roof.polygon(b.ring, [podium], podiumTop, [0.73, 0.72, 0.66])
     tower = podium
-    out.facade.walls(tower, undefined, podiumTop, top, c.wall, 1)
-  } else out.facade.walls(tower, b.holes, base, top, c.wall, 1)
-  out.roof.polygon(tower, b.holes, top, c.roof)
-  if (b.h > 8) {
-    out.stone.walls(tower, b.holes, top, top + 0.65, scale(c.wall, 1.12), 1)
-    const roofBox = interiorBox({ ring: tower, holes: b.holes }, tall ? 3.8 : 1.5)
-    if (roofBox) {
-      out.metal.extrude(roofBox, undefined, top, top + (tall ? 4.8 : 1.4), [0.46, 0.48, 0.45], [0.67, 0.69, 0.66])
-      if (detailed) {
-        const [x, z] = centroid(roofBox)
-        out.metal.lathe(x, z, [[tall ? 1.9 : 0.7, top + (tall ? 4.8 : 1.4)], [tall ? 1.9 : 0.7, top + (tall ? 5.2 : 1.65)]], [0.28, 0.31, 0.3], 12, 1)
-      }
-    }
   }
-  if (!detailed) return
   const slab: RGB = b.cat === 'apartments' || b.cat === 'hotel' ? [0.81, 0.81, 0.75] : mix(c.wall, [0.89, 0.87, 0.8], 0.45)
   // At city scale a few real edges make the textured elevations feel solid.
   const floorStep = b.cat === 'apartments' || b.cat === 'hotel' ? 3.4 : 13.6
-  if (b.h > 18 && b.h < 250) {
-    for (let y = podium ? podiumTop + floorStep : base + floorStep; y < top - 2; y += floorStep) {
-      out.stone.walls(tower, undefined, y, y + (floorStep < 4 ? 0.28 : 0.5), slab, 1)
+  let wallStart = podium ? podiumTop : base
+  if (embellish && height > 18 && height < 250) {
+    for (let y = wallStart + floorStep; y < top - 2; y += floorStep) {
+      out.facade.walls(tower, b.holes, wallStart, y, c.wall, 1)
+      wallStart = y + (floorStep < 4 ? 0.28 : 0.5)
+      out.stone.walls(tower, b.holes, y, wallStart, slab, 1)
     }
   }
-  if (tall) {
-    const crown = setback(tower, undefined, seed > 0.5 ? 0.73 : 0.89)
-    if (crown) out.metal.extrude(crown, undefined, top + 0.1, top + 2.5 + seed * 5, scale(c.wall, 0.78), c.roof)
+  out.facade.walls(tower, b.holes, wallStart, top, c.wall, 1)
+  const roofAreas = b.roofs ?? [{ ring: tower, holes: b.holes }]
+  for (const roof of roofAreas) out.roof.polygon(roof.ring, roof.holes, top, c.roof)
+  const crown = embellish && tall ? setback(tower, b.holes, seed > 0.5 ? 0.73 : 0.89) : null
+  const crownHeight = crown ? 2.5 + seed * 5 : 0
+  if (crown) out.metal.extrude(crown, undefined, top, top + crownHeight, scale(c.wall, 0.78), c.roof)
+  const equipmentAreas = crown ? [{ ring: crown, holes: undefined }] : roofAreas
+  const equipmentTop = top + crownHeight
+  if ((b.source_height ?? b.h) > 8 && roofAreas.length) {
+    if (!reconciled) out.stone.walls(tower, b.holes, top, top + 0.65, scale(c.wall, 1.12), 1)
+    // a slim rooftop plant box reads as "tower" at miniature scale
+    const roofBox = equipmentAreas.map(roof => interiorBox(roof, tall ? 3.8 : 1.5)).find(Boolean)
+    if (roofBox) {
+      out.metal.extrude(roofBox, undefined, equipmentTop, equipmentTop + (tall ? 4.8 : 1.4), [0.46, 0.48, 0.45], [0.67, 0.69, 0.66])
+      if (detailed) {
+        const [x, z] = centroid(roofBox)
+        out.metal.lathe(x, z, [[tall ? 1.9 : 0.7, equipmentTop + (tall ? 4.8 : 1.4)], [tall ? 1.9 : 0.7, equipmentTop + (tall ? 5.2 : 1.65)]], [0.28, 0.31, 0.3], 12, 1)
+      }
+    }
   }
+  if (!embellish) return
   // Shopfront glazing and stone piers, fitted to the original footprint edges.
   if (area > 100 && b.h > 8) {
     for (let i = 0; i < b.ring.length; i += 2) {
@@ -70,22 +87,21 @@ export function addArchitecture(out: BuildingBatches, b: WorldBuilding, c: { wal
       for (let k = 0; k < n; k++) {
         const t0 = (k + 0.14) / n, t1 = (k + 0.86) / n
         const pane = [ax + dx * t0 + nx, az + dz * t0 + nz, ax + dx * t1 + nx, az + dz * t1 + nz]
-        out.glass.walls(pane, undefined, 0.9, 4.5, [0.58, 0.66, 0.65], 1)
-        if (b.h < 28 && k % 2 === 0) {
-          out.stone.ribbon(pane, 1.5, 4.7, seed > 0.5 ? [0.35, 0.42, 0.36] : [0.55, 0.28, 0.22])
-        }
+        out.glass.walls(pane, undefined, base + 0.6, base + 4.2, [0.58, 0.66, 0.65], 1)
+        if (b.h < 28 && k % 2 === 0) out.stone.ribbon(pane, 1.5, base + 4.4, seed > 0.5 ? [0.35, 0.42, 0.36] : [0.55, 0.28, 0.22])
       }
     }
   }
-  const [x0, z0, x1, z1] = bounds(tower)
-  if (b.h > 15 && x1 - x0 > 18 && z1 - z0 > 18) {
-    const little = interiorBox({ ring: tower, holes: b.holes }, Math.min(5, (x1 - x0) * 0.1))
+  const equipmentRing = crown ?? tower
+  const [x0, z0, x1, z1] = bounds(equipmentRing)
+  if (b.h > 15 && x1 - x0 > 18 && z1 - z0 > 18 && !b.holes?.length) {
+    const little = interiorBox({ ring: equipmentRing }, Math.min(5, (x1 - x0) * 0.1))
     if (little) {
       const [cx, cz] = centroid(little)
       // Offset rooftop units remain inside the roof; never stretch over a courtyard.
       for (const dx of [-6, 6]) {
         const box = [cx + dx - 1.3, cz - 1.8, cx + dx + 1.3, cz - 1.8, cx + dx + 1.3, cz + 1.8, cx + dx - 1.3, cz + 1.8]
-        if (box.every((_, i) => i % 2 || (pointInRing(box[i], box[i + 1], tower) && !b.holes?.some(h => pointInRing(box[i], box[i + 1], h))))) out.metal.extrude(box, undefined, top, top + 1.1, [0.52, 0.55, 0.54], [0.74, 0.75, 0.72])
+        if (box.every((_, i) => i % 2 || pointInRing(box[i], box[i + 1], equipmentRing))) out.metal.extrude(box, undefined, equipmentTop, equipmentTop + 1.1, [0.52, 0.55, 0.54], [0.74, 0.75, 0.72])
       }
     }
   }

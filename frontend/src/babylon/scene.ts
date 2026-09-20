@@ -8,12 +8,9 @@ import { Scene } from '@babylonjs/core/scene'
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera'
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight'
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight'
-import { CascadedShadowGenerator } from '@babylonjs/core/Lights/Shadows/cascadedShadowGenerator'
+import { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator'
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
-import { Mesh } from '@babylonjs/core/Meshes/mesh'
-import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
-import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import { DefaultRenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/defaultRenderingPipeline'
 import { SSAO2RenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/ssao2RenderingPipeline'
 import '@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent'
@@ -26,10 +23,14 @@ import { Texture } from '@babylonjs/core/Materials/Textures/texture'
 import { RenderTargetTexture } from '@babylonjs/core/Materials/Textures/renderTargetTexture'
 
 import { WorldFrame } from './coords'
-import { buildCity, type CityMeshes } from './city'
+import { renderScale, type DisplaySettings } from './display'
+import { fitShadowLight } from './shadows'
+import { buildCity, Y, type CityMeshes } from './city'
 import { WorldCamera } from './camera'
 import { RoadIndex } from './roadIndex'
 import { Traffic } from './traffic'
+import { buildSky } from './sky'
+import { applyWorldAtmosphere } from './atmosphere'
 import type { WorldData } from './worldData'
 import { buildStreetDetails } from './streetDetails'
 import { loadLandmarkModels } from './landmarkModels'
@@ -37,6 +38,7 @@ import { loadLandmarkModels } from './landmarkModels'
 export interface WorldSceneOptions {
   shadows?: boolean
   ssao?: boolean
+  fixedCamera?: boolean
   quality?: 'high' | 'balanced'
 }
 
@@ -47,25 +49,31 @@ export class WorldScene {
   readonly camera: WorldCamera
   readonly sun: DirectionalLight
   readonly city: CityMeshes
-  readonly shadows: CascadedShadowGenerator | null
+  readonly shadows: ShadowGenerator | null
   readonly canvas: HTMLCanvasElement
   readonly world: WorldData
   readonly roads: RoadIndex
   readonly traffic: Traffic
   readonly fill: HemisphericLight
+  readonly assetsReady: Promise<void>
   private readonly post: DefaultRenderingPipeline
   /** Sim time (s) the traffic is drawn at; set by the playback clock each frame. */
   simT = 0
   lighting: 'afternoon' | 'golden' = 'afternoon'
   private disposed = false
+  private active = true
+  private readonly balanced: boolean
+  private readonly shadowHeight: number
   landmarkModelsLoaded = 0
 
   constructor(canvas: HTMLCanvasElement, world: WorldData, opts: WorldSceneOptions = {}) {
     this.canvas = canvas
     this.world = world
     const balanced = opts.quality === 'balanced'
+    this.balanced = balanced
+    this.shadowHeight = Math.max(100, ...world.buildings.map((b) => (b.base ?? 0) + b.h), ...world.landmarks.map((l) => l.h), ...(world.massing?.buildings.map((b) => b.h) ?? []))
     this.engine = new Engine(canvas, true, { antialias: true, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' }, true)
-    this.engine.setHardwareScalingLevel(1 / Math.min(window.devicePixelRatio || 1, balanced ? 1 : 2))
+    this.engine.setHardwareScalingLevel(balanced ? 1 : renderScale(window.devicePixelRatio, false))
     this.engine.useReverseDepthBuffer = true
     this.scene = new Scene(this.engine)
     this.frame = new WorldFrame(world.crs)
@@ -75,23 +83,21 @@ export class WorldScene {
     const horizon = new Color3(0.79, 0.84, 0.86)
     scene.clearColor = new Color4(horizon.r, horizon.g, horizon.b, 1)
     scene.ambientColor = new Color3(0.3, 0.32, 0.36)
-    scene.fogMode = Scene.FOGMODE_EXP2
-    scene.fogColor = horizon
-    scene.fogDensity = 0.000045
-    buildSky(scene, horizon)
+    const sky = buildSky(scene, horizon)
     scene.environmentTexture = new HDRCubeTexture('/assets/city/afternoon-sky.hdr', scene, 128, false, true, false, true)
     scene.environmentIntensity = 0.8
 
     // --- lights: sun from the south-west, cool sky fill
     // light travels from the south-west toward the north-east, so the south and west faces the opening camera sees are lit
     this.sun = new DirectionalLight('sun', new Vector3(0.5, -0.72, 0.42).normalize(), scene)
-    this.sun.diffuse = new Color3(1.0, 0.93, 0.82)
+    this.sun.diffuse = new Color3(1.0, 0.95, 0.85)
     this.sun.specular = new Color3(0.6, 0.55, 0.5)
     this.sun.intensity = 2.3
     const fill = new HemisphericLight('sky', new Vector3(0, 1, 0), scene)
     this.fill = fill
     fill.diffuse = new Color3(0.62, 0.7, 0.82)
     fill.groundColor = new Color3(0.42, 0.38, 0.33)
+    fill.specular = Color3.Black()
     fill.intensity = 0.42
 
     // --- city
@@ -117,24 +123,31 @@ export class WorldScene {
     cam.panningInertia = 0.82
     cam.inertia = 0.84
     cam.useNaturalPinchZoom = true
-    cam.attachControl(canvas, true)
+    if (!opts.fixedCamera) cam.attachControl(canvas, true)
     scene.onBeforeRenderObservable.add(() => {
       cam.panningSensibility = 45
     })
-    this.camera = new WorldCamera(cam, world)
+    this.camera = new WorldCamera(cam, world, opts.fixedCamera ?? false)
+    if (!this.camera.fixed) {
+      const cancelFlight = () => this.camera.cancel()
+      canvas.addEventListener('pointerdown', cancelFlight)
+      canvas.addEventListener('wheel', cancelFlight, { passive: true })
+      scene.onDisposeObservable.addOnce(() => {
+        canvas.removeEventListener('pointerdown', cancelFlight)
+        canvas.removeEventListener('wheel', cancelFlight)
+      })
+    }
+    applyWorldAtmosphere(scene, world.crs.bounds_world, sky)
 
-    // --- shadows (sun) over the buildings; cascaded so the 6 km city and a 50 m block both resolve
+    // --- shadows (sun) use a fixed world-space frustum, independent of camera rotation and zoom.
     if (opts.shadows ?? true) {
-      const sg = new CascadedShadowGenerator(balanced ? 1024 : 3072, this.sun)
-      sg.numCascades = 2
-      sg.lambda = 0.9
-      sg.shadowMaxZ = 4500
-      sg.autoCalcDepthBounds = false
-      sg.stabilizeCascades = true
-      sg.bias = 0.004
-      sg.normalBias = 0.02
+      fitShadowLight(this.sun, world.crs.bounds_world, this.shadowHeight)
+      const sg = new ShadowGenerator(Math.min(balanced ? 2048 : 4096, this.engine.getCaps().maxTextureSize), this.sun)
+      sg.bias = 0.00002
+      sg.normalBias = 0.3
+      sg.setDarkness(0.18)
       sg.usePercentageCloserFiltering = true
-      sg.filteringQuality = balanced ? CascadedShadowGenerator.QUALITY_LOW : CascadedShadowGenerator.QUALITY_MEDIUM
+      sg.filteringQuality = balanced ? ShadowGenerator.QUALITY_MEDIUM : ShadowGenerator.QUALITY_HIGH
       sg.customAllowRendering = submesh => {
         const mesh = submesh.getMesh()
         if (!mesh.name.includes('trees-')) return true
@@ -155,27 +168,25 @@ export class WorldScene {
     }
 
     // --- post: FXAA, subtle tone/vignette, SSAO for the tabletop-model feel
+    if (opts.ssao ?? false) {
+      const ssao = new SSAO2RenderingPipeline('ssao', scene, { ssaoRatio: 0.5, blurRatio: 1 }, [cam])
+      ssao.radius = 0.8
+      ssao.totalStrength = 0.35
+      ssao.base = 0.5
+      ssao.samples = 16
+      ssao.maxZ = 600
+      ssao.minZAspect = 0.2
+      ssao.bypassBlur = false
+    }
     const pipe = new DefaultRenderingPipeline('post', true, scene, [cam])
     this.post = pipe
     pipe.samples = balanced ? 1 : Math.max(1, Math.min(2, this.engine.getCaps().maxMSAASamples))
     pipe.fxaaEnabled = balanced || pipe.samples < 2
     pipe.imageProcessingEnabled = true
-    pipe.imageProcessing.contrast = 1.08
+    pipe.imageProcessing.contrast = 1.04
     pipe.imageProcessing.exposure = 1.05
-    pipe.imageProcessing.vignetteEnabled = true
-    pipe.imageProcessing.vignetteWeight = 0.65
-    pipe.imageProcessing.vignetteColor = new Color4(0.08, 0.1, 0.14, 0)
+    pipe.imageProcessing.vignetteEnabled = false
     pipe.imageProcessing.toneMappingEnabled = true
-    if (opts.ssao ?? !balanced) {
-      const ssao = new SSAO2RenderingPipeline('ssao', scene, { ssaoRatio: 0.5, blurRatio: 0.5 }, [cam])
-      ssao.radius = 3
-      ssao.totalStrength = 0.65
-      ssao.base = 0.15
-      ssao.samples = 8
-      ssao.maxZ = 2500
-      ssao.minZAspect = 0.5
-      ssao.bypassBlur = false
-    }
 
     const water = scene.getMaterialByName('city-water') as PBRMaterial | null
     const ripples = water?.bumpTexture as Texture | null
@@ -190,7 +201,7 @@ export class WorldScene {
 
     // --- replay traffic (created after the static materials are frozen: its own materials stay live)
     this.roads = new RoadIndex(world)
-    this.traffic = new Traffic(scene, this.frame, balanced ? null : this.shadows)
+    this.traffic = new Traffic(scene, this.frame, balanced ? null : this.shadows, world.surfaces ? Y.road : Y.path)
     scene.onBeforeRenderObservable.add(() => {
       const p = this.camera.cam.globalPosition
       this.traffic.update(this.simT, { x: p.x, y: p.y, z: p.z, radius: this.camera.cam.radius })
@@ -201,15 +212,34 @@ export class WorldScene {
     scene.skipPointerMovePicking = true
 
     this.engine.runRenderLoop(() => {
-      if (!this.disposed) scene.render()
+      if (!this.disposed && this.active) scene.render()
     })
     this.resize = this.resize.bind(this)
     window.addEventListener('resize', this.resize)
-    void loadLandmarkModels(this)
+    this.assetsReady = loadLandmarkModels(this)
+  }
+
+  setActive(active: boolean): void {
+    this.active = active
+    if (!active) this.camera.cancel()
+  }
+
+  setDisplay(settings: DisplaySettings): void {
+    const frozen = this.scene.materials.filter((m) => m.isFrozen)
+    for (const m of frozen) m.unfreeze()
+    this.scene.shadowsEnabled = settings.shadows
+    this.scene.texturesEnabled = settings.textures
+    this.engine.setHardwareScalingLevel(this.balanced ? 1 : renderScale(window.devicePixelRatio, settings.sharp))
+    if (settings.projection !== this.camera.preferredProjection) this.camera.setPreferredProjection(settings.projection)
+    if (settings.lighting !== this.lighting) this.setLighting(settings.lighting)
+    this.engine.resize()
+    this.invalidateShadows()
+    for (const m of frozen) m.freeze()
   }
 
   resize(): void {
     this.engine.resize()
+    this.camera.resize(this.engine.getAspectRatio(this.camera.cam))
   }
 
   get fps(): number {
@@ -239,57 +269,8 @@ export class WorldScene {
     this.sun.intensity = mode === 'golden' ? 2.0 : 2.3
     this.fill.intensity = mode === 'golden' ? 0.34 : 0.42
     this.post.imageProcessing.exposure = mode === 'golden' ? 1.12 : 1.05
+    fitShadowLight(this.sun, this.world.crs.bounds_world, this.shadowHeight)
     for (const m of this.scene.materials) { m.unfreeze(); m.markDirty() }
     this.invalidateShadows()
   }
-}
-
-/** Gradient sky dome: pale warm horizon rising to a soft blue, unlit and always behind everything. */
-function buildSky(scene: Scene, horizon: Color3): Mesh {
-  const zenith = new Color3(0.47, 0.62, 0.84)
-  const rings = 12
-  const segs = 24
-  const r = 30000
-  const positions: number[] = []
-  const colors: number[] = []
-  const indices: number[] = []
-  for (let j = 0; j <= rings; j++) {
-    const t = j / rings // 0 = horizon (slightly below), 1 = zenith
-    const el = -0.08 + t * (Math.PI / 2 + 0.08)
-    const y = Math.sin(el) * r
-    const rr = Math.cos(el) * r
-    const c = Color3.Lerp(horizon, zenith, Math.pow(Math.max(0, t), 0.7))
-    for (let i = 0; i < segs; i++) {
-      const a = (i / segs) * Math.PI * 2
-      positions.push(Math.cos(a) * rr, y, Math.sin(a) * rr)
-      colors.push(c.r, c.g, c.b, 1)
-    }
-  }
-  for (let j = 0; j < rings; j++) {
-    for (let i = 0; i < segs; i++) {
-      const i2 = (i + 1) % segs
-      const a = j * segs + i
-      const b = j * segs + i2
-      const c = (j + 1) * segs + i
-      const d = (j + 1) * segs + i2
-      indices.push(a, b, c, b, d, c)
-    }
-  }
-  const sky = new Mesh('sky', scene)
-  const vd = new VertexData()
-  vd.positions = new Float32Array(positions)
-  vd.colors = new Float32Array(colors)
-  vd.indices = new Uint16Array(indices)
-  vd.applyToMesh(sky)
-  const m = new StandardMaterial('sky', scene)
-  m.disableLighting = true
-  m.emissiveColor = Color3.White()
-  m.backFaceCulling = false
-  m.fogEnabled = false
-  sky.material = m
-  sky.infiniteDistance = true
-  sky.isPickable = false
-  sky.applyFog = false
-  sky.renderingGroupId = 0
-  return sky
 }

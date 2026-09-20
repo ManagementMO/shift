@@ -15,7 +15,6 @@ const TITLES: Record<ToolId, string> = {
   weather: 'Moving hazard',
   road: 'Roads',
   intersection: 'Intersections',
-  custom: 'Custom intervention',
 }
 
 export default function ToolPanel() {
@@ -37,7 +36,6 @@ export default function ToolPanel() {
       {tool === 'population' && <PopulationTool />}
       {tool === 'event' && <EventTool />}
       {(tool === 'road' || tool === 'intersection') && <StructuralTool kind={tool} />}
-      {tool === 'custom' && <div className="small dim">Type the intervention in the command bar below. The agent returns a typed proposal; nothing is applied until you confirm.</div>}
       <ProposalCard />
     </aside>
   )
@@ -352,7 +350,7 @@ function EventTool() {
           fleet {scenario.constraints.fleet.map((f) => `${f.vehicle_id} (${f.capacity})`).join(', ')} · service window +{fmt(scenario.constraints.service_window_s[0])}–+{fmt(scenario.constraints.service_window_s[1])} · horizon +{fmt(scenario.constraints.horizon_s)}
         </div>
       )}
-      <div className="small dim">Change crowd size with Population; change the fleet from the command bar (“use three buses”).</div>
+      <div className="small dim">Change crowd size with Population or assign shuttle service with Bus route.</div>
     </div>
   )
 }

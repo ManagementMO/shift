@@ -297,6 +297,13 @@ class AgentDecision(BaseModel):
     tool_calls: list[dict] = []
 
 
+class InvestigationOptions(BaseModel):
+    ai_enabled: bool = True
+    plan_variants: int = Field(default=2, ge=1, le=2)
+    max_iterations: int = Field(default=6, ge=2, le=6)
+    use_elasticsearch: bool = True
+
+
 class Investigation(BaseModel):
     """One agent investigation: problem + constraint text -> frozen evidence -> proposed, validated plans."""
 
@@ -306,6 +313,7 @@ class Investigation(BaseModel):
     constraint_text: str
     status: Literal["queued", "running", "completed", "failed"] = "queued"
     engine: str = "openjiuwen-react"
+    options: InvestigationOptions = Field(default_factory=InvestigationOptions)
     evidence_bundle_id: str | None = None
     decisions: list[AgentDecision] = []
     proposed_plan_ids: list[str] = []

@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useStore, type LensTab } from '../store'
+import { usePreferences } from '../preferences'
 import { cohortSummaryAt, seriesAt, STATE_COLORS, type PersonState } from '../replay'
 import type { Investigation, Renderer } from '../types'
 import { fmt } from '../util'
 import Inspector from '../components/Inspector'
-import ComparePanel from '../components/ComparePanel'
 
 const TABS: { id: LensTab; label: string }[] = [
   { id: 'people', label: 'People' },
@@ -98,6 +98,7 @@ function PeopleLens() {
 }
 
 function AgentsLens() {
+  const aiEnabled = usePreferences((s) => s.preferences.aiEnabled)
   const scenarioId = useStore((s) => s.scenarioId)
   const pack = useStore((s) => s.pack)
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
@@ -114,12 +115,12 @@ function AgentsLens() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (!investigation || investigation.status !== 'running') return
+    if (!investigation || (investigation.status !== 'running' && investigation.status !== 'queued')) return
     const id = setInterval(async () => {
       try {
         const inv = await api.investigation(investigation.investigation_id)
         setInvestigation(inv)
-        if (inv.status !== 'running' && scenarioId) useStore.setState({ plans: await api.plans(scenarioId) })
+        if (inv.status !== 'running' && inv.status !== 'queued' && scenarioId) useStore.setState({ plans: await api.plans(scenarioId) })
       } catch (e) {
         setError(String(e))
       }
@@ -133,6 +134,7 @@ function AgentsLens() {
     try {
       const inv: Investigation = await api.investigate(scenarioId, problem, constraint)
       setInvestigation(inv)
+      if (inv.status === 'completed') useStore.setState({ plans: await api.plans(scenarioId) })
     } catch (e) {
       setError(String(e))
     } finally {
@@ -145,10 +147,11 @@ function AgentsLens() {
       <div className="small dim">Bounded specialists read frozen evidence and the network, then propose plans. Every plan goes through the same validators; rejected plans stay visible as rejected.</div>
       <textarea value={problem} onChange={(e) => setProblem(e.target.value)} rows={3} />
       <textarea value={constraint} onChange={(e) => setConstraint(e.target.value)} rows={2} />
-      <button className="primary" onClick={() => void run()} disabled={busy || !scenarioId || investigation?.status === 'running'}>
-        {investigation?.status === 'running' ? 'Agents working…' : 'Investigate'}
+      <button className="primary" onClick={() => void run()} disabled={busy || !scenarioId || investigation?.status === 'running' || investigation?.status === 'queued'}>
+        {investigation?.status === 'running' || investigation?.status === 'queued' ? 'Planning…' : aiEnabled ? 'Investigate' : 'Generate local plans'}
       </button>
-      {health && !health.providers.llm.available && <div className="small warn">No model provider is reachable; agent plans are unavailable, heuristic plans still are.</div>}
+      {!aiEnabled && <div className="small dim">AI assistance is off. Candidates use deterministic heuristics; no model calls are made.</div>}
+      {aiEnabled && health && !health.providers.llm.available && <div className="small warn">No model provider is reachable; agent plans are unavailable, heuristic plans still are.</div>}
       {investigation && (
         <div className="decisions small">
           <div>
@@ -206,7 +209,6 @@ function TransportLens() {
           ))}
         </div>
       </div>
-      <ComparePanel />
       {selection && (selection.kind === 'bus' || selection.kind === 'stop' || selection.kind === 'restriction') && <Inspector />}
     </div>
   )
@@ -215,7 +217,6 @@ function TransportLens() {
 function DiagnosticsLens({ renderer }: { renderer: Renderer }) {
   const health = useStore((s) => s.health)
   const rx = useStore((s) => (s.primaryRunId ? s.replays[s.primaryRunId] : null))
-  const compare = useStore((s) => (s.compareRunId ? s.replays[s.compareRunId] : null))
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
   const pack = useStore((s) => s.pack)
   const mapbox = Boolean(import.meta.env.VITE_MAPBOX_TOKEN)
@@ -271,7 +272,6 @@ function DiagnosticsLens({ renderer }: { renderer: Renderer }) {
         {renderer === 'babylon' ? 'Open Mapbox alternative' : 'Return to Babylon'}
       </a>
       {rx && runRow(rx, 'view run')}
-      {compare && runRow(compare, 'compare run')}
       {rx && (
         <details className="small">
           <summary>run warnings ({rx.bundle.run.warnings.length})</summary>

@@ -147,11 +147,11 @@ function roadColor(r: WorldRoad, pedOnlyLane: boolean): RGB {
 
 function buildingColor(b: WorldBuilding): { wall: RGB; roof: RGB } {
   const c = CATEGORY[b.cat] ?? CATEGORY.generic
-  const j = hash01(b.id)
+  const j = hash01(b.source_id ?? b.id)
   const wall = mix(c.wall, c.alt, j * 0.9)
   // taller = cooler/glassier; short = warmer
-  const tall = Math.min(1, Math.max(0, (b.h - 30) / 120))
-  const glass = [hex('#7f9b94'), hex('#c4c4ae'), hex('#688b98'), hex('#ad9e80'), hex('#89978a'), hex('#adb8b8'), hex('#77847f')][Math.floor(hash01(`${b.id}:glazing`) * 7)]
+  const tall = Math.min(1, Math.max(0, ((b.source_height ?? b.h) - 30) / 120))
+  const glass = [hex('#7f9b94'), hex('#c4c4ae'), hex('#688b98'), hex('#ad9e80'), hex('#89978a'), hex('#adb8b8'), hex('#77847f')][Math.floor(hash01(`${b.source_id ?? b.id}:glazing`) * 7)]
   return { wall: mix(wall, glass, Math.max(tall * 0.88, b.cat === 'office' ? 0.85 : 0)), roof: mix(c.roof, PALETTE.roofDark, tall * 0.5) }
 }
 
@@ -160,21 +160,21 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
   const w = bx1 - bx0
   const d = bz1 - bz0
 
-  const groundMat = new StandardMaterial('ground', scene)
-  groundMat.diffuseColor = Color3.FromArray(PALETTE.land)
-  groundMat.ambientColor = Color3.FromArray(PALETTE.land).scale(0.35)
-  groundMat.specularColor = Color3.Black()
-  const land = new Batch()
+  const materials = new CityMaterials(scene, facadeResolution)
+  const land = new Batch(TEXTURE_RECIPES.concrete.metres)
   const plate = [bx0 - w * 0.3, bz0 - d * 0.3, bx1 + w * 0.3, bz0 - d * 0.3, bx1 + w * 0.3, bz1 + d * 0.3, bx0 - w * 0.3, bz1 + d * 0.3]
-  land.polygon(plate, world.water.map((p) => p.ring), Y.ground, [1, 1, 1])
-  for (const poly of world.water) {
-    for (const island of poly.holes ?? []) land.polygon(island, undefined, Y.ground, [1, 1, 1])
+  if (world.surfaces) {
+    for (const p of world.surfaces.ground) land.polygon(p.ring, p.holes, Y.road, PALETTE.land)
+  } else {
+    land.polygon(plate, world.water.map((p) => p.ring), Y.ground, PALETTE.land)
+    for (const poly of world.water) {
+      for (const island of poly.holes ?? []) land.polygon(island, undefined, Y.ground, PALETTE.land)
+    }
   }
-  const ground = meshFromBatch('ground', land, scene, groundMat)
+  const ground = meshFromBatch('ground', land, scene, materials.get('concrete'))
   ground.receiveShadows = true
   ground.isPickable = true
 
-  const materials = new CityMaterials(scene, facadeResolution)
   const flatMat = vertexColorMaterial('flat', scene, 0.02)
   const foliageMat = vertexColorMaterial('foliage', scene, 0.02)
   const landmarkMat = materials.get('concrete')
@@ -207,7 +207,7 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
   const shoreline = new Batch(TEXTURE_RECIPES.concrete.metres)
   for (const poly of world.water) {
     water.polygon(poly.ring, poly.holes, Y.water, PALETTE.water)
-    shoreline.walls(poly.ring, poly.holes, Y.water, Y.ground, [0.58, 0.56, 0.49], 1, true)
+    shoreline.walls(poly.ring, poly.holes, Y.water, world.surfaces ? Y.road : Y.ground, [0.58, 0.56, 0.49], 1, true)
   }
   if (!water.isEmpty()) {
     chunks.push(meshFromBatch('water', water, scene, materials.get('water')))
@@ -216,35 +216,46 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
 
   // --- surfaces: parks, sand, rail, paths, roads, junctions — chunked 1.2 km
   const surf = new ChunkGrid(1200, makeBatches)
-  for (const ring of world.green) {
+  if (world.surfaces) {
+    const colors = { grass: PALETTE.green, sand: PALETTE.sand, pavement: PALETTE.pavement, asphalt: PALETTE.asphaltMinor, rail: PALETTE.rail }
+    for (const kind of ['grass', 'sand', 'pavement', 'asphalt', 'rail'] as const) {
+      for (const p of world.surfaces[kind]) {
+        const [cx, cz] = centroid(p.ring)
+        batchFor(surf.at(cx, cz), kind === 'rail' ? 'roof' : kind).polygon(p.ring, p.holes, Y.road, colors[kind])
+      }
+    }
+  }
+  for (const ring of world.surfaces ? [] : world.green) {
     const [cx, cz] = centroid(ring)
     batchFor(surf.at(cx, cz), 'grass').polygon(ring, undefined, Y.green, mix(PALETTE.green, hex('#7ea55f'), hash01(String(ring[0])) * 0.6))
   }
-  for (const ring of world.sand) {
+  for (const ring of world.surfaces ? [] : world.sand) {
     const [cx, cz] = centroid(ring)
     batchFor(surf.at(cx, cz), 'sand').polygon(ring, undefined, Y.sand, PALETTE.sand)
   }
   for (const r of world.roads) {
     const cell = surf.at(r.shape[0], r.shape[1])
-    if (r.kind === 'path' || !r.lanes?.length) {
-      batchFor(cell, 'pavement').ribbon(r.shape, Math.max(1.6, Math.min(r.w, 4)), Y.path, PALETTE.pathway)
-      continue
+    if (!world.surfaces) {
+      if (r.kind === 'path' || !r.lanes?.length) {
+        batchFor(cell, 'pavement').ribbon(r.shape, Math.max(1.6, Math.min(r.w, 4)), Y.path, PALETTE.pathway)
+        continue
+      }
+      for (const ln of r.lanes) {
+        const pedOnly = ln.allow.length === 1 && ln.allow[0] === 'ped'
+        batchFor(cell, pedOnly ? 'pavement' : 'asphalt').ribbon(ln.shape, ln.w, pedOnly ? Y.path : Y.road, roadColor(r, pedOnly))
+      }
     }
-    for (const ln of r.lanes) {
-      const pedOnly = ln.allow.length === 1 && ln.allow[0] === 'ped'
-      batchFor(cell, pedOnly ? 'pavement' : 'asphalt').ribbon(ln.shape, ln.w + 0.25, pedOnly ? Y.path : Y.road, roadColor(r, pedOnly))
-    }
-    const lanes = r.lanes.filter((ln) => ln.allow.includes('car') || ln.allow.includes('bus'))
+    const lanes = r.lanes?.filter((ln) => ln.allow.includes('car') || ln.allow.includes('bus')) ?? []
     for (const ln of lanes.slice(0, -1)) {
       for (const dash of roadDashes(ln.shape, ln.w / 2)) batchFor(cell, 'paint').ribbon(dash, 0.16, Y.road + 0.035, [0.88, 0.86, 0.75])
     }
   }
-  for (const j of world.junctions) {
+  for (const j of world.surfaces ? [] : world.junctions) {
     if (j.ring.length < 6) continue
     const roadJ = j.kind === 'road'
     batchFor(surf.at(j.x, j.z), roadJ ? 'asphalt' : 'pavement').polygon(j.ring, undefined, roadJ ? Y.junction : Y.path, roadJ ? PALETTE.asphaltMinor : PALETTE.pathway)
   }
-  for (const line of world.rail) {
+  for (const line of world.surfaces ? [] : world.rail) {
     batchFor(surf.at(line[0], line[1]), 'roof').ribbon(line, 1.6, Y.rail, PALETTE.rail)
   }
   flush(surf, 'surface', false)
@@ -254,14 +265,15 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
   const focus = world.landmarks.find(l => l.kind === 'cn_tower') ?? world.venue
   const replaced = new Set(world.massing?.excluded_osm_ids ?? [])
   for (const b of world.buildings) {
-    if (replaced.has(b.id)) continue
+    if (replaced.has(b.source_id ?? b.id)) continue
     if (b.cat === 'landmark' && world.landmarks.some((l) => l.id === b.id)) continue
-    if (b.ring.length < 6 || Math.abs(signedArea(b.ring)) < 4) continue
+    if (b.ring.length < 6 || Math.abs(signedArea(b.ring)) < (b.source_id ? 0.01 : 4)) continue
     const [cx, cz] = centroid(b.ring)
     const c = buildingColor(b)
     const cell = bld.at(cx, cz)
+    const appearance = { id: b.source_id ?? b.id, cat: b.cat, h: b.source_height ?? b.h }
     addArchitecture({
-      facade: batchFor(cell, facadeFor(b)), roof: batchFor(cell, 'roof'),
+      facade: batchFor(cell, facadeFor(appearance)), roof: batchFor(cell, 'roof'),
       stone: batchFor(cell, 'concrete'), glass: batchFor(cell, 'glass'), metal: batchFor(cell, 'industrial'),
     }, b, c, Math.hypot(cx - focus.x, cz - focus.z) < 1500)
   }
@@ -272,7 +284,7 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
   }
   flush(bld, 'buildings', true)
 
-  const trees = buildVegetation(scene, treePlacements(world), foliageMat)
+  const trees = buildVegetation(scene, treePlacements(world), foliageMat, world.surfaces ? Y.road : Y.green)
   chunks.push(...trees)
   casters.push(...trees)
 
@@ -308,7 +320,6 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
       for (const c of chunks) c.dispose()
       landmarks.dispose()
       stops.dispose()
-      groundMat.dispose()
       flatMat.dispose()
       foliageMat.dispose()
       materials.dispose()
@@ -368,8 +379,8 @@ function buildLandmark(batch: Batch, glazing: Batch, l: WorldLandmark): void {
       const [x0, z0, x1, z1] = bounds(l.ring)
       const rx = ((x1 - x0) / 2) * 0.93
       const rz = ((z1 - z0) / 2) * 0.93
-      dome(batch, (x0 + x1) / 2, (z0 + z1) / 2, rx, rz, Y.building + wallH - 2, Math.max(20, l.h - wallH), c.roof)
-      domeRibs(batch, (x0 + x1) / 2, (z0 + z1) / 2, rx, rz, Y.building + wallH - 2, Math.max(20, l.h - wallH))
+      dome(batch, (x0 + x1) / 2, (z0 + z1) / 2, rx, rz, Y.building + wallH, Math.max(20, l.h - wallH), c.roof)
+      domeRibs(batch, (x0 + x1) / 2, (z0 + z1) / 2, rx, rz, Y.building + wallH, Math.max(20, l.h - wallH))
       return
     }
     case 'union_station': {
@@ -441,11 +452,11 @@ function dome(batch: Batch, x: number, z: number, rx: number, rz: number, y0: nu
     const row: number[] = []
     for (let i = 0; i < segs; i++) {
       const a = (i / segs) * Math.PI * 2
-      const nx = Math.cos(a) * k
-      const nz = Math.sin(a) * k
-      const ny = Math.sin((t * Math.PI) / 2)
-      const shade = 0.78 + 0.22 * Math.max(0, ny * 0.7 - nx * 0.4 - nz * 0.5)
-      row.push(batch.vertex(x + Math.cos(a) * rx * k, y, z + Math.sin(a) * rz * k, nx, ny, nz, scale(c, shade)))
+      const nx = Math.cos(a) * k / rx
+      const nz = Math.sin(a) * k / rz
+      const ny = Math.sin((t * Math.PI) / 2) / h
+      const length = Math.hypot(nx, ny, nz)
+      row.push(batch.vertex(x + Math.cos(a) * rx * k, y, z + Math.sin(a) * rz * k, nx / length, ny / length, nz / length, c))
     }
     idx.push(row)
   }

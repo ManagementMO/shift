@@ -1,39 +1,39 @@
 import { useEffect, useMemo } from 'react'
 import { useStore } from '../store'
-import { clock, simClock } from '../world/playback'
+import { clock, PLAYBACK_SPEEDS, simClock } from '../world/playback'
 import { cohortSummaryAt, entitiesAt } from '../replay'
 import { fmt } from '../util'
 
-const SPEEDS = [1, 10, 100]
-
-export default function SimDock() {
+export default function SimDock({ active = true }: { active?: boolean }) {
   const t = useStore((s) => s.t)
   const playing = useStore((s) => s.playing)
   const speed = useStore((s) => s.speed)
   const primary = useStore((s) => (s.primaryRunId ? s.replays[s.primaryRunId] : null))
-  const baseline = useStore((s) => (s.compareMode && s.compareRunId ? s.replays[s.compareRunId] ?? null : null))
+  const loading = useStore((s) => s.loadingReplay !== null)
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const horizon = scenario?.constraints.horizon_s ?? primary?.tMax ?? 2700
+  const horizon = Math.max(1, scenario?.constraints.horizon_s ?? primary?.tMax ?? 2700, primary?.tMax ?? 0)
+  const ready = !!primary && !loading
 
   useEffect(() => {
+    if (!active) return
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      const target = e.target instanceof HTMLElement ? e.target : null
+      if (!ready || e.repeat || target?.isContentEditable || target?.closest('input, textarea, select, button')) return
       if (e.code === 'Space') {
         e.preventDefault()
         clock.toggle()
-      } else if (e.code === 'ArrowRight') clock.seek(clock.t + 30)
-      else if (e.code === 'ArrowLeft') clock.seek(clock.t - 30)
+      } else if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') {
+        if (target?.tagName === 'CANVAS') return
+        e.preventDefault()
+        clock.seek(clock.t + (e.code === 'ArrowRight' ? 30 : -30))
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [active, ready])
 
   const summary = primary ? cohortSummaryAt(primary, t) : null
   const buses = primary ? entitiesAt(primary, t).filter((e) => e.kind === 'bus').length : 0
-  const base = baseline ? cohortSummaryAt(baseline, t) : null
-  const baseBuses = baseline ? entitiesAt(baseline, t).filter((e) => e.kind === 'bus').length : null
-  const d = (a: number | null | undefined, b: number | null | undefined) => (a == null || b == null ? undefined : a - b)
   const ticks = useMemo(() => {
     const step = horizon > 3600 * 2 ? 1800 : horizon > 3600 ? 900 : 600
     const out: number[] = []
@@ -46,22 +46,27 @@ export default function SimDock() {
   return (
     <div className="dock">
       <div className="dock-controls">
-        <button className="iconbtn" onClick={() => clock.seek(0)} title="Restart" disabled={!primary}>
+        <button className="iconbtn" onClick={() => clock.seek(0)} title="Restart" aria-label="Restart simulation" disabled={!ready}>
           ⟲
         </button>
-        <button className="iconbtn play" onClick={() => clock.toggle()} title="Space" disabled={!primary}>
+        <button className="iconbtn play" onClick={() => clock.toggle()} title={`${playing ? 'Pause' : 'Resume'} (Space)`} aria-label={playing ? 'Pause simulation' : 'Resume simulation'} disabled={!ready}>
           {playing ? '❚❚' : '▶'}
         </button>
-        <div className="speeds">
-          {SPEEDS.map((s) => (
-            <button key={s} className={speed === s ? 'on' : ''} onClick={() => clock.setSpeed(s)}>
+        <div className="speeds" role="group" aria-label="Simulation speed">
+          {PLAYBACK_SPEEDS.map((s) => (
+            <button key={s} className={speed === s ? 'on' : ''} aria-pressed={speed === s} onClick={() => clock.setSpeed(s)} disabled={!ready}>
               {s}×
             </button>
           ))}
         </div>
-        <div className="clock">
-          <span className="wall">{simClock(t)}</span>
-          <span className="rel">+{fmt(t)}</span>
+        {primary && primary.activityStart > 0 && (
+          <button className="ghostbtn" onClick={() => clock.seek(primary.activityStart)} disabled={!ready} aria-label="Jump to active traffic" title={`Skip the quiet intro and jump to recorded activity at +${fmt(primary.activityStart)}`}>
+            Activity
+          </button>
+        )}
+        <div className="clock" role="timer" aria-label="Simulation clock" title="Recorded simulation time. Replays open at active traffic; rewind to watch the full intro.">
+          <span className="wall">{simClock(t, true)}</span>
+          <span className="rel">{playing ? 'Running' : 'Paused'} · +{fmt(t)}</span>
         </div>
       </div>
       <div className="dock-timeline">
@@ -80,7 +85,7 @@ export default function SimDock() {
           step={1}
           value={Math.min(t, horizon)}
           onChange={(e) => clock.seek(Number(e.target.value))}
-          disabled={!primary}
+          disabled={!ready}
           aria-label="Simulation time"
         />
         <div className="ticks">
@@ -92,28 +97,20 @@ export default function SimDock() {
         </div>
       </div>
       <div className="dock-metrics">
-        <Metric label="Moving" value={summary ? summary.walking + summary.driving : null} tone="walking" delta={d(summary && summary.walking + summary.driving, base && base.walking + base.driving)} />
-        <Metric label="Waiting" value={summary?.waiting ?? null} tone="waiting" delta={d(summary?.waiting, base?.waiting)} />
-        <Metric label="Riding" value={summary?.riding ?? null} tone="riding" delta={d(summary?.riding, base?.riding)} />
-        <Metric label="Arrived" value={summary?.arrived ?? null} tone="arrived" delta={d(summary?.arrived, base?.arrived)} />
-        <Metric label="Buses" value={primary ? buses : null} tone="bus" delta={d(primary ? buses : null, baseBuses)} />
+        <Metric label="Moving" value={summary ? summary.walking + summary.driving : null} tone="walking" />
+        <Metric label="Waiting" value={summary?.waiting ?? null} tone="waiting" />
+        <Metric label="Riding" value={summary?.riding ?? null} tone="riding" />
+        <Metric label="Arrived" value={summary?.arrived ?? null} tone="arrived" />
+        <Metric label="Buses" value={primary ? buses : null} tone="bus" />
       </div>
     </div>
   )
 }
 
-/** `delta` is candidate − baseline at the same clock while comparing; otherwise omitted. */
-function Metric({ label, value, tone, delta }: { label: string; value: number | null; tone: string; delta?: number }) {
+function Metric({ label, value, tone }: { label: string; value: number | null; tone: string }) {
   return (
     <div className={`metric ${tone}`}>
-      <span className="val">
-        {value ?? '—'}
-        {delta !== undefined && (
-          <small className={`delta ${delta > 0 ? 'up' : delta < 0 ? 'down' : ''}`} title="candidate − baseline, same clock">
-            {delta > 0 ? `+${delta}` : delta === 0 ? '±0' : delta}
-          </small>
-        )}
-      </span>
+      <span className="val">{value ?? '—'}</span>
       <span className="lbl">{label}</span>
     </div>
   )

@@ -1,8 +1,9 @@
 import { lazy, Suspense } from 'react'
 
 import App from './App.tsx'
+import Experience from './globe/Experience'
 
-// `/` and `/world` use the full Babylon interface. `/mapbox` is the Mapbox alternative.
+// `/` opens the globe; `/world` opens the city directly. `/mapbox` is the Mapbox alternative.
 // `/world/lab` is the bare Babylon viewer for renderer experiments.
 const WorldApp = lazy(() => import('./babylon/WorldApp.tsx'))
 const CityShowcase = lazy(() => import('./babylon/CityShowcase.tsx'))
@@ -19,5 +20,5 @@ export default function Root() {
         <WorldApp />
       </Suspense>
     )
-  return <App />
+  return <Experience initialCity={path === '/world'} />
 }

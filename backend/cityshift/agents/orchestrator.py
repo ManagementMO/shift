@@ -24,11 +24,12 @@ from cityshift.contracts import (
     CityPack,
     DemandSet,
     Investigation,
+    InvestigationOptions,
     ScenarioSpec,
     ServicePlan,
     ValidationReport,
 )
-from cityshift.domain.compiler import make_cycles, venue_stop_candidates
+from cityshift.domain.compiler import heuristic_plans, make_cycles, venue_stop_candidates
 from cityshift.domain.network import load_corridors
 from cityshift.domain.validators import validate_plan
 from cityshift.evidence import build_bundle
@@ -94,7 +95,8 @@ class InvestigationRunner:
         inv.decisions.append(AgentDecision(
             decision_id=f"{inv.investigation_id}-{len(inv.decisions) + 1:02d}", role=role, action=action,
             inputs_summary=inputs[:800], output_summary=output[:1200], validation=validation,
-            model=self.llm.model, provider=self.llm.provider, tool_calls=list(ctx.calls),
+            model=self.llm.model if inv.options.ai_enabled else "none",
+            provider=self.llm.provider if inv.options.ai_enabled else "deterministic", tool_calls=list(ctx.calls),
         ))
         ctx.calls.clear()
         self.store.put_investigation(inv)
@@ -116,23 +118,33 @@ class InvestigationRunner:
     async def _run(self, inv: Investigation, pack: CityPack, scenario: ScenarioSpec, demand: DemandSet) -> None:
         corridors = load_corridors(pack.pack_id)
         queries = [inv.problem_text, *(c["label"] for c in corridors.values()), "closure detour bus", "event end time"]
-        bundle = build_bundle(pack.pack_id, queries)
+        bundle = build_bundle(pack.pack_id, queries, use_elasticsearch=inv.options.use_elasticsearch)
         self.store.put_bundle(bundle)
         inv.evidence_bundle_id = bundle.bundle_id
         ctx = ToolContext(pack=pack, scenario=scenario, demand=demand, bundle=bundle)
-        tools = {t.card.name: t for t in make_tools(ctx)}
         providers = sorted({str(r.get("provider")) for r in bundle.query_records})
         self._decision(inv, "evidence_analyst", "freeze_bundle",
                        f"{len(queries)} scoped queries against corpus {bundle.corpus_snapshot}",
                        f"bundle {bundle.bundle_id} hash {bundle.content_hash[:12]}: {len(bundle.claims)} claims from {len(bundle.source_ids)} sources via {providers}; unresolved={len(bundle.unresolved)}",
                        ctx, validation="deterministic retrieval; content hash frozen")
 
+        if not inv.options.ai_enabled:
+            for candidate in heuristic_plans(pack, scenario, demand)[:inv.options.plan_variants]:
+                local_plan = candidate.model_copy(update={"plan_id": f"local-{candidate.plan_id}-{inv.investigation_id[-6:]}"})
+                local_report = validate_plan(pack, scenario, local_plan, demand)
+                self.store.put_plan(scenario.scenario_id, local_plan, local_report)
+                (inv.proposed_plan_ids if local_report.valid else inv.rejected_plan_ids).append(local_plan.plan_id)
+                self._decision(inv, "planner", "local_plan", "AI assistance disabled", local_plan.rationale, ctx,
+                               validation="VALID" if local_report.valid else "INVALID")
+            return
+
+        tools = {t.card.name: t for t in make_tools(ctx)}
         ev_summary = await _ask(
             "evidence_analyst", "Reads frozen evidence claims and modeled restrictions for a transit egress scenario.",
             [tools["evidence_claims"], tools["active_restrictions"]],
             "Use evidence_claims and active_restrictions. In at most 5 bullet points, state which CONFIRMED claims constrain bus routing "
             "during the egress window, which are superseded or pending and must be ignored, and anything unresolved. Do not invent facts.",
-            max_iterations=4,
+            max_iterations=min(4, inv.options.max_iterations),
         )
         self._decision(inv, "evidence_analyst", "summarise_claims", "frozen bundle via tools", ev_summary, ctx,
                        validation="advisory only; claims unchanged")
@@ -143,7 +155,7 @@ class InvestigationRunner:
             "Call demand_summary (it takes NO arguments), then stop_options once per zone for the top 4 zones by travelers "
             f"without a car. Known zone ids: {', '.join(z.zone_id for z in pack.zones)}. Reply with a compact list: "
             "zone_id, no-car count, best stop_id and name. Note the cohort is synthetic.",
-            max_iterations=6,
+            max_iterations=inv.options.max_iterations,
         )
         self._decision(inv, "demand_analyst", "rank_zones", demand_summary_text(ctx)[:300], dm_summary, ctx,
                        validation="declared counts only; no demographic inference")
@@ -161,14 +173,14 @@ class InvestigationRunner:
             ("agent-direct", "Propose plan 1: each bus serves ONE zone (direct shuttle)."),
             ("agent-split", "Propose plan 2: each bus serves TWO zones in sequence (split route), different from a direct shuttle."),
         ]
-        for tag, instruction in variants:
+        for tag, instruction in variants[:inv.options.plan_variants]:
             plan_id = f"{tag}-{inv.investigation_id[-6:]}"
             # Step 1: bounded ReAct sketch with read-only tools (prose; tool-calling models drop content when asked for JSON here).
             sketch = await _ask(
                 "planner", "Proposes bounded shuttle assignments for a finite fleet.", planner_tools,
                 f"{instruction}\n{context}\nCheck active_restrictions and zone_of_stop for any stop you pick. "
                 "Reply in prose bullets (NO JSON): for each bus, its drop stop_ids in order, first departure in seconds, and why.",
-                max_iterations=6,
+                max_iterations=inv.options.max_iterations,
             )
             self._decision(inv, "planner", f"sketch:{tag}", instruction, sketch, ctx, validation="advisory; not yet a plan")
             # Step 2: tool-free formatting into the typed shape, then deterministic compile + validate (one repair round).
@@ -202,6 +214,8 @@ class InvestigationRunner:
                 self.store.put_investigation(inv)
 
 
-def new_investigation(scenario_id: str, problem: str, constraint: str) -> Investigation:
+def new_investigation(scenario_id: str, problem: str, constraint: str, options: InvestigationOptions | None = None) -> Investigation:
     iid = "inv-" + hashlib.sha1(f"{scenario_id}|{problem}|{constraint}|{datetime.now(UTC).isoformat()}".encode()).hexdigest()[:10]
-    return Investigation(investigation_id=iid, scenario_id=scenario_id, problem_text=problem, constraint_text=constraint)
+    settings = (options or InvestigationOptions()).model_copy(deep=True)
+    return Investigation(investigation_id=iid, scenario_id=scenario_id, problem_text=problem, constraint_text=constraint,
+                         options=settings, engine="openjiuwen-react" if settings.ai_enabled else "deterministic")

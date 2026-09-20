@@ -70,8 +70,8 @@ export class Batch {
       // positive-shoelace ring in (x east, z north): outward normal of edge a->b is (dz, -dx)
       const nx = (dz / len) * outward
       const nz = (-dx / len) * outward
-      // light walls facing the sun a bit more than the others (sun from the south-west)
-      const k = shade * (0.82 + 0.18 * Math.max(0, -nx * 0.6 - nz * 0.8))
+      // Directional lighting comes from the scene; vertex color only modulates the material.
+      const k = shade
       const cc: RGB = [c[0] * k, c[1] * k, c[2] * k]
       const u = len / this.textureMetres[0]
       const low = y0 / this.textureMetres[1], high = y1 / this.textureMetres[1]
@@ -154,24 +154,23 @@ export class Batch {
 
   /** Solid of revolution around a vertical axis: profile = [[radius, y], ...] bottom to top. */
   lathe(x: number, z: number, profile: [number, number][], c: RGB, segments = 24, shade = 0.9): void {
-    const rings: number[][] = []
-    for (const [r, y] of profile) {
-      const ring: number[] = []
+    if (profile.length < 2) return
+    for (let j = 0; j < profile.length - 1; j++) {
+      const [r0, y0] = profile[j], [r1, y1] = profile[j + 1]
+      const length = Math.hypot(y1 - y0, r0 - r1)
+      if (length < 1e-6) continue
+      const radial = (y1 - y0) / length, ny = (r0 - r1) / length
+      const base = this.vertexCount
       for (let i = 0; i <= segments; i++) {
         const a = (i / segments) * Math.PI * 2
-        const nx = Math.cos(a)
-        const nz = Math.sin(a)
-        const k = shade * (0.8 + 0.2 * Math.max(0, -nx * 0.6 - nz * 0.8))
-        ring.push(this.vertex(x + nx * r, y, z + nz * r, nx, 0, nz, [c[0] * k, c[1] * k, c[2] * k], (a * r) / this.textureMetres[0], y / this.textureMetres[1]))
+        const nx = Math.cos(a), nz = Math.sin(a)
+        for (const [r, y] of [[r0, y0], [r1, y1]]) {
+          this.vertex(x + nx * r, y, z + nz * r, nx * radial, ny, nz * radial, scale(c, shade), (a * r) / this.textureMetres[0], y / this.textureMetres[1])
+        }
       }
-      rings.push(ring)
-    }
-    for (let j = 0; j < rings.length - 1; j++) {
-      const a = rings[j]
-      const b = rings[j + 1]
       for (let i = 0; i < segments; i++) {
-        const i2 = i + 1
-        this.indices.push(a[i], a[i2], b[i], a[i2], b[i2], b[i])
+        const a = base + i * 2
+        this.indices.push(a, a + 2, a + 1, a + 2, a + 3, a + 1)
       }
     }
     // cap the top
