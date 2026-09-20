@@ -25,11 +25,16 @@ function proposal(spec: DevelopmentSpec): DevelopmentPreview {
     outbound_trips: counts.trips, car_trips: counts.cars, warnings: [] }
 }
 
-beforeEach(() => {
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+beforeEach(async () => {
   vi.stubGlobal('cancelAnimationFrame', vi.fn())
+  // Placing a footprint checks access straight away; by default the fake backend accepts whatever was placed.
+  vi.spyOn(api, 'previewDevelopment').mockImplementation(async (_sid, spec) => proposal(spec))
   useStore.setState({ ...useStore.getInitialState(), pack: fixturePack, scenarios: [fixtureScenario()], scenarioId: 'parent' })
   useStore.getState().setTool('development')
   useStore.getState().placeDevelopment([-79.389, 43.644])
+  await settle()
 })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -51,14 +56,75 @@ describe('development preview lifecycle', () => {
 
   it('invalidates a preview whenever an assumption or placement changes', async () => {
     const spec = useStore.getState().developmentDraft!
-    vi.spyOn(api, 'previewDevelopment').mockResolvedValue(proposal(spec))
-    await useStore.getState().previewDevelopment()
     expect(useStore.getState().developmentPreview).not.toBeNull()
     useStore.getState().setDevelopmentDraft({ ...spec, capacity: 501 })
     expect(useStore.getState().developmentPreview).toBeNull()
     expect(await useStore.getState().applyDevelopment()).toBeNull()
     useStore.getState().placeDevelopment([-79.387, 43.644])
     expect(useStore.getState().developmentDraft?.position).toEqual([-79.387, 43.644])
+  })
+
+  it('follows the cursor while aiming, then checks access the moment the footprint is clicked', async () => {
+    useStore.getState().setTool('development')
+    const preview = vi.mocked(api.previewDevelopment)
+    preview.mockClear()
+    expect(useStore.getState().developmentPlaced).toBe(false)
+    useStore.getState().setDevelopmentHover([-79.39, 43.645])
+    expect(useStore.getState().developmentHover).toEqual([-79.39, 43.645])
+    expect(preview).not.toHaveBeenCalled() // hovering is free: nothing is validated or persisted
+    useStore.getState().placeDevelopment([-79.386, 43.647])
+    expect(useStore.getState().developmentPlaced).toBe(true)
+    expect(useStore.getState().developmentHover).toBeNull()
+    await settle()
+    expect(preview).toHaveBeenCalledTimes(1)
+    expect(preview.mock.calls[0][1].position).toEqual([-79.386, 43.647])
+    expect(useStore.getState().developmentPreview?.development.spec.position).toEqual([-79.386, 43.647])
+    useStore.getState().setDevelopmentHover([-79.3, 43.6]) // once placed the ghost no longer chases the cursor
+    expect(useStore.getState().developmentHover).toBeNull()
+  })
+
+  it('switches building kind in place and re-checks access; the kind decides every assumption', async () => {
+    const preview = vi.mocked(api.previewDevelopment)
+    preview.mockClear()
+    const placedAt = useStore.getState().developmentDraft!.position
+    useStore.getState().chooseDevelopmentKind('park')
+    const draft = useStore.getState().developmentDraft!
+    expect(draft.land_use).toBe('park')
+    expect(draft.position).toEqual(placedAt)
+    expect(draft.capacity).toBe(300)
+    expect(useStore.getState().developmentPlaced).toBe(true)
+    await settle()
+    expect(preview).toHaveBeenCalledTimes(1)
+    expect(preview.mock.calls[0][1].land_use).toBe('park')
+    useStore.getState().chooseDevelopmentKind('skyscraper')
+    expect(useStore.getState().developmentDraft!.name).toBe('Skyscraper')
+    useStore.setState({ scenarios: [{ ...fixtureScenario(), developments: [{ development_id: 'x', spec: useStore.getState().developmentDraft!, access: [] }] }] })
+    useStore.getState().chooseDevelopmentKind('skyscraper')
+    expect(useStore.getState().developmentDraft!.name).toBe('Skyscraper 2')
+  })
+
+  it('prepares the base city itself when the tool opens with no scenario, keeping the draft alive', async () => {
+    const created = fixtureScenario('flagship')
+    const createFlagship = vi.spyOn(api, 'createFlagship').mockResolvedValue(created)
+    vi.spyOn(api, 'scenarios').mockResolvedValue([created])
+    vi.spyOn(api, 'plans').mockResolvedValue([])
+    vi.spyOn(api, 'runs').mockResolvedValue([])
+    vi.spyOn(api, 'demand').mockResolvedValue(fixtureBundle(created, [fixtureTraveler()]).demand!)
+    useStore.setState({ ...useStore.getInitialState(), pack: fixturePack, scenarios: [], scenarioId: null })
+    useStore.getState().setTool('development')
+    expect(useStore.getState().developmentDraft).not.toBeNull()
+    expect(useStore.getState().developmentPreparing).toBe(true)
+    useStore.getState().setDevelopmentHover([-79.39, 43.645])
+    useStore.getState().placeDevelopment([-79.386, 43.647])
+    await settle(); await settle()
+    expect(createFlagship).toHaveBeenCalledTimes(1)
+    expect(createFlagship.mock.calls[0][0]).toMatchObject({ pack_id: 'test-city', cohort_size: 240 })
+    expect(useStore.getState().scenarioId).toBe('flagship')
+    expect(useStore.getState().tool).toBe('development')
+    expect(useStore.getState().developmentPlaced).toBe(true)
+    expect(useStore.getState().developmentDraft?.position).toEqual([-79.386, 43.647])
+    expect(useStore.getState().developmentPreview?.base_scenario_id).toBeDefined()
+    expect(useStore.getState().developmentPreparing).toBe(false)
   })
 
   it('loads the confirmed branch without opening a parent run as the child', async () => {

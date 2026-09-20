@@ -9,7 +9,7 @@ import { ConeGeometry, CubeGeometry, CylinderGeometry } from '@luma.gl/engine'
 import type { Layer, PickingInfo } from '@deck.gl/core'
 import type { Selection } from '../store'
 import type { CityPack, DevelopmentSpec, HazardTrack, ScenarioSpec, StopCandidate } from '../types'
-import { DEVELOPMENT_USES, developmentActivity, developmentArrowFraction, developmentDirection, developmentPolygon, validDevelopmentGeometry } from '../development'
+import { developmentActivity, developmentArrowFraction, developmentColor, developmentDirection, developmentPolygon, validDevelopmentGeometry } from '../development'
 import { entitiesAt, hazardFootprint, MAX_GAP_S, type EntityAt, type PersonState, type ReplayIndex, type TrackIndex } from '../replay'
 
 export type RGBA = [number, number, number, number]
@@ -106,7 +106,9 @@ export type WorldInputs = {
   ghostStops?: StopCandidate[]
   ghostEdges?: string[]
   ghostHazard?: HazardTrack | null
+  /** The draft at its placed position, or under the cursor while it is still being aimed. */
   developmentDraft?: DevelopmentSpec | null
+  developmentPlaced?: boolean
   invalidDevelopment?: boolean
   focusCorridorEdges?: string[]
   dimOthers?: boolean
@@ -144,7 +146,7 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
   const developments = (scenario?.developments ?? []).map((d) => ({ id: d.development_id, spec: d.spec, ghost: false }))
   if (w.developmentDraft) developments.push({ id: 'draft', spec: w.developmentDraft, ghost: true })
   const color = (spec: DevelopmentSpec, ghost: boolean): RGBA => {
-    const hex = ghost ? w.invalidDevelopment ? '#d75e48' : '#1598b0' : DEVELOPMENT_USES[spec.land_use].color
+    const hex = ghost && w.invalidDevelopment ? '#d75e48' : developmentColor(spec)
     return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16), ghost ? 120 : 240]
   }
   for (const development of developments) {
@@ -164,7 +166,7 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
       widthUnits: 'meters', widthMinPixels: 2, parameters: { depthCompare: 'always' },
     }))
     const direction = ghost ? developmentDirection(spec) : developmentActivity(spec, t)
-    if (!direction || (!ghost && selectedId !== id)) continue
+    if (!direction || (!ghost && selectedId !== id) || (ghost && !w.developmentPlaced)) continue
     const paths: { path: [number, number][] }[] = []
     for (const zone of pack?.zones ?? []) {
       if (!(spec.zone_shares[zone.zone_id] > 0)) continue

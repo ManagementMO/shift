@@ -1,16 +1,53 @@
 import type { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import type { Mesh } from '@babylonjs/core/Meshes/mesh'
+import { TransformNode } from '@babylonjs/core/Meshes/transformNode'
+import type { Observer } from '@babylonjs/core/Misc/observable'
 import type { Scene } from '@babylonjs/core/scene'
 
-import { DEVELOPMENT_USES, developmentActivity, developmentArrowFraction, developmentDirection, developmentRing, validDevelopmentGeometry } from '../development'
+import { developmentActivity, developmentArrowFraction, developmentColor, developmentDirection, developmentRing, validDevelopmentGeometry } from '../development'
 import type { CityPack, Development, DevelopmentSpec } from '../types'
 import { hex, meshFromBatch, vertexColorMaterial, Y } from './city'
 import type { WorldFrame } from './coords'
-import { Batch, mix, type RGB } from './geometry'
+import { Batch, hash01, mix, type RGB } from './geometry'
+
+const RISE_MS = 620
+const RIPPLE_MS = 950
+const GLIDE_RATE = 14 // 1/s — how quickly the aimed ghost catches up with the cursor
+
+const easeOutCubic = (k: number): number => 1 - Math.pow(1 - k, 3)
+
+/** Flat lawn with a path cross and a deterministic grove of trees; never a tower. */
+function parkGeometry(batch: Batch, spec: DevelopmentSpec, frame: WorldFrame, color: RGB): void {
+  const ring = developmentRing(spec, frame)
+  const base = Y.green + 0.2
+  batch.extrude(ring, undefined, Y.ground + 0.05, base, mix(color, hex('#7a8f5a'), 0.5), mix(color, hex('#c9dc9c'), 0.45))
+  const [cx, cz] = frame.lonLatToWorld(...spec.position)
+  const [w, d] = spec.footprint_m
+  const path = mix(hex('#d9cfa6'), color, 0.12)
+  batch.ribbon([cx - w / 2 + 3, cz, cx + w / 2 - 3, cz], 2.6, base + 0.08, path)
+  batch.ribbon([cx, cz - d / 2 + 3, cx, cz + d / 2 - 3], 2.6, base + 0.08, path)
+  const trunk = hex('#6b4a2c')
+  const canopy: RGB[] = [mix(color, hex('#2f6b2a'), 0.55), mix(color, hex('#5da648'), 0.35), mix(color, hex('#8cc46a'), 0.3)]
+  const spacing = 11
+  for (let ix = 0, x = cx - w / 2 + 7; x <= cx + w / 2 - 7; x += spacing, ix++) {
+    for (let iz = 0, z = cz - d / 2 + 7; z <= cz + d / 2 - 7; z += spacing, iz++) {
+      const j = hash01(`${spec.name}:${ix}:${iz}`)
+      if (Math.abs(x - cx) < 3 || Math.abs(z - cz) < 3) continue // keep the paths clear
+      const tx = x + (j - 0.5) * 4, tz = z + (hash01(`${iz}:${ix}:${spec.name}`) - 0.5) * 4
+      const h = 5 + j * 3.5, r = 2 + j * 1.2
+      batch.lathe(tx, tz, [[0.32, base], [0.32, base + h * 0.4]], trunk, 8)
+      batch.lathe(tx, tz, [[0, base + h * 0.38], [r * 0.7, base + h * 0.55], [r, base + h * 0.75], [r * 0.7, base + h * 0.92], [0, base + h]], canopy[Math.floor(j * 3) % 3], 10)
+    }
+  }
+}
 
 export function developmentGeometry(spec: DevelopmentSpec, frame: WorldFrame, color: RGB): Batch {
   const batch = new Batch()
   if (!validDevelopmentGeometry(spec)) return batch
+  if (spec.land_use === 'park') {
+    parkGeometry(batch, spec, frame, color)
+    return batch
+  }
   const ring = developmentRing(spec, frame)
   const base = Y.building + 0.4
   const roof = base + spec.height_m
@@ -24,9 +61,31 @@ export function developmentGeometry(spec: DevelopmentSpec, frame: WorldFrame, co
   return batch
 }
 
+/** A thin ground ring used for the placement ripple. */
+function ringBatch(cx: number, cz: number, r: number, width: number, y: number, color: RGB): Batch {
+  const batch = new Batch()
+  const pts: number[] = []
+  for (let i = 0; i <= 48; i++) {
+    const a = (i / 48) * Math.PI * 2
+    pts.push(cx + Math.cos(a) * r, cz + Math.sin(a) * r)
+  }
+  batch.ribbon(pts, width, y, color)
+  return batch
+}
+
+/** Meshes from `meshFromBatch` are frozen for the static city; the ghost must move and scale every frame. */
+function animatable(mesh: Mesh): Mesh {
+  mesh.unfreezeWorldMatrix()
+  mesh.doNotSyncBoundingInfo = false
+  return mesh
+}
+
 export type DevelopmentMarks = {
   developments: Development[]
   draft: DevelopmentSpec | null
+  /** Where the draft is drawn: its placed position, or the cursor while it is still being aimed. */
+  ghostPosition: [number, number] | null
+  placed: boolean
   invalidDraft: boolean
   focusedId: string | null
   zones: CityPack['zones']
@@ -39,48 +98,67 @@ export class DevelopmentOverlay {
   private readonly material: StandardMaterial
   private readonly ghostMaterial: StandardMaterial
   private readonly markMaterial: StandardMaterial
+  private readonly ghostMarkMaterial: StandardMaterial
   private meshes: Mesh[] = []
   private key = ''
+  private ghostRoot: TransformNode | null = null
+  private ghostBase: [number, number] = [0, 0]
+  private ghostTarget: [number, number] | null = null
+  private ghostSnap = true
+  private ghostSpecKey = ''
+  private placedKey = ''
+  private rising = new Map<TransformNode, number>()
+  private ripples: { mesh: Mesh; material: StandardMaterial; start: number }[] = []
+  private seen: Set<string> | null = null
+  private readonly observer: Observer<Scene>
+  private now = 0
 
   constructor(scene: Scene, frame: WorldFrame) {
     this.scene = scene
     this.frame = frame
     this.material = vertexColorMaterial('development-material', scene)
     this.ghostMaterial = vertexColorMaterial('development-ghost-material', scene)
-    this.ghostMaterial.alpha = 0.45
+    this.ghostMaterial.alpha = 0.42
     this.ghostMaterial.backFaceCulling = false
+    this.ghostMaterial.emissiveColor.set(0.18, 0.18, 0.18)
     this.markMaterial = vertexColorMaterial('development-mark-material', scene, 0)
     this.markMaterial.emissiveColor.set(0.4, 0.4, 0.4)
+    this.ghostMarkMaterial = vertexColorMaterial('development-ghost-mark-material', scene, 0)
+    this.ghostMarkMaterial.emissiveColor.set(0.55, 0.55, 0.55)
+    this.ghostMarkMaterial.disableLighting = true
+    this.observer = scene.onBeforeRenderObservable.add(() => this.animate(scene.getEngine().getDeltaTime()))
+  }
+
+  /** World-space (x, z) the ghost is heading to, or null when nothing is being aimed. Exposed for tests. */
+  ghostWorldTarget(): [number, number] | null {
+    return this.ghostTarget ? [this.ghostBase[0] + this.ghostTarget[0], this.ghostBase[1] + this.ghostTarget[1]] : null
   }
 
   set(marks: DevelopmentMarks): void {
     const activity = marks.developments.map((d) => developmentActivity(d.spec, marks.t))
-    const key = JSON.stringify([marks.developments, marks.draft, marks.invalidDraft, marks.focusedId, marks.zones, activity])
-    if (key === this.key) return
-    this.key = key
+    const draftSansPosition = marks.draft ? { ...marks.draft, position: null } : null
+    const placedAt = marks.placed && marks.draft ? marks.draft.position : null
+    const key = JSON.stringify([marks.developments, draftSansPosition, placedAt, marks.invalidDraft, marks.focusedId, marks.zones, activity])
+    if (key !== this.key) {
+      this.key = key
+      this.rebuild(marks, activity, placedAt)
+    }
+    this.aimGhost(marks)
+  }
+
+  private rebuild(marks: DevelopmentMarks, activity: ('inbound' | 'outbound' | null)[], placedAt: [number, number] | null): void {
+    const previouslySeen = this.seen
     for (const mesh of this.meshes) mesh.dispose()
     this.meshes = []
+    this.rising.clear()
+    const ghostBefore = this.ghostRoot
+    this.ghostRoot = null
     const footprints = new Batch()
     const intentions = new Batch()
     const halos = new Batch()
-    const add = (spec: DevelopmentSpec, id: string, ghost: boolean, direction: 'inbound' | 'outbound' | null): void => {
-      if (!validDevelopmentGeometry(spec)) return
-      const color = ghost ? hex(marks.invalidDraft ? '#d75e48' : '#1598b0') : hex(DEVELOPMENT_USES[spec.land_use].color)
-      const mesh = meshFromBatch(`development-${id}`, developmentGeometry(spec, this.frame, color), this.scene, ghost ? this.ghostMaterial : this.material)
-      mesh.isPickable = !ghost
-      mesh.metadata = ghost ? null : { development_id: id }
-      mesh.receiveShadows = true
-      if (ghost) mesh.renderingGroupId = 1
-      this.meshes.push(mesh)
-      const ring = developmentRing(spec, this.frame, 3)
-      footprints.ribbon([...ring, ring[0], ring[1]], ghost || marks.focusedId === id ? 3 : 1.6, Y.junction + 0.3, color)
-      // Ground halo: a wide tinted ring around the lot so the new building reads at district scale, not just up close.
-      // Depth-tested (default rendering group) so the building's own walls draw over it; only the outline is always-on-top.
+
+    const arrows = (spec: DevelopmentSpec, direction: 'inbound' | 'outbound', color: RGB): void => {
       const center = this.frame.lonLatToWorld(...spec.position)
-      const halo = Math.max(...spec.footprint_m) * 0.9 + 14
-      halos.disc(center[0], center[1], halo, Y.junction + 0.22, mix(color, hex('#ffffff'), ghost ? 0.55 : 0.35), 40)
-      halos.disc(center[0], center[1], halo - 4, Y.junction + 0.24, mix(color, hex('#f4f6f1'), 0.82), 40)
-      if (!direction || (!ghost && marks.focusedId !== id)) return
       for (const zone of marks.zones) {
         if (!(spec.zone_shares[zone.zone_id] > 0)) continue
         const other = this.frame.lonLatToWorld(zone.lon, zone.lat)
@@ -97,8 +175,79 @@ export class DevelopmentOverlay {
         intentions.disc(other[0], other[1], 4 + 8 * spec.zone_shares[zone.zone_id], Y.stop + 0.3, color, 20)
       }
     }
-    marks.developments.forEach((development, i) => add(development.spec, development.development_id, false, activity[i]))
-    if (marks.draft) add(marks.draft, 'draft', true, developmentDirection(marks.draft))
+
+    // --- saved developments (depth-tested building + halo, always-on-top outline) ---
+    const seen = new Set<string>()
+    marks.developments.forEach((development, i) => {
+      const { spec } = development
+      const id = development.development_id
+      seen.add(id)
+      if (!validDevelopmentGeometry(spec)) return
+      const color = hex(developmentColor(spec))
+      const mesh = meshFromBatch(`development-${id}`, developmentGeometry(spec, this.frame, color), this.scene, this.material)
+      mesh.isPickable = true
+      mesh.metadata = { development_id: id }
+      mesh.receiveShadows = true
+      this.meshes.push(mesh)
+      if (previouslySeen && !previouslySeen.has(id)) this.rising.set(animatable(mesh), this.now) // a freshly confirmed building rises out of the ground
+      const ring = developmentRing(spec, this.frame, 3)
+      footprints.ribbon([...ring, ring[0], ring[1]], marks.focusedId === id ? 3 : 1.6, Y.junction + 0.3, color)
+      // Ground halo: a wide tinted ring so the lot reads at district scale. Depth-tested so the walls draw over it.
+      const center = this.frame.lonLatToWorld(...spec.position)
+      const halo = Math.max(...spec.footprint_m) * 0.9 + 14
+      halos.disc(center[0], center[1], halo, Y.junction + 0.22, mix(color, hex('#ffffff'), 0.35), 40)
+      halos.disc(center[0], center[1], halo - 4, Y.junction + 0.24, mix(color, hex('#f4f6f1'), 0.82), 40)
+      if (activity[i] && marks.focusedId === id) arrows(spec, activity[i], color)
+    })
+    this.seen = seen
+
+    // --- the draft: a translucent ghost that glides after the cursor until it is placed ---
+    if (marks.draft && validDevelopmentGeometry(marks.draft)) {
+      const spec = marks.draft
+      const color = hex(marks.invalidDraft ? '#d75e48' : developmentColor(spec))
+      const anchor = placedAt ?? marks.ghostPosition ?? spec.position
+      const built: DevelopmentSpec = { ...spec, position: anchor }
+      const root = new TransformNode('development-ghost-root', this.scene)
+      const body = animatable(meshFromBatch('development-draft', developmentGeometry(built, this.frame, color), this.scene, this.ghostMaterial))
+      body.renderingGroupId = 1
+      body.parent = root
+      const outline = new Batch()
+      const ring = developmentRing(built, this.frame, 3)
+      outline.ribbon([...ring, ring[0], ring[1]], 3.2, Y.junction + 0.3, mix(color, hex('#ffffff'), 0.25))
+      const corner = 6
+      for (let i = 0; i < 8; i += 2) { // bracket corners so the outline reads as a placement target, not a road
+        const x = ring[i], z = ring[i + 1], sx = x < anchorX(this.frame, anchor) ? 1 : -1, sz = z < anchorZ(this.frame, anchor) ? 1 : -1
+        outline.ribbon([x, z, x + sx * corner, z], 1.4, Y.junction + 0.34, color)
+        outline.ribbon([x, z, x, z + sz * corner], 1.4, Y.junction + 0.34, color)
+      }
+      const marksMesh = animatable(meshFromBatch('development-draft-outline', outline, this.scene, this.ghostMarkMaterial))
+      marksMesh.renderingGroupId = 1
+      marksMesh.parent = root
+      this.meshes.push(body, marksMesh)
+      this.ghostRoot = root
+      this.ghostBase = this.frame.lonLatToWorld(...anchor)
+      const specKey = JSON.stringify(draftKey(spec))
+      // Re-anchoring (a new spec, or the geometry rebuilt under the cursor) must not make the ghost jump: carry the
+      // previous root offset over so the glide continues from where it was.
+      if (ghostBefore && this.ghostSpecKey === specKey && !placedAt) root.position.copyFrom(ghostBefore.position)
+      this.ghostSpecKey = specKey
+      this.ghostSnap = !ghostBefore
+      if (placedAt) {
+        const placedKey = JSON.stringify([placedAt, specKey])
+        if (placedKey !== this.placedKey) {
+          this.placedKey = placedKey
+          this.rising.set(root, this.now)
+          this.ripple(this.ghostBase, Math.max(...spec.footprint_m) / 2 + 6, color)
+        }
+        arrows(spec, developmentDirection(spec), color)
+      } else this.placedKey = ''
+    } else {
+      this.ghostSpecKey = ''
+      this.placedKey = ''
+      this.ghostTarget = null
+    }
+    ghostBefore?.dispose()
+
     if (!halos.isEmpty()) this.meshes.push(meshFromBatch('development-halos', halos, this.scene, this.markMaterial))
     for (const [name, batch] of [['footprints', footprints], ['intentions', intentions]] as const) {
       if (batch.isEmpty()) continue
@@ -108,11 +257,87 @@ export class DevelopmentOverlay {
     }
   }
 
+  private aimGhost(marks: DevelopmentMarks): void {
+    if (!this.ghostRoot || !marks.draft) return
+    const target = marks.placed ? marks.draft.position : marks.ghostPosition
+    if (!target) {
+      this.ghostTarget = null
+      this.ghostRoot.setEnabled(false)
+      return
+    }
+    const [x, z] = this.frame.lonLatToWorld(...target)
+    this.ghostTarget = [x - this.ghostBase[0], z - this.ghostBase[1]]
+    if (!this.ghostRoot.isEnabled()) {
+      this.ghostRoot.setEnabled(true)
+      this.ghostSnap = true
+    }
+    if (this.ghostSnap) {
+      this.ghostRoot.position.x = this.ghostTarget[0]
+      this.ghostRoot.position.z = this.ghostTarget[1]
+      this.ghostSnap = false
+    }
+  }
+
+  private ripple(at: [number, number], radius: number, color: RGB): void {
+    const material = vertexColorMaterial(`development-ripple-${this.ripples.length}-${this.now}`, this.scene, 0)
+    material.disableLighting = true
+    material.emissiveColor.set(0.6, 0.6, 0.6)
+    material.alpha = 0.75
+    const mesh = animatable(meshFromBatch('development-ripple', ringBatch(0, 0, radius, 2.2, Y.junction + 0.32, mix(color, hex('#ffffff'), 0.2)), this.scene, material))
+    mesh.position.set(at[0], 0, at[1])
+    mesh.renderingGroupId = 1
+    this.ripples.push({ mesh, material, start: this.now })
+  }
+
+  /** Per-frame motion: cursor glide, breathing ghost, rise-in of placed/confirmed buildings, fading ripples. */
+  animate(deltaMs: number): void {
+    this.now += deltaMs
+    const dt = Math.min(0.1, deltaMs / 1000)
+    if (this.ghostRoot && this.ghostTarget && this.ghostRoot.isEnabled()) {
+      const k = 1 - Math.exp(-GLIDE_RATE * dt)
+      const p = this.ghostRoot.position
+      p.x += (this.ghostTarget[0] - p.x) * k
+      p.z += (this.ghostTarget[1] - p.z) * k
+    }
+    const breath = 0.5 + 0.5 * Math.sin(this.now / 340)
+    this.ghostMaterial.alpha = 0.34 + 0.16 * breath
+    this.ghostMarkMaterial.emissiveColor.set(0.45 + 0.35 * breath, 0.45 + 0.35 * breath, 0.45 + 0.35 * breath)
+    for (const [node, start] of this.rising) {
+      const k = Math.min(1, (this.now - start) / RISE_MS)
+      node.scaling.y = 0.04 + 0.96 * easeOutCubic(k)
+      if (k >= 1) { node.scaling.y = 1; this.rising.delete(node) }
+    }
+    this.ripples = this.ripples.filter(({ mesh, material, start }) => {
+      const k = (this.now - start) / RIPPLE_MS
+      if (k >= 1) { mesh.dispose(); material.dispose(); return false }
+      const s = 1 + 1.6 * easeOutCubic(k)
+      mesh.scaling.set(s, 1, s)
+      material.alpha = 0.75 * (1 - k)
+      return true
+    })
+  }
+
   dispose(): void {
+    this.scene.onBeforeRenderObservable.remove(this.observer)
     for (const mesh of this.meshes) mesh.dispose()
     this.meshes = []
+    for (const { mesh, material } of this.ripples) { mesh.dispose(); material.dispose() }
+    this.ripples = []
+    this.ghostRoot?.dispose()
+    this.ghostRoot = null
     this.material.dispose()
     this.ghostMaterial.dispose()
     this.markMaterial.dispose()
+    this.ghostMarkMaterial.dispose()
   }
+}
+
+function draftKey(spec: DevelopmentSpec): unknown {
+  return { ...spec, position: null }
+}
+function anchorX(frame: WorldFrame, anchor: [number, number]): number {
+  return frame.lonLatToWorld(...anchor)[0]
+}
+function anchorZ(frame: WorldFrame, anchor: [number, number]): number {
+  return frame.lonLatToWorld(...anchor)[1]
 }

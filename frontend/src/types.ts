@@ -62,7 +62,10 @@ export type Traveler = {
   trip_direction?: 'outbound' | 'inbound' | null
 }
 
-export type DevelopmentUse = 'residential' | 'office' | 'school'
+export type DevelopmentUse = 'residential' | 'office' | 'school' | 'park'
+
+/** The four things a user can drop on the map. Each maps to a declared, fixed set of travel assumptions. */
+export type BuildingKind = 'park' | 'townhouse' | 'apartment' | 'skyscraper'
 
 export type DevelopmentWave = {
   start_s: number

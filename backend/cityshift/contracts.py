@@ -131,7 +131,7 @@ class DevelopmentSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False, str_strip_whitespace=True)
 
     name: str = Field(min_length=1, max_length=80)
-    land_use: Literal["residential", "office", "school"]
+    land_use: Literal["residential", "office", "school", "park"]
     position: tuple[Annotated[float, Field(ge=-180, le=180)], Annotated[float, Field(ge=-85, le=85)]]
     footprint_m: tuple[Annotated[float, Field(gt=0, le=250)], Annotated[float, Field(gt=0, le=250)]]
     height_m: float = Field(gt=0, le=300)
@@ -148,7 +148,7 @@ class DevelopmentSpec(BaseModel):
     @model_validator(mode="after")
     def consistent(self) -> Self:
         if self.land_use != "residential" and self.people_per_unit != 1:
-            raise ValueError("office capacity counts employees and school capacity counts students; people_per_unit must be 1")
+            raise ValueError("office, school and park capacity already counts people (employees, students, visitors); people_per_unit must be 1")
         if not self.zone_shares or not math.isclose(sum(self.zone_shares.values()), 1, abs_tol=1e-6):
             raise ValueError("zone shares must sum to 1")
         if self.return_wave and self.return_wave.start_s < self.first_wave.end_s:

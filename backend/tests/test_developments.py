@@ -30,7 +30,7 @@ def parent_demand(scenario):
     ])
 
 
-@pytest.mark.parametrize("land_use", ["residential", "office", "school"])
+@pytest.mark.parametrize("land_use", ["residential", "office", "school", "park"])
 def test_two_waves_have_declared_direction_timing_and_reverse_endpoints(transport_world, development_spec, land_use):
     pack, scenario, _ = transport_world
     parent = parent_demand(scenario)
@@ -96,7 +96,7 @@ def test_invalid_placements_are_explicit(transport_world, development_spec, posi
 
 @pytest.mark.parametrize("change", [
     {"capacity": 0}, {"height_m": float("nan")}, {"land_use": "hospital"},
-    {"zone_shares": {"east": 0.7}}, {"land_use": "school", "people_per_unit": 2},
+    {"zone_shares": {"east": 0.7}}, {"land_use": "school", "people_per_unit": 2}, {"land_use": "park", "people_per_unit": 2},
     {"return_wave": {"start_s": 10, "end_s": 20, "profile": "uniform"}},
 ])
 def test_inconsistent_assumptions_are_rejected(development_spec, change):

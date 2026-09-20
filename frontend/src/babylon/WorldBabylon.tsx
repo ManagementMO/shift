@@ -75,6 +75,28 @@ export default function WorldBabylon({ runId, side, onWorldReady, onWorldError }
       const onDown = (e: PointerEvent): void => {
         if (e.button === 0) down = { x: e.clientX, y: e.clientY }
       }
+      // While a building is being aimed, its ghost follows the cursor over the ground (one pick per frame at most).
+      let hoverRaf = 0
+      let hoverAt: { x: number; y: number } | null = null
+      const groundAt = (sx: number, sy: number): [number, number] | null => {
+        const ground = ws.scene.pick(sx, sy, (mesh) => mesh === ws.city.ground)
+        return ground?.pickedPoint ? ws.frame.worldToLonLat(ground.pickedPoint.x, ground.pickedPoint.z) : null
+      }
+      const onMove = (e: PointerEvent): void => {
+        const state = useStore.getState()
+        if (!state.developmentDraft || state.developmentPlaced || side === 'left') return
+        const r = canvas.getBoundingClientRect()
+        hoverAt = { x: e.clientX - r.left, y: e.clientY - r.top }
+        if (hoverRaf) return
+        hoverRaf = requestAnimationFrame(() => {
+          hoverRaf = 0
+          if (hoverAt) useStore.getState().setDevelopmentHover(groundAt(hoverAt.x, hoverAt.y))
+        })
+      }
+      const onLeave = (): void => {
+        hoverAt = null
+        useStore.getState().setDevelopmentHover(null)
+      }
       const onUp = (e: PointerEvent): void => {
         if (!down) return
         const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y)
@@ -85,8 +107,8 @@ export default function WorldBabylon({ runId, side, onWorldReady, onWorldError }
         const sy = e.clientY - r.top
         const state = useStore.getState()
         if (state.developmentDraft && side !== 'left') {
-          const ground = ws.scene.pick(sx, sy, (mesh) => mesh === ws.city.ground)
-          if (ground?.pickedPoint) state.placeDevelopment(ws.frame.worldToLonLat(ground.pickedPoint.x, ground.pickedPoint.z))
+          const at = groundAt(sx, sy)
+          if (at) state.placeDevelopment(at)
           else useStore.setState({ developmentError: 'Choose a land surface beside an existing network edge.' })
           return
         }
@@ -116,11 +138,16 @@ export default function WorldBabylon({ runId, side, onWorldReady, onWorldError }
       }
       canvas.addEventListener('pointerdown', onDown)
       canvas.addEventListener('pointerup', onUp)
+      canvas.addEventListener('pointermove', onMove)
+      canvas.addEventListener('pointerleave', onLeave)
 
       onWorldReady?.(ws)
       ws.scene.onDisposeObservable.addOnce(() => {
         canvas.removeEventListener('pointerdown', onDown)
         canvas.removeEventListener('pointerup', onUp)
+        canvas.removeEventListener('pointermove', onMove)
+        canvas.removeEventListener('pointerleave', onLeave)
+        if (hoverRaf) cancelAnimationFrame(hoverRaf)
         unsub()
         offFrame()
         unregister()
@@ -151,9 +178,10 @@ function marks(overlay: Overlay, developments: DevelopmentOverlay, t: number, ru
   for (const r of scenario?.restrictions ?? []) if (t >= r.start_s && t <= r.end_s) closed.push(...r.edge_ids)
   const focusId = s.selection?.kind === 'restriction' ? s.selection.id : null
   const focus = focusId ? scenario?.restrictions.find((r) => r.restriction_id === focusId)?.edge_ids ?? [] : []
-  const draft = side !== 'left' && s.developmentPlaced ? s.developmentDraft : null
-  const access = draft ? s.developmentPreview?.development.access.map((a) => a.edge_id) ?? [] : []
+  const draft = side !== 'left' ? s.developmentDraft : null
+  const access = draft && s.developmentPlaced ? s.developmentPreview?.development.access.map((a) => a.edge_id) ?? [] : []
   overlay.set({ closed, ghost: side === 'left' ? [] : [...(s.ghost?.edges ?? []), ...access], focus, ghostStops: side === 'left' ? [] : s.ghost?.stops ?? [] })
-  developments.set({ developments: scenario?.developments ?? [], draft, invalidDraft: !!s.developmentError,
+  developments.set({ developments: scenario?.developments ?? [], draft, placed: s.developmentPlaced,
+    ghostPosition: draft ? s.developmentPlaced ? draft.position : s.developmentHover : null, invalidDraft: !!s.developmentError && s.developmentPlaced,
     focusedId: s.selection?.kind === 'development' ? s.selection.id : null, zones: s.pack?.zones ?? [], t })
 }

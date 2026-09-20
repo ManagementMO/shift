@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, type CSSProperties } from 'react'
-import { DEVELOPMENT_USES, developmentActivity, developmentCounts, scenarioForView, validDevelopmentGeometry } from '../development'
+import { DEVELOPMENT_USES, developmentActivity, developmentColor, developmentCounts, developmentLabel, scenarioForView, validDevelopmentGeometry } from '../development'
 import { useStore } from '../store'
 import { mapForSide } from './registry'
 
@@ -40,14 +40,14 @@ export default function DevelopmentMarkers({ runId, side }: { runId: string | nu
 
   const selected = rows.some((row) => row.draft || (selection?.kind === 'development' && selection.id === row.id))
   return <div className="development-markers" aria-label="Development map events">
-    {side !== 'left' && draft && !placed && <div className="development-map-hint glass"><b>Place a development</b><span>Click land beside a street. Drag to pan; scroll to zoom.</span></div>}
+    {side !== 'left' && draft && !placed && <div className="development-map-hint glass"><i className="development-cursor-dot" aria-hidden="true" /><b>{developmentLabel(draft)} · click to place</b><span>The outline follows your cursor over land beside a street.</span></div>}
     {rows.map((row) => {
       const use = DEVELOPMENT_USES[row.spec.land_use]
       const active = developmentActivity(row.spec, t)
       const counts = developmentCounts(row.spec)
       return <button key={row.id} ref={(node) => { if (node) refs.current.set(row.id, node); else refs.current.delete(row.id) }}
         className={`development-pin ${row.draft ? 'draft' : ''} ${active ? 'active' : ''} ${selection?.id === row.id ? 'selected' : ''}`}
-        style={{ '--development-color': row.draft ? error ? '#c75d44' : '#1598b0' : use.color } as CSSProperties}
+        style={{ '--development-color': row.draft && error ? '#c75d44' : developmentColor(row.spec) } as CSSProperties}
         aria-label={`${row.draft ? 'Preview' : 'Inspect'} ${row.spec.name}`}
         onClick={(event) => {
           event.stopPropagation()
@@ -57,7 +57,7 @@ export default function DevelopmentMarkers({ runId, side }: { runId: string | nu
           store.select({ kind: 'development', id: row.id })
         }}>
         <span className="development-pin-glyph" aria-hidden="true">▥</span>
-        <span className="development-pin-copy"><small>{row.draft ? preview ? 'READY TO CONFIRM' : 'DRAFT · NOT APPLIED' : 'NEW DEVELOPMENT'}</small><b>{row.spec.name}</b><span>{row.spec.capacity.toLocaleString()} {use.unit} · {counts.trips.toLocaleString()} trips</span></span>
+        <span className="development-pin-copy"><small>{row.draft ? preview ? 'READY TO CONFIRM' : error ? 'CANNOT BUILD HERE' : 'CHECKING ACCESS…' : 'NEW DEVELOPMENT'}</small><b>{row.spec.name}</b><span>{row.spec.capacity.toLocaleString()} {use.unit} · {counts.trips.toLocaleString()} trips</span></span>
         {!row.draft && active && <i title={`${active} departure wave active`} />}
       </button>
     })}

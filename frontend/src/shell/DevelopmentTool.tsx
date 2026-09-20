@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { api } from '../api'
-import { DEVELOPMENT_USES, developmentCounts, developmentDirection, developmentError, developmentPreset, validDevelopmentGeometry } from '../development'
+import { BUILDING_KIND_ORDER, BUILDING_KINDS, DEVELOPMENT_USES, developmentCounts, developmentDirection, developmentKind, developmentLabel, validDevelopmentGeometry } from '../development'
 import { useStore } from '../store'
-import type { Development, DevelopmentSpec, DevelopmentUse, DevelopmentWave } from '../types'
+import type { BuildingKind, Development, DevelopmentSpec } from '../types'
 import { fmt } from '../util'
 import { currentPose, developmentPose } from '../world/camera'
 import { clock } from '../world/playback'
@@ -14,23 +14,31 @@ function frameDevelopment(spec: DevelopmentSpec) {
   if (map) cameraTo(developmentPose(spec.position, spec.footprint_m, spec.height_m, currentPose(map)), 'development')
 }
 
-function NumberField({ label, value, onChange, min, max, step = 1 }: {
-  label: string; value: number; onChange: (value: number) => void; min?: number; max?: number; step?: number
-}) {
-  return <label className="small">{label}<input aria-label={label} type="number" value={value} min={min} max={max} step={step} onChange={(e) => onChange(Number(e.target.value))} /></label>
+/** Little silhouettes for the four tiles; `currentColor` so the tile colour drives them. */
+function KindIcon({ kind }: { kind: BuildingKind }) {
+  switch (kind) {
+    case 'park':
+      return <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 27h26" opacity=".35" strokeWidth="2" stroke="currentColor" fill="none" /><circle cx="11" cy="14" r="6.5" /><circle cx="21" cy="11" r="5" opacity=".75" /><rect x="10" y="18" width="2.2" height="9" rx="1" /><rect x="20" y="15" width="2" height="12" rx="1" opacity=".75" /></svg>
+    case 'townhouse':
+      return <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M2 28V15l4.5-4.5L11 15v13zM11 28V15l4.5-4.5L20 15v13zM20 28V15l4.5-4.5L29 15v13z" /><path d="M5 19h2v3H5zM14 19h2v3h-2zM23 19h2v3h-2z" fill="#fff" opacity=".7" /></svg>
+    case 'apartment':
+      return <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="7" y="6" width="18" height="22" rx="1.5" /><g fill="#fff" opacity=".7"><rect x="10" y="9" width="3" height="3" /><rect x="15" y="9" width="3" height="3" /><rect x="20" y="9" width="3" height="3" /><rect x="10" y="15" width="3" height="3" /><rect x="15" y="15" width="3" height="3" /><rect x="20" y="15" width="3" height="3" /><rect x="10" y="21" width="3" height="3" /><rect x="20" y="21" width="3" height="3" /></g></svg>
+    case 'skyscraper':
+      return <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M11 29V6l10-3v26z" /><rect x="15.4" y="0.5" width="1.2" height="3" opacity=".7" /><g fill="#fff" opacity=".65"><rect x="13" y="8" width="2" height="2" /><rect x="17" y="7" width="2" height="2" /><rect x="13" y="13" width="2" height="2" /><rect x="17" y="12" width="2" height="2" /><rect x="13" y="18" width="2" height="2" /><rect x="17" y="17" width="2" height="2" /><rect x="13" y="23" width="2" height="2" /><rect x="17" y="22" width="2" height="2" /></g></svg>
+  }
 }
 
-function WaveFields({ label, wave, horizon, onChange }: { label: string; wave: DevelopmentWave; horizon: number; onChange: (wave: DevelopmentWave) => void }) {
-  return <fieldset className="development-fields">
-    <legend>{label}</legend>
-    <div className="development-grid">
-      <NumberField label={`${label} start (s)`} value={wave.start_s} min={0} max={horizon - 1} onChange={(start_s) => onChange({ ...wave, start_s })} />
-      <NumberField label={`${label} end (s)`} value={wave.end_s} min={1} max={horizon} onChange={(end_s) => onChange({ ...wave, end_s })} />
-    </div>
-    <label className="small">Departure profile<select value={wave.profile} onChange={(e) => onChange({ ...wave, profile: e.target.value as DevelopmentWave['profile'] })}>
-      <option value="uniform">Uniform across window</option><option value="triangular">Triangular, midpoint peak</option>
-    </select></label>
-  </fieldset>
+function Assumptions({ spec }: { spec: DevelopmentSpec }) {
+  const counts = developmentCounts(spec)
+  const first = developmentDirection(spec) === 'outbound' ? 'leave' : 'arrive'
+  return <details className="small development-assumptions"><summary>Declared assumptions</summary>
+    <ul>
+      <li>{spec.capacity.toLocaleString()} {DEVELOPMENT_USES[spec.land_use].unit}{spec.land_use === 'residential' ? ` × ${spec.people_per_unit} people per home` : ''}</li>
+      <li>{Math.round(spec.trip_rate * 100)}% travel in this horizon → {counts.participants.toLocaleString()} travellers {first} between +{fmt(spec.first_wave.start_s)} and +{fmt(spec.first_wave.end_s)} ({spec.first_wave.profile})</li>
+      <li>{Math.round(spec.car_share * 100)}% by car, the rest walk or ride within {spec.walk_limit_m.toLocaleString()} m</li>
+      <li>Footprint {spec.footprint_m.join(' × ')} m; geometry never sets occupancy</li>
+    </ul>
+  </details>
 }
 
 function DevelopmentDetails({ development }: { development: Development }) {
@@ -38,26 +46,24 @@ function DevelopmentDetails({ development }: { development: Development }) {
   const setTool = useStore((s) => s.setTool)
   const submitRun = useStore((s) => s.submitRun)
   const counts = developmentCounts(spec)
-  return <div className="tool development-tool">
-    <span className="development-eyebrow">Persistent scenario development</span>
-    <h3>{spec.name}</h3>
-    <div className="development-summary"><b>{spec.capacity.toLocaleString()} {DEVELOPMENT_USES[spec.land_use].unit}</b><span>{counts.participants.toLocaleString()} participants · {counts.trips.toLocaleString()} added one-way trips</span></div>
-    <div className="small">{spec.capacity} × {spec.people_per_unit} people per unit × {Math.round(spec.trip_rate * 100)}% participation. {Math.round(spec.car_share * 100)}% car share; {spec.walk_limit_m} m walking limit.</div>
-    <div className="small">First wave: {developmentDirection(spec)} · +{fmt(spec.first_wave.start_s)}–+{fmt(spec.first_wave.end_s)} · {spec.first_wave.profile}</div>
-    {spec.return_wave && <div className="small">Return/dismissal: {developmentDirection(spec, true)} · +{fmt(spec.return_wave.start_s)}–+{fmt(spec.return_wave.end_s)}</div>}
-    <div className="small dim">Footprint {spec.footprint_m.join(' × ')} m · display height {spec.height_m} m. Geometry does not imply occupancy.</div>
-    <details className="small"><summary>Saved access and assumptions</summary>
-      <div>Position: {spec.position.map((n) => n.toFixed(6)).join(', ')} · seed {spec.seed}</div>
-      {development.access.map((a) => <div key={a.mode}>{a.mode}: {a.edge_id} ({a.distance_m.toFixed(0)} m from placement)</div>)}
-      {Object.entries(spec.zone_shares).map(([zone, share]) => <div key={zone}>{zone}: {(share * 100).toFixed(1)}%</div>)}
+  const kind = developmentKind(spec)
+  return <div className="tool development-tool" style={{ '--kind-color': kind ? BUILDING_KINDS[kind].color : DEVELOPMENT_USES[spec.land_use].color } as CSSProperties}>
+    <div className="development-saved-head">
+      {kind && <span className="kind-glyph"><KindIcon kind={kind} /></span>}
+      <div><span className="development-eyebrow">Saved in this scenario</span><h3>{spec.name}</h3></div>
+    </div>
+    <div className="development-summary"><b>{counts.trips.toLocaleString()} added one-way trips</b><span>{spec.capacity.toLocaleString()} {DEVELOPMENT_USES[spec.land_use].unit} · {counts.participants.toLocaleString()} travellers · {counts.cars.toLocaleString()} by car</span></div>
+    <Assumptions spec={spec} />
+    <details className="small"><summary>Network access</summary>
+      {development.access.map((a) => <div key={a.mode}>{a.mode === 'passenger' ? 'Car' : 'Walking'} access via <span className="mono">{a.edge_id}</span> · {a.distance_m.toFixed(0)} m away</div>)}
     </details>
     <div className="row wrap">
       <button className="ghostbtn" onClick={() => frameDevelopment(spec)}>Frame building</button>
       <button className="ghostbtn" onClick={() => { clock.seek(spec.first_wave.start_s); frameDevelopment(spec) }}>Show first wave</button>
     </div>
     <button className="primary" onClick={() => void submitRun('baseline')}>Run this scenario in SUMO</button>
-    <button className="ghostbtn" onClick={() => setTool('development')}>Place another development</button>
-    <div className="small dim">Synthetic one-way trips, not a calibrated forecast. Return legs are independent trips. No roads or construction restrictions were added.</div>
+    <button className="ghostbtn" onClick={() => setTool('development')}>Place another</button>
+    <div className="small dim">Synthetic one-way trips, not a calibrated forecast. No roads or construction restrictions were added.</div>
   </div>
 }
 
@@ -70,26 +76,19 @@ export default function DevelopmentTool() {
   const preview = useStore((s) => s.developmentPreview)
   const error = useStore((s) => s.developmentError)
   const previewing = useStore((s) => s.developmentPreviewing)
+  const preparing = useStore((s) => s.developmentPreparing)
   const building = useStore((s) => s.building)
-  const setDraft = useStore((s) => s.setDevelopmentDraft)
-  const place = useStore((s) => s.placeDevelopment)
-  const previewDevelopment = useStore((s) => s.previewDevelopment)
+  const chooseKind = useStore((s) => s.chooseDevelopmentKind)
   const applyDevelopment = useStore((s) => s.applyDevelopment)
   const setTool = useStore((s) => s.setTool)
-  const createFlagship = useStore((s) => s.createFlagship)
   const [runAfter, setRunAfter] = useState(false)
   const existing = scenario?.developments?.find((d) => selection?.kind === 'development' && selection.id === d.development_id)
   if (existing) return <DevelopmentDetails development={existing} />
-  if (!pack || !scenario || !draft) return <div className="tool">
-    <p className="small">Select or create a scenario before placing a development. The development will be saved in a new branch, not in the base city.</p>
-    {pack && <button className="primary" onClick={() => void createFlagship(240, 7).then(() => setTool('development'))}>Create base scenario</button>}
-  </div>
-  const horizon = scenario.constraints.horizon_s
-  const update = (changes: Partial<DevelopmentSpec>) => setDraft({ ...draft, ...changes })
+  if (!pack || !draft) return <div className="tool small dim">Loading the city…</div>
+  const kind = developmentKind(draft) ?? 'apartment'
+  const preset = BUILDING_KINDS[kind]
   const counts = developmentCounts(draft)
-  const problem = developmentError(draft, horizon)
-  const firstLabel = draft.land_use === 'residential' ? 'Departures' : 'Arrival-bound trips'
-  const returnLabel = draft.land_use === 'residential' ? 'Returns' : draft.land_use === 'school' ? 'Dismissal' : 'Departures'
+  const status = !placed ? 'aim' : previewing || preparing ? 'checking' : error ? 'blocked' : preview ? 'ready' : 'checking'
   const confirm = async () => {
     const child = await applyDevelopment()
     if (child && runAfter) {
@@ -99,61 +98,34 @@ export default function DevelopmentTool() {
       } catch (e) { useStore.getState().setError(String(e)) }
     }
   }
-  return <div className="tool development-tool">
-    <div className="development-steps"><b>1 Place</b><span>2 Review trips</span><span>3 Confirm</span></div>
-    <div className={`development-placement ${placed ? 'placed' : ''}`} role="status">
-      <b>{placed ? 'Footprint placed' : 'Click the map to place a building'}</b>
-      <span>{placed ? 'Click another location to move it. Nothing is saved yet.' : 'Choose land beside an existing street or walking edge.'}</span>
-      {placed && <button className="ghostbtn" onClick={() => frameDevelopment(draft)}>Zoom to placement</button>}
+  return <div className="tool development-tool" style={{ '--kind-color': preset.color } as CSSProperties}>
+    <div className="kind-grid" role="radiogroup" aria-label="Building type">
+      {BUILDING_KIND_ORDER.map((k) => <button key={k} role="radio" aria-checked={kind === k} aria-label={BUILDING_KINDS[k].label} title={BUILDING_KINDS[k].blurb}
+        className={`kind-tile ${kind === k ? 'on' : ''}`} style={{ '--kind-color': BUILDING_KINDS[k].color } as CSSProperties} onClick={() => chooseKind(k)}>
+        <span className="kind-glyph"><KindIcon kind={k} /></span>
+        <b>{BUILDING_KINDS[k].label}</b>
+        <small>{BUILDING_KINDS[k].blurb}</small>
+      </button>)}
     </div>
-    <div className="seg development-presets">
-      {(Object.keys(DEVELOPMENT_USES) as DevelopmentUse[]).map((use) => <button key={use} className={draft.land_use === use ? 'on' : ''} onClick={() => setDraft({ ...developmentPreset(pack, horizon, use), position: draft.position })}>{DEVELOPMENT_USES[use].label}</button>)}
+
+    <div key={status} className={`development-status ${status}`} role="status" aria-live="polite">
+      <i aria-hidden="true" />
+      {status === 'aim' && <div><b>Move over the map</b><span>The {preset.label.toLowerCase()} outline follows your cursor. Click to place it.</span></div>}
+      {status === 'checking' && <div><b>{preparing ? 'Preparing the base city…' : 'Checking street access…'}</b><span>{preparing ? 'Compiling the default crowd so your building has a city to land in.' : 'Validating walking and car access from existing streets.'}</span></div>}
+      {status === 'blocked' && <div><b>Can’t build here</b><span>{error}</span><span>Click another spot.</span></div>}
+      {status === 'ready' && preview && <div><b>+{preview.added_trips.toLocaleString()} one-way trips</b><span>{preview.outbound_trips.toLocaleString()} leaving · {preview.inbound_trips.toLocaleString()} arriving · {preview.incumbent_trips.toLocaleString()} existing trips untouched</span>
+        {preview.development.access.map((a) => <span key={a.mode}>{a.mode === 'passenger' ? 'Car' : 'Walking'} access {a.distance_m.toFixed(0)} m away</span>)}</div>}
     </div>
-    <label className="small">Name<input aria-label="Development name" value={draft.name} maxLength={80} onChange={(e) => update({ name: e.target.value })} /></label>
-    <NumberField label={`Capacity (${DEVELOPMENT_USES[draft.land_use].unit})`} value={draft.capacity} min={1} max={5000} onChange={(capacity) => update({ capacity })} />
-    <details className="small development-section"><summary>Footprint and location</summary>
-      <div className="development-grid">
-        <NumberField label="Width (m)" value={draft.footprint_m[0]} min={1} max={250} onChange={(width) => update({ footprint_m: [width, draft.footprint_m[1]] })} />
-        <NumberField label="Depth (m)" value={draft.footprint_m[1]} min={1} max={250} onChange={(depth) => update({ footprint_m: [draft.footprint_m[0], depth] })} />
-        <NumberField label="Display height (m)" value={draft.height_m} min={1} max={300} onChange={(height_m) => update({ height_m })} />
-      </div>
-      <div className="development-grid">
-        <NumberField label="Longitude" value={draft.position[0]} step={0.00001} onChange={(lon) => update({ position: [lon, draft.position[1]] })} />
-        <NumberField label="Latitude" value={draft.position[1]} step={0.00001} onChange={(lat) => update({ position: [draft.position[0], lat] })} />
-      </div>
-      <div className="row"><button className="ghostbtn" onClick={() => place(draft.position)}>Use coordinates</button><button className="ghostbtn" disabled={!placed} onClick={() => frameDevelopment(draft)}>Frame</button></div>
-      <p className="dim">Height and footprint are visual only. They never set occupancy or trip counts.</p>
-    </details>
-    <details className="small development-section" open><summary>Travel assumptions · editable synthetic inputs</summary>
-      <div className="development-grid">
-        {draft.land_use === 'residential' && <NumberField label="People per unit" value={draft.people_per_unit} min={0.1} max={10} step={0.1} onChange={(people_per_unit) => update({ people_per_unit })} />}
-        <NumberField label="Participation (%)" value={draft.trip_rate * 100} min={0.1} max={100} step={0.1} onChange={(n) => update({ trip_rate: n / 100 })} />
-        <NumberField label="Car share (%)" value={draft.car_share * 100} min={0} max={100} step={1} onChange={(n) => update({ car_share: n / 100 })} />
-        <NumberField label="Walking limit (m)" value={draft.walk_limit_m} min={0} max={10000} step={50} onChange={(walk_limit_m) => update({ walk_limit_m })} />
-      </div>
-      <WaveFields label={firstLabel} wave={draft.first_wave} horizon={horizon} onChange={(first_wave) => update({ first_wave })} />
-      <label className="small check"><input type="checkbox" checked={!!draft.return_wave} onChange={(e) => update({ return_wave: e.target.checked ? { start_s: Math.max(draft.first_wave.end_s, Math.floor(horizon * 0.65)), end_s: horizon, profile: draft.first_wave.profile } : null })} />Include {returnLabel.toLowerCase()} in this horizon</label>
-      {draft.return_wave && <WaveFields label={returnLabel} wave={draft.return_wave} horizon={horizon} onChange={(return_wave) => update({ return_wave })} />}
-      <p className="dim">Seconds after simulation start, within +{fmt(horizon)}. These are origin departure windows, not guaranteed arrivals. Return legs are separate trips.</p>
-      <details><summary>Counterpart zones and seed</summary>
-        <p className="dim">{draft.land_use === 'residential' ? 'Where residents travel to' : 'Where commuters or students come from'}. Shares must sum to 100%.</p>
-        {pack.zones.map((zone) => <NumberField key={zone.zone_id} label={`${zone.name} (%)`} value={Number(((draft.zone_shares[zone.zone_id] ?? 0) * 100).toFixed(4))} min={0} max={100} step={1} onChange={(n) => update({ zone_shares: { ...draft.zone_shares, [zone.zone_id]: n / 100 } })} />)}
-        <NumberField label="Demand seed" value={draft.seed} min={0} max={2147483647} onChange={(seed) => update({ seed })} />
-      </details>
-    </details>
-    <div className="development-summary"><b>{counts.trips.toLocaleString()} added one-way trips</b><span>{counts.participants.toLocaleString()} participants · {counts.cars.toLocaleString()} car trips · not inferred from height</span></div>
-    {(problem || error) && <div className="small bad development-error" role="alert">{problem ?? error}</div>}
-    {!preview && <button className="primary" disabled={!placed || !!problem || previewing || !!building} onClick={() => void previewDevelopment()}>{previewing ? 'Checking network access…' : 'Preview development'}</button>}
-    {preview && <div className="proposal development-confirm">
-      <div className="proposal-head"><span className="kind">Validated placement · not applied</span><b>{preview.added_trips.toLocaleString()} new trips, {preview.incumbent_trips.toLocaleString()} existing trips preserved</b></div>
-      <div className="small">{preview.outbound_trips} outbound · {preview.inbound_trips} inbound</div>
-      {preview.development.access.map((a) => <div className="small" key={a.mode}>{a.mode === 'passenger' ? 'Car' : 'Walking'} access: {a.distance_m.toFixed(0)} m · <span className="mono">{a.edge_id}</span></div>)}
-      <details className="small"><summary>Model limits and rounding</summary>{preview.warnings.map((warning) => <p key={warning} className="dim">{warning}</p>)}</details>
+
+    <div className="development-summary"><b>{developmentLabel(draft)} · {draft.footprint_m.join(' × ')} m</b><span>{draft.capacity.toLocaleString()} {DEVELOPMENT_USES[draft.land_use].unit} · {counts.trips.toLocaleString()} one-way trips · {counts.cars.toLocaleString()} by car</span></div>
+    <Assumptions spec={draft} />
+
+    {status === 'ready' && <div className="development-confirm">
       <label className="small check"><input type="checkbox" checked={runAfter} onChange={(e) => setRunAfter(e.target.checked)} />Run the new branch in SUMO after confirming</label>
-      <button className="primary" disabled={!!building || !!problem} onClick={() => void confirm()}>Confirm development</button>
+      <button className="primary confirm" disabled={!!building} onClick={() => void confirm()}>Confirm {preset.label.toLowerCase()}</button>
       <div className="small dim">Creates a new scenario branch. The parent, base map and existing trips stay unchanged.</div>
     </div>}
-    <button className="ghostbtn" onClick={() => setTool(null)}>Cancel placement</button>
+    <button className="ghostbtn" onClick={() => setTool(null)}>Cancel</button>
     <div className="small dim">Synthetic experiment, not a planning forecast. Existing network access only; no new roads or construction closures.</div>
   </div>
 }

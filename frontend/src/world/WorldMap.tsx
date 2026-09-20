@@ -195,8 +195,9 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
         const replay = rid ? s.replays[rid] ?? null : null
         const scenario = scenarioForView(s.scenarios, s.scenarioId, replay?.bundle ?? null, side)
         const focusEdges = s.selection?.kind === 'restriction' ? scenario?.restrictions.find((r) => r.restriction_id === s.selection?.id)?.edge_ids : undefined
-        const draft = side !== 'left' && s.developmentPlaced ? s.developmentDraft : null
-        const access = draft ? s.developmentPreview?.development.access.map((a) => a.edge_id) ?? [] : []
+        const ghostAt = s.developmentPlaced ? s.developmentDraft?.position : s.developmentHover
+        const draft = side !== 'left' && s.developmentDraft && ghostAt ? { ...s.developmentDraft, position: ghostAt } : null
+        const access = draft && s.developmentPlaced ? s.developmentPreview?.development.access.map((a) => a.edge_id) ?? [] : []
         map.getCanvas().style.cursor = s.developmentDraft && side !== 'left' ? 'crosshair' : 'default'
         overlay.setProps({
           layers: buildWorldLayers({
@@ -213,7 +214,8 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
               s.select(selection)
             },
             developmentDraft: draft,
-            invalidDevelopment: !!s.developmentError,
+            developmentPlaced: s.developmentPlaced,
+            invalidDevelopment: !!s.developmentError && s.developmentPlaced,
             ghostEdges: side === 'left' ? [] : [...(s.ghost?.edges ?? []), ...access],
             ghostStops: side === 'left' ? [] : s.ghost?.stops,
             ghostHazard: side === 'left' ? null : s.ghost?.hazard,
@@ -243,6 +245,20 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
         const state = useStore.getState()
         if (state.developmentDraft && side !== 'left') state.placeDevelopment([event.lngLat.lng, event.lngLat.lat])
       })
+      // The ghost footprint follows the cursor until it is placed (throttled to one store update per frame).
+      let hoverRaf = 0
+      let hoverAt: [number, number] | null = null
+      m.on('mousemove', (event) => {
+        const state = useStore.getState()
+        if (!state.developmentDraft || state.developmentPlaced || side === 'left') return
+        hoverAt = [event.lngLat.lng, event.lngLat.lat]
+        if (hoverRaf) return
+        hoverRaf = requestAnimationFrame(() => {
+          hoverRaf = 0
+          useStore.getState().setDevelopmentHover(hoverAt)
+        })
+      })
+      m.on('mouseout', () => useStore.getState().setDevelopmentHover(null))
     }
     void init().catch(() => {
       if (!disposed) useStore.getState().setError('Mapbox could not load. Check the map token and network connection, then reload.')
