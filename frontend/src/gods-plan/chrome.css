@@ -118,6 +118,9 @@
 .god-chrome .god-chrome__sparkles { flex: 0 0 20px; width: 20px; height: 20px; }
 .god-chrome .god-chrome__command-input { flex: 1; min-width: 0; width: 0; height: 34px; padding: 4px 0; border: 0; border-radius: 0; color: #fff; background: transparent; box-shadow: none; outline: none; font-size: 13px; }
 .god-chrome .god-chrome__command-input::placeholder { color: #e7f2fccc; }
+/* the glass dock is the field: no focus ring inside it (the ring stays on the buttons for keyboard users) */
+.god-chrome .god-chrome__command-input:focus,
+.god-chrome .god-chrome__command-input:focus-visible { outline: none; box-shadow: none; }
 .god-chrome .god-chrome__submit { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; min-height: 0; padding: 6px; border: 0; border-radius: 50%; color: #29415b; background: #f7fbff; box-shadow: none; }
 .god-chrome .god-chrome__submit:disabled { opacity: .65; }
 
