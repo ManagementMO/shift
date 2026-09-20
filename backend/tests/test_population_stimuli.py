@@ -17,7 +17,7 @@ from cityshift.api.population_router import router
 from cityshift.api.population_service import PopulationService, get_population_service
 from cityshift.api.service import Service
 from cityshift.contracts import BrainAssignment, PopulationStimulus, RunStatus, SimulationRun
-from cityshift.domain.population_admission import admission_quotes
+from cityshift.domain.population_admission import admission_quotes, admitted_residents
 from cityshift.domain.population_runs import _save, execute_population_run, population_run_id
 from cityshift.domain.population_stimuli import enqueue_stimuli, read_stimuli
 from cityshift.domain.society import SocietyWorld
@@ -56,6 +56,41 @@ def test_admission_uses_reviewed_reservation_before_starting_a_job(tmp_path, mon
     finally:
         owner.pool.shutdown(wait=True)
         owner.agent_pool.shutdown(wait=True)
+
+
+@pytest.mark.parametrize("run_cap,session_remaining,spent,expected", [
+    (1, 20_000_000, 0, 1), (3.5, 20_000_000, 0, 4),
+    (20, 1_000_000, 0, 1), (3.5, 20_000_000, 2_500_000, 1),
+    (0.8, 20_000_000, 0, 0),
+])
+def test_native_batch_reserves_combined_cost_and_preserves_oldest_prefix(run_cap, session_remaining, spent, expected):
+    pop = definition()
+    brain = BrainAssignment(model_id="anthropic/claude-haiku-4.5", model_family="claude",
+                            api_provider="openrouter", config_ref="claude")
+    pop.assignments = dict.fromkeys(pop.assignments, brain)
+    pop.spec.budget.max_cost_usd = run_cap
+    pop.spec.budget.max_concurrency = 4
+    due = list(reversed(pop.assignments))
+    usage = {"remaining_microdollars": session_remaining, "blocked": False,
+             "run_totals": {"calls": 0, "reported_tokens": 0, "accounted_microdollars": spent}}
+    assert admitted_residents(pop, due, usage) == due[:expected]
+    usage["run_totals"]["calls"] = pop.spec.budget.max_calls - 1
+    assert admitted_residents(pop, due, usage) == due[:min(expected, 1)]
+
+
+def test_batch_does_not_skip_an_unaffordable_older_resident_for_cheaper_newer_work():
+    pop = definition()
+    cheap = BrainAssignment(model_id="anthropic/claude-haiku-4.5", model_family="claude",
+                            api_provider="openrouter", config_ref="claude")
+    costly = BrainAssignment(model_id="x-ai/grok-4.3", model_family="grok", api_provider="openrouter", config_ref="grok")
+    pop.assignments = dict.fromkeys(pop.assignments, cheap)
+    due = list(pop.assignments)
+    pop.assignments[due[1]] = costly
+    pop.spec.budget.max_cost_usd = 3.5
+    usage = {"remaining_microdollars": 20_000_000, "blocked": False,
+             "run_totals": {"calls": 0, "reported_tokens": 0, "accounted_microdollars": 0}}
+    assert admitted_residents(pop, due, usage) == due[:1]
+    assert admitted_residents(pop, due[1:], usage) == []
 
 
 def test_stimuli_validate_geometry_and_semantics():
@@ -211,8 +246,8 @@ def test_real_sumo_pause_resume_delivers_queued_input_once(tmp_path):
     assert not bridges
 
 
-@pytest.mark.parametrize("exhausted", [False, True])
-def test_native_epoch_batches_and_budget_pause_without_model_calls(tmp_path, monkeypatch, exhausted):
+@pytest.mark.parametrize("exhausted,run_cap,batch_limit", [(False, 20, 2), (False, 1, 1), (True, 20, 2)])
+def test_native_epoch_batches_and_budget_pause_without_model_calls(tmp_path, monkeypatch, exhausted, run_cap, batch_limit):
     from cityshift.domain import population_runs
 
     pack, pop = network_population(tmp_path, horizon=60)
@@ -221,6 +256,7 @@ def test_native_epoch_batches_and_budget_pause_without_model_calls(tmp_path, mon
     pop.spec.brains = [brain]
     pop.assignments = dict.fromkeys(pop.assignments, brain)
     pop.spec.budget.max_concurrency = 2
+    pop.spec.budget.max_cost_usd = run_cap
     run = SimulationRun(run_id=population_run_id(pop, "batch-proof"), scenario_id=pop.population_id,
                         population_id=pop.population_id, run_kind="population", plan_id="service-ledger-v1", seed=7)
     usage = {"remaining_microdollars": 600_000 if exhausted else 20_000_000, "blocked": False,
@@ -268,6 +304,6 @@ def test_native_epoch_batches_and_budget_pause_without_model_calls(tmp_path, mon
         assert not snapshot["population"]["decisions"]
     else:
         assert result.status == RunStatus.completed, result.error
-        assert all(0 < len(batch) <= 2 for batch in batches)
+        assert all(0 < len(batch) <= batch_limit for batch in batches)
         assert [rid for batch in batches for rid in batch] == sorted(pop.assignments)
         assert all(row["source"] == "fallback" for row in snapshot["population"]["decisions"])

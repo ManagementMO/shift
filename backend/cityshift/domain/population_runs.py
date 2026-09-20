@@ -25,7 +25,7 @@ from cityshift.contracts import (
     content_hash,
     utcnow,
 )
-from cityshift.domain.population_admission import boundary_budget_reason
+from cityshift.domain.population_admission import admitted_residents, boundary_budget_reason
 from cityshift.domain.population_checkpoints import (
     atomic_json,
     consume_checkpoint,
@@ -181,7 +181,8 @@ def execute_population_run(run: SimulationRun, pack: CityPack, population: Popul
                 inputs_changed = world.apply_stimuli(read_stimuli(run_root, run.run_id))
                 due = sorted(world.due_residents(), key=lambda rid: (world.states[rid].next_decision_s, rid))
                 if native and gateway is not None and due:
-                    reason = boundary_budget_reason(population, due, gateway.usage(run.run_id))
+                    boundary_usage = gateway.usage(run.run_id)
+                    reason = boundary_budget_reason(population, due[:1], boundary_usage)
                     if reason:
                         saved = save_checkpoint(out_dir, attempt, world, mobility, client, time.monotonic() - started,
                                                 prior_audit + bridge.audit())
@@ -190,9 +191,10 @@ def execute_population_run(run: SimulationRun, pack: CityPack, population: Popul
                         run.status = RunStatus.paused
                         run.error = reason
                         break
+                    due = admitted_residents(population, due, boundary_usage)
                 # A native epoch has one shared deadline. Do not enqueue additional
                 # waves behind the SDK's worker limit under that same deadline.
-                packets = world.begin_epoch(due[:population.spec.budget.max_concurrency] if native else None)
+                packets = world.begin_epoch(due if native else None)
                 if packets:
                     if native:
                         if client is None:

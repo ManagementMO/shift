@@ -11,6 +11,28 @@ def admission_quotes(model_ids: list[str], output_tokens: int) -> dict[str, int]
     })[1].ceiling_microdollars for model_id in model_ids}
 
 
+def admitted_residents(population: PopulationDefinition, oldest_due: list[str], usage: dict) -> list[str]:
+    """Longest oldest-first batch whose concurrent request reservations fit."""
+    budget = population.spec.budget
+    totals = usage["run_totals"]
+    if usage.get("blocked") or totals["reported_tokens"] >= budget.max_tokens:
+        return []
+    limit = min(budget.max_concurrency, max(0, budget.max_calls - totals["calls"]))
+    candidates = oldest_due[:limit]
+    remaining = min(usage["remaining_microdollars"],
+                    int(budget.max_cost_usd * 1_000_000) - totals["accounted_microdollars"])
+    models = sorted({population.assignments[rid].model_id for rid in candidates})
+    quotes = admission_quotes(models, budget.max_output_tokens)
+    admitted = []
+    for rid in candidates:
+        quote = quotes[population.assignments[rid].model_id]
+        if quote > remaining:
+            break
+        admitted.append(rid)
+        remaining -= quote
+    return admitted
+
+
 def boundary_budget_reason(population: PopulationDefinition, resident_ids: list[str], usage: dict) -> str | None:
     if not resident_ids:
         return None
