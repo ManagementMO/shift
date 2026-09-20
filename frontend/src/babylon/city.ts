@@ -182,17 +182,18 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
   const d = bz1 - bz0
 
   const materials = new CityMaterials(scene, facadeResolution)
-  const land = new Batch(TEXTURE_RECIPES.concrete.metres)
+  const groundKind = world.surfaces?.meadow ? 'grass' : 'concrete'
+  const land = new Batch(TEXTURE_RECIPES[groundKind].metres)
   const plate = [bx0 - w * 0.3, bz0 - d * 0.3, bx1 + w * 0.3, bz0 - d * 0.3, bx1 + w * 0.3, bz1 + d * 0.3, bx0 - w * 0.3, bz1 + d * 0.3]
   if (world.surfaces) {
-    for (const p of world.surfaces.ground) land.polygon(p.ring, p.holes, Y.road, PALETTE.land)
+    for (const p of world.surfaces.ground) land.polygon(p.ring, p.holes, Y.road, groundKind === 'grass' ? PALETTE.meadow : PALETTE.land)
   } else {
     land.polygon(plate, world.water.map((p) => p.ring), Y.ground, PALETTE.land)
     for (const poly of world.water) {
       for (const island of poly.holes ?? []) land.polygon(island, undefined, Y.ground, PALETTE.land)
     }
   }
-  const ground = meshFromBatch('ground', land, scene, materials.get('concrete'))
+  const ground = meshFromBatch('ground', land, scene, materials.get(groundKind))
   ground.receiveShadows = true
   ground.isPickable = true
 

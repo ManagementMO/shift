@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine'
 import { Scene } from '@babylonjs/core/scene'
+import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { Ray } from '@babylonjs/core/Culling/ray'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 
@@ -136,7 +137,8 @@ describe('Placeholder countryside', () => {
     const materials = new CityMaterials(scene, 512)
     const terrain = buildTerrain(scene, world(), materials, { cells, treeLimit: 0 })
     try {
-      const land = terrain.meshes.find((m) => m.name === 'countryside')!
+      const land = new Mesh('uncut-heightfield', scene)
+      terrainVertexData(terrain.shape).applyToMesh(land, false)
       for (const mesh of terrain.meshes.filter((m) => ['fields', 'lanes', 'horizon-roads'].includes(m.name))) {
         const positions = mesh.getVerticesData('position')!, indices = mesh.getIndices()!
         const stride = Math.max(3, Math.ceil(indices.length / 180 / 3) * 3)
@@ -159,6 +161,47 @@ describe('Placeholder countryside', () => {
       scene.dispose()
       engine.dispose()
     }
+  })
+
+  it('cuts the lake out of the land mesh while retaining small islands between grid vertices', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const materials = new CityMaterials(scene, 512)
+    const w = world()
+    w.far_water![0].holes = [[2850, -3150, 3150, -3150, 3150, -2850, 2850, -2850]]
+    const terrain = buildTerrain(scene, w, materials, { cells: 24, treeLimit: 0 })
+    const land = terrain.meshes.find((m) => m.name === 'countryside')!
+    const hit = (x: number, z: number) => new Ray(new Vector3(x, 500, z), new Vector3(0, -1, 0), 1000).intersectsMesh(land)
+    expect(hit(2100, -1020).hit).toBe(false)
+    expect(hit(2700, -3000).hit).toBe(false)
+    expect(hit(3000, -3000).hit).toBe(true)
+    expect(hit(3000, -3000).pickedPoint!.y).toBeGreaterThan(Y.water)
+    terrain.dispose()
+    materials.dispose()
+    scene.dispose()
+    engine.dispose()
+  })
+
+  it('removes base terrain beneath fields instead of stacking competing ground surfaces', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const materials = new CityMaterials(scene, 512)
+    const terrain = buildTerrain(scene, world(), materials, { cells: 24, treeLimit: 0 })
+    const land = terrain.meshes.find((m) => m.name === 'countryside')!
+    const fields = terrain.meshes.find((m) => m.name === 'fields')!
+    const p = fields.getVerticesData('position')!, idx = fields.getIndices()!
+    for (let i = 0; i < idx.length; i += Math.max(3, Math.floor(idx.length / 40 / 3) * 3)) {
+      const vs = [idx[i], idx[i + 1], idx[i + 2]]
+      const x = vs.reduce((sum, v) => sum + p[v * 3], 0) / 3
+      const z = vs.reduce((sum, v) => sum + p[v * 3 + 2], 0) / 3
+      const ray = new Ray(new Vector3(x, 500, z), new Vector3(0, -1, 0), 1000)
+      expect(ray.intersectsMesh(fields).hit).toBe(true)
+      expect(ray.intersectsMesh(land).hit).toBe(false)
+    }
+    terrain.dispose()
+    materials.dispose()
+    scene.dispose()
+    engine.dispose()
   })
 
   it('builds a heightfield the camera ray hits at the placeholder height, and the plate edge is pinned to the grid', () => {

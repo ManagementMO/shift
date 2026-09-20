@@ -14,7 +14,7 @@ import type { Scene } from '@babylonjs/core/scene'
 import { TEXTURE_RECIPES } from './appearance'
 import { hex, meshFromBatch, PALETTE, vertexColorMaterial, Y } from './city'
 import { boundaryDistance, pointInRing, type TreePlacement } from './details'
-import { Batch, bounds, mix, type RGB } from './geometry'
+import { Batch, bounds, mix, signedArea, type RGB } from './geometry'
 import type { CityMaterials } from './materials'
 import { buildVegetation } from './vegetation'
 import type { Flat, WorldData, WorldRoad } from './worldData'
@@ -171,8 +171,8 @@ export function terrainShape(world: Pick<WorldData, 'crs' | 'surfaces' | 'far_wa
     const shore = smooth(shoreDistance(x, z) / 500)
     return base + relief * smooth(d / o.hillRise) * shore
   }
-  const grid = heightGrid(farBounds, plate, o.cells, height)
-  const surface = (x: number, z: number): number => (boxDistance(plate, x, z) <= 0 && !inWater(x, z) ? plateY : gridHeight(grid, x, z))
+  const grid = heightGrid(farBounds, plate, o.cells, (x, z) => boxDistance(plate, x, z) >= -0.001 && inWater(x, z) ? plateY : height(x, z))
+  const surface = (x: number, z: number): number => inWater(x, z) ? Y.water - 5 : boxDistance(plate, x, z) <= 0 ? plateY : Math.max(plateY, gridHeight(grid, x, z))
   return { grid, farBounds, pack: [bx0, bz0, bx1, bz1], plate, plateY, water, inWater, shoreDistance, height, surface }
 }
 
@@ -227,7 +227,7 @@ export function horizonRoads(roads: (Pick<WorldRoad, 'shape' | 'w' | 'type' | 'k
 /** Deterministic tree positions on the countryside: clumps by noise, kept off the pack, water, beaches, horizon roads and `avoid`. */
 export function countryTrees(shape: TerrainShape, roads: { shape: Flat; width: number }[], limit: number, avoid?: (x: number, z: number) => boolean): TreePlacement[] {
   const [fx0, fz0, fx1, fz1] = shape.farBounds
-  const spacing = 210
+  const spacing = 100
   const out: (TreePlacement & { priority: number })[] = []
   for (let ix = Math.ceil(fx0 / spacing); ix * spacing < fx1; ix++) {
     for (let iz = Math.ceil(fz0 / spacing); iz * spacing < fz1; iz++) {
@@ -236,7 +236,7 @@ export function countryTrees(shape: TerrainShape, roads: { shape: Flat; width: n
       if (boxDistance(shape.pack, x, z) < 150 || shape.inWater(x, z) || shape.shoreDistance(x, z) < 90) continue
       if (rollingNoise(x + 5000, z - 5000, 900) < 0.12 || avoid?.(x, z)) continue
       if (roads.some((r) => segmentDistance(x, z, r.shape) < r.width + 30)) continue
-      out.push({ x, z, y: shape.surface(x, z), scale: 1.5 + j3 * 1.1, shade: j2, priority: j3 })
+      out.push({ x, z, y: shape.surface(x, z), scale: 1.5 + j3 * 1.1, shade: j2, priority: Math.max(0, boxDistance(shape.pack, x, z)) + j3 * 600 })
     }
   }
   return out.sort((a, b) => a.priority - b.priority || a.x - b.x || a.z - b.z).slice(0, limit).map(({ x, y, z, scale, shade }) => ({ x, y, z, scale, shade }))
@@ -313,34 +313,50 @@ export function farmParcels(shape: TerrainShape, roads: { shape: Flat; width: nu
 }
 
 function slopeNormal(shape: TerrainShape, x: number, z: number): [number, number, number] {
-  const nx = -(shape.surface(x + 6, z) - shape.surface(x - 6, z)) / 12
-  const nz = -(shape.surface(x, z + 6) - shape.surface(x, z - 6)) / 12
+  const height = (px: number, pz: number) => Math.max(shape.plateY, gridHeight(shape.grid, px, pz))
+  const nx = -(height(x + 6, z) - height(x - 6, z)) / 12
+  const nz = -(height(x, z + 6) - height(x, z - 6)) / 12
   const l = Math.hypot(nx, 1, nz)
   return [nx / l, 1 / l, nz / l]
 }
 
 type Point2 = [number, number]
 
+function clipSide(polygon: Point2[], [ax, az]: Point2, [bx, bz]: Point2, inside = true): Point2[] {
+  if (!polygon.length) return []
+  const sign = inside ? 1 : -1
+  const side = ([x, z]: Point2) => sign * ((bx - ax) * (z - az) - (bz - az) * (x - ax))
+  const next: Point2[] = []
+  let previous = polygon[polygon.length - 1], before = side(previous)
+  for (const current of polygon) {
+    const after = side(current)
+    if ((before >= 0) !== (after >= 0)) {
+      const t = before / (before - after)
+      next.push([previous[0] + (current[0] - previous[0]) * t, previous[1] + (current[1] - previous[1]) * t])
+    }
+    if (after >= 0) next.push(current)
+    previous = current
+    before = after
+  }
+  return next
+}
+
 function clipTriangle(polygon: Point2[], triangle: Point2[]): Point2[] {
   let clipped = polygon
-  for (let e = 0; e < 3 && clipped.length; e++) {
-    const [ax, az] = triangle[e], [bx, bz] = triangle[(e + 1) % 3]
-    const side = ([x, z]: Point2) => (bx - ax) * (z - az) - (bz - az) * (x - ax)
-    const next: Point2[] = []
-    let previous = clipped[clipped.length - 1], before = side(previous)
-    for (const current of clipped) {
-      const after = side(current)
-      if ((before >= 0) !== (after >= 0)) {
-        const t = before / (before - after)
-        next.push([previous[0] + (current[0] - previous[0]) * t, previous[1] + (current[1] - previous[1]) * t])
-      }
-      if (after >= 0) next.push(current)
-      previous = current
-      before = after
-    }
-    clipped = next
-  }
+  for (let e = 0; e < 3 && clipped.length; e++) clipped = clipSide(clipped, triangle[e], triangle[(e + 1) % 3])
   return clipped
+}
+
+function subtractPolygon(polygon: Point2[], cut: Point2[]): Point2[][] {
+  const pieces: Point2[][] = []
+  let remaining = polygon
+  for (let e = 0; e < cut.length && remaining.length >= 3; e++) {
+    const a = cut[e], b = cut[(e + 1) % cut.length]
+    const outside = clipSide(remaining, a, b, false)
+    if (outside.length >= 3 && signedArea(outside.flat()) > 0.0001) pieces.push(outside)
+    remaining = clipSide(remaining, a, b)
+  }
+  return pieces
 }
 
 function drape(batch: Batch, ring: Point2[], shape: TerrainShape, color: RGB, lift: number): void {
@@ -373,7 +389,7 @@ function drapedField(batch: Batch, parcel: Parcel, shape: TerrainShape, tint: RG
 }
 
 /** Gravel concession lanes: lattice lines every block, drawn only where both ends are farmland. */
-function drapedLanes(batch: Batch, shape: TerrainShape, parcels: Parcel[]): void {
+function drapedLanes(batch: Batch, shape: TerrainShape, parcels: Parcel[], cuts: Point2[][]): void {
   if (!parcels.length) return
   const is = parcels.map((p) => p.i), js = parcels.map((p) => p.j)
   const i0 = Math.min(...is), i1 = Math.max(...is) + 1, j0 = Math.min(...js), j1 = Math.max(...js) + 1
@@ -381,7 +397,7 @@ function drapedLanes(batch: Batch, shape: TerrainShape, parcels: Parcel[]): void
   const lane = (from: [number, number], to: [number, number]) => {
     const [ax, az] = fromLattice(from[0], from[1]), [bx, bz] = fromLattice(to[0], to[1])
     if (!isFarmland(shape, ax, az) || !isFarmland(shape, bx, bz)) return
-    drapedStrip(batch, [ax, az, bx, bz], LANE_WIDTH, shape, LANE, 0.3)
+    drapedStrip(batch, [ax, az, bx, bz], LANE_WIDTH, shape, LANE, 0.3, cuts)
   }
   for (let i = Math.ceil(i0 / LOTS_PER_BLOCK_U) * LOTS_PER_BLOCK_U; i <= i1; i += LOTS_PER_BLOCK_U) {
     for (let v = j0 * LOT_V; v < j1 * LOT_V; v += step) lane([i * LOT_U, v], [i * LOT_U, Math.min(v + step, j1 * LOT_V)])
@@ -392,7 +408,7 @@ function drapedLanes(batch: Batch, shape: TerrainShape, parcels: Parcel[]): void
 }
 
 /** Straight strip draped on the surface (sampled every 120 m), slightly proud of the ground. */
-function drapedStrip(batch: Batch, line: Flat, width: number, shape: TerrainShape, color: RGB, lift: number): void {
+function drapedStrip(batch: Batch, line: Flat, width: number, shape: TerrainShape, color: RGB, lift: number, cuts: Point2[][] = []): void {
   const [ax, az, bx, bz] = line
   const len = Math.hypot(bx - ax, bz - az)
   if (len < 1) return
@@ -403,7 +419,9 @@ function drapedStrip(batch: Batch, line: Flat, width: number, shape: TerrainShap
     const t0 = (s / steps) * len, t1 = ((s + 1) / steps) * len
     const x0 = ax + dx * t0, z0 = az + dz * t0, x1 = ax + dx * t1, z1 = az + dz * t1
     if (shape.inWater(x0, z0) || shape.inWater(x1, z1)) break
-    drape(batch, [[x0 + ox, z0 + oz], [x0 - ox, z0 - oz], [x1 - ox, z1 - oz], [x1 + ox, z1 + oz]], shape, color, lift)
+    const ring: Point2[] = [[x0 + ox, z0 + oz], [x0 - ox, z0 - oz], [x1 - ox, z1 - oz], [x1 + ox, z1 + oz]]
+    cuts.push(ring)
+    drape(batch, ring, shape, color, lift)
   }
 }
 
@@ -433,6 +451,7 @@ export interface Farmland {
   lanes: Batch
   buildings: Batch
   trees: TreePlacement[]
+  cuts: Point2[][]
   /** `parcelKey`s of cropped parcels, so loose trees stay out of the crops */
   tinted: Set<string>
 }
@@ -449,11 +468,13 @@ export function farmland(shape: TerrainShape, roads: { shape: Flat; width: numbe
   const lanes = new Batch(TEXTURE_RECIPES.asphalt.metres)
   const buildings = new Batch()
   const trees: (TreePlacement & { priority: number })[] = []
+  const cuts: Point2[][] = []
   const tinted = new Set<string>()
   const [cx, cz] = [(shape.pack[0] + shape.pack[2]) / 2, (shape.pack[1] + shape.pack[3]) / 2]
   for (const parcel of parcels) {
     if (parcel.tint) {
       drapedField(fields, parcel, shape, parcel.tint)
+      cuts.push(parcel.corners)
       tinted.add(`${parcel.i}:${parcel.j}`)
     }
     const near = Math.hypot(parcel.centre[0] - cx, parcel.centre[1] - cz)
@@ -476,58 +497,71 @@ export function farmland(shape: TerrainShape, roads: { shape: Flat; width: numbe
       }
     }
   }
-  drapedLanes(lanes, shape, parcels)
+  drapedLanes(lanes, shape, parcels, cuts)
   return {
-    fields, lanes, buildings, tinted,
+    fields, lanes, buildings, tinted, cuts,
     trees: trees.sort((p, q) => p.priority - q.priority || p.x - q.x || p.z - q.z).slice(0, treeLimit).map(({ x, y, z, scale, shade }) => ({ x, y, z, scale, shade })),
   }
 }
 
 /** Heightfield vertex data; grid lines are pinned to the plate edges so the terrain meets the plate without a trench. */
-export function terrainVertexData(shape: TerrainShape): VertexData {
-  const { xs, zs, heights } = shape.grid
-  const positions = new Float32Array(xs.length * zs.length * 3)
-  const normals = new Float32Array(xs.length * zs.length * 3)
-  const colors = new Float32Array(xs.length * zs.length * 4)
-  const uvs = new Float32Array(xs.length * zs.length * 2)
-  const at = (i: number, j: number) => heights[Math.max(0, Math.min(zs.length - 1, j)) * xs.length + Math.max(0, Math.min(xs.length - 1, i))]
-  for (let j = 0; j < zs.length; j++) {
-    for (let i = 0; i < xs.length; i++) {
-      const k = j * xs.length + i
-      const x = xs[i], z = zs[j], y = heights[k]
-      positions.set([x, y, z], k * 3)
-      const sx = (xs[Math.min(i + 1, xs.length - 1)] - xs[Math.max(i - 1, 0)]) || 1
-      const sz = (zs[Math.min(j + 1, zs.length - 1)] - zs[Math.max(j - 1, 0)]) || 1
-      const nx = -(at(i + 1, j) - at(i - 1, j)) / sx
-      const nz = -(at(i, j + 1) - at(i, j - 1)) / sz
-      const nl = Math.hypot(nx, 1, nz)
-      normals.set([nx / nl, 1 / nl, nz / nl], k * 3)
-      // the meadow tint at the plate edge, drifting drier on the hills and deeper in the hollows
-      const tone = 0.5 + 0.5 * rollingNoise(x - 9000, z + 4000, 1300)
-      const away = smooth(boxDistance(shape.plate, x, z) / 1500)
-      let c: RGB = mix(PALETTE.meadow, mix(mix(PALETTE.green, GRASS_DRY, tone), GRASS_DEEP, smooth((shape.plateY + 12 - y) / 40) * 0.35), away)
-      const shore = shape.shoreDistance(x, z)
-      if (shore < 140) c = mix(SHORE, c, smooth(shore / 140))
-      colors.set([c[0], c[1], c[2], 1], k * 4)
-      uvs.set([x / TEXTURE_RECIPES.grass.metres[0], z / TEXTURE_RECIPES.grass.metres[1]], k * 2)
+export function terrainVertexData(shape: TerrainShape, cutouts: Point2[][] = []): VertexData {
+  const { xs, zs } = shape.grid
+  const water = new Batch()
+  for (const polygon of shape.water) water.polygon(polygon.ring, polygon.holes, 0, [1, 1, 1])
+  const cuts = [...cutouts]
+  for (let i = 0; i < water.indices.length; i += 3) {
+    cuts.push(water.indices.slice(i, i + 3).map((v) => [water.positions[v * 3], water.positions[v * 3 + 2]]))
+  }
+  const cells = new Map<number, Point2[][]>()
+  for (const cut of cuts) {
+    const [x0, z0, x1, z1] = bounds(cut.flat())
+    const i0 = gridInterval(xs, x0), i1 = gridInterval(xs, x1)
+    const j0 = gridInterval(zs, z0), j1 = gridInterval(zs, z1)
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const key = j * xs.length + i
+      if (!cells.has(key)) cells.set(key, [])
+      cells.get(key)!.push(cut)
     }
   }
-  const indices = new Uint32Array((xs.length - 1) * (zs.length - 1) * 6)
-  let n = 0
-  for (let j = 0; j < zs.length - 1; j++) {
-    for (let i = 0; i < xs.length - 1; i++) {
-      const a = j * xs.length + i, b = a + 1, c = a + xs.length, d = c + 1
-      // positive shoelace in (x, z), the same up-facing front side Batch.polygon emits
-      indices.set([a, b, c, b, d, c], n)
-      n += 6
+  const land = new Batch(TEXTURE_RECIPES.grass.metres)
+  const vertex = (x: number, z: number) => {
+    const y = Math.max(shape.plateY, gridHeight(shape.grid, x, z))
+    const [nx, ny, nz] = slopeNormal(shape, x, z)
+    // the meadow tint at the plate edge, drifting drier on the hills and deeper in the hollows
+    const tone = 0.5 + 0.5 * rollingNoise(x - 9000, z + 4000, 1300)
+    const away = smooth(boxDistance(shape.plate, x, z) / 1500)
+    let c: RGB = mix(PALETTE.meadow, mix(mix(PALETTE.green, GRASS_DRY, tone), GRASS_DEEP, smooth((shape.plateY + 12 - y) / 40) * 0.35), away)
+    const shore = shape.shoreDistance(x, z)
+    if (shore < 140) c = mix(SHORE, c, smooth(shore / 140))
+    return land.vertex(x, y, z, nx, ny, nz, c)
+  }
+  for (let j = 0; j < zs.length - 1; j++) for (let i = 0; i < xs.length - 1; i++) {
+    if (boxDistance(shape.plate, (xs[i] + xs[i + 1]) / 2, (zs[j] + zs[j + 1]) / 2) < 0) continue
+    const a: Point2 = [xs[i], zs[j]], b: Point2 = [xs[i + 1], zs[j]]
+    const c: Point2 = [xs[i], zs[j + 1]], d: Point2 = [xs[i + 1], zs[j + 1]]
+    // positive shoelace in (x, z), the same up-facing front side Batch.polygon emits
+    for (const triangle of [[a, b, c], [b, d, c]]) {
+      let pieces = [triangle]
+      for (const cut of cells.get(j * xs.length + i) ?? []) {
+        pieces = pieces.flatMap((piece) => subtractPolygon(piece, cut))
+        if (!pieces.length) break
+      }
+      for (const polygon of pieces) {
+        const base = land.vertexCount
+        for (const [x, z] of polygon) vertex(x, z)
+        for (let k = 1; k < polygon.length - 1; k++) {
+          if (signedArea([polygon[0], polygon[k], polygon[k + 1]].flat()) > 0.0001) land.indices.push(base, base + k, base + k + 1)
+        }
+      }
     }
   }
   const vd = new VertexData()
-  vd.positions = positions
-  vd.normals = normals
-  vd.colors = colors
-  vd.uvs = uvs
-  vd.indices = indices
+  vd.positions = new Float32Array(land.positions)
+  vd.normals = new Float32Array(land.normals)
+  vd.colors = new Float32Array(land.colors)
+  vd.uvs = new Float32Array(land.uvs)
+  vd.indices = new Uint32Array(land.indices)
   return vd
 }
 
@@ -543,17 +577,11 @@ export function buildTerrain(scene: Scene, world: WorldData, materials: CityMate
   const foliage: StandardMaterial = vertexColorMaterial('country-foliage', scene, 0.015)
   const flat: StandardMaterial = vertexColorMaterial('country-flat', scene, 0.03)
   const meshes: Mesh[] = []
-  const land = new Mesh('countryside', scene)
-  terrainVertexData(shape).applyToMesh(land, false)
-  land.material = materials.get('grass')
-  land.isPickable = false
-  land.receiveShadows = false
-  land.freezeWorldMatrix()
-  meshes.push(land)
+  const cuts: Point2[][] = []
 
   if (shape.water.length) {
     const water = new Batch(TEXTURE_RECIPES.water.metres)
-    for (const w of shape.water) water.polygon(w.ring, w.holes, Y.water - 0.05, PALETTE.water)
+    for (const w of shape.water) water.polygon(w.ring, w.holes, Y.water, PALETTE.water)
     if (!water.isEmpty()) {
       const mesh = meshFromBatch('far-water', water, scene, materials.get('water'))
       mesh.receiveShadows = false
@@ -569,13 +597,21 @@ export function buildTerrain(scene: Scene, world: WorldData, materials: CityMate
     meshes.push(mesh)
   }
   const asphalt = new Batch(TEXTURE_RECIPES.asphalt.metres)
-  for (const road of roads) drapedStrip(asphalt, road.shape, road.width, shape, PALETTE.asphaltMajor, 0.4)
+  for (const road of roads) drapedStrip(asphalt, road.shape, road.width, shape, PALETTE.asphaltMajor, 0.4, cuts)
   add('horizon-roads', asphalt, materials.get('asphalt'))
 
   const farm = farmland(shape, roads, Math.round(o.treeLimit * 0.8))
   add('fields', farm.fields, materials.get('grass'))
   add('lanes', farm.lanes, materials.get('asphalt'))
   add('farmsteads', farm.buildings, flat)
+
+  const land = new Mesh('countryside', scene)
+  terrainVertexData(shape, [...cuts, ...farm.cuts]).applyToMesh(land, false)
+  land.material = materials.get('grass')
+  land.isPickable = false
+  land.receiveShadows = false
+  land.freezeWorldMatrix()
+  meshes.push(land)
 
   // coarse cells: the countryside is a 30 km box, and these trees are only ever seen from afar
   const cropped = (x: number, z: number) => farm.tinted.has(parcelKey(x, z))
