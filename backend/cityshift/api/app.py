@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -11,16 +13,31 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+from pymongo.errors import PyMongoError
 
+from cityshift.api.live_router import close_registry
+from cityshift.api.live_router import router as live_router
 from cityshift.api.population_gateway_router import router as population_gateway_router
 from cityshift.api.population_router import router as population_router
-from cityshift.api.service import PopulationScenarioError, get_service
+from cityshift.api.service import PopulationScenarioError, close_service, get_service
 from cityshift.contracts import SCHEMA_VERSION, DemandSet, ScenarioSpec, ServicePlan
 from cityshift.domain.network import pack_dir
 from cityshift.domain.runs import RUN_ROOT
+from cityshift.store import STORAGE_UNAVAILABLE_MESSAGE, StorageUnavailable, storage_backend
 from cityshift.transport.sumo_env import sumo_version
 
-app = FastAPI(title="CITY//SHIFT", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    try:
+        yield
+    finally:
+        close_registry()
+        close_service()
+
+
+app = FastAPI(title="Concrete Consequences", version="0.1.0", lifespan=lifespan)
+app.include_router(live_router)
 app.add_middleware(GZipMiddleware, minimum_size=2048)
 app.add_middleware(
     CORSMiddleware,
@@ -39,15 +56,38 @@ RUN_ARTIFACTS = {
     "compile": "compile.json",
     "validation": "validation.json",
     "manifest": "manifest.json",
+    "demand": "demand.json",
+    "scenario": "scenario.json",
     "tripinfo_summary": "tripinfo_summary.json",
     "population": "population.json",
     "native": "native.json",
 }
-PACK_ARTIFACTS = {"roads": "roads.geojson", "walk": "walk.geojson", "corridors": "corridors.json", "world": "world.json"}
+PACK_ARTIFACTS = {"roads": "roads.geojson", "walk": "walk.geojson", "corridors": "corridors.json", "world": "world.json", "massing": "massing.json"}
 
 
 def _not_found(what: str) -> HTTPException:
     return HTTPException(status_code=404, detail=f"{what} not found")
+
+
+@app.exception_handler(StorageUnavailable)
+@app.exception_handler(PyMongoError)
+async def storage_error(_request: Request, exc: Exception) -> JSONResponse:
+    detail = str(exc) if isinstance(exc, StorageUnavailable) else STORAGE_UNAVAILABLE_MESSAGE
+    return JSONResponse(status_code=503, content={"detail": detail})
+
+
+def storage_status() -> dict:
+    backend = storage_backend()
+    configured = backend == "json" or bool(os.environ.get("MONGODB_URI") and os.environ.get("MONGODB_DATABASE"))
+    try:
+        store = get_service().store
+        return {"backend": store.backend, "configured": True, "available": store.ping()}
+    except (StorageUnavailable, PyMongoError) as exc:
+        return {
+            "backend": backend if backend in {"mongodb", "json"} else "invalid",
+            "configured": configured, "available": False,
+            "message": str(exc) if isinstance(exc, StorageUnavailable) else STORAGE_UNAVAILABLE_MESSAGE,
+        }
 
 
 # --- health / providers -----------------------------------------------------------------------
@@ -55,8 +95,10 @@ def _not_found(what: str) -> HTTPException:
 def health() -> dict:
     from cityshift.providers import provider_status
 
+    storage = storage_status()
     return {
-        "ok": True,
+        "ok": storage["available"],
+        "storage": storage,
         "schema_version": SCHEMA_VERSION,
         "sumo": sumo_version(),
         "providers": provider_status(),
@@ -120,7 +162,10 @@ class ScenarioCreate(BaseModel):
 
 @app.post("/api/scenarios")
 def create_scenario(req: ScenarioCreate) -> dict:
-    return get_service().register_scenario(req.scenario, req.demand).model_dump(mode="json")
+    try:
+        return get_service().register_scenario(req.scenario, req.demand).model_dump(mode="json")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
 
 
 @app.get("/api/scenarios")
@@ -201,7 +246,12 @@ def submit_run(req: RunRequest) -> dict:
 
 @app.get("/api/runs")
 def list_runs(scenario_id: str | None = Query(default=None)) -> list[dict]:
-    return [r.model_dump(mode="json") for r in get_service().store.list_runs(scenario_id)]
+    svc = get_service()
+    try:
+        runs = svc.current_runs(scenario_id) if scenario_id else svc.store.list_runs()
+    except KeyError:
+        raise _not_found("scenario") from None
+    return [r.model_dump(mode="json") for r in runs]
 
 
 @app.get("/api/runs/{rid}")

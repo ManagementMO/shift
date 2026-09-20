@@ -1,17 +1,15 @@
 import { useEffect, useState } from 'react'
 
-import { clock, simClock } from '../world/playback'
+import { clock, PLAYBACK_SPEEDS, simClock } from '../world/playback'
 import { cohortSummaryAt, STATE_COLORS, type PersonState, type ReplayIndex } from '../replay'
-import type { TrafficStats } from './traffic'
-
-const SPEEDS = [1, 10, 60]
+import { EMPTY_STATS, type TrafficStats } from './traffic'
 
 /** Minimal play/scrub bar for the Babylon route; the full sim dock is wired in a later milestone. */
 export default function Transport({ rx, stats }: { rx: ReplayIndex; stats: () => TrafficStats }) {
   const [t, setT] = useState(clock.t)
   const [playing, setPlaying] = useState(clock.playing)
   const [speed, setSpeed] = useState(clock.speed)
-  const [live, setLive] = useState<TrafficStats>({ buses: 0, cars: 0, people: 0, released: 0 })
+  const [live, setLive] = useState<TrafficStats>(EMPTY_STATS)
   const cohort = cohortSummaryAt(rx, t)
   const total = Object.keys(rx.personEvents).length
 
@@ -38,11 +36,12 @@ export default function Transport({ rx, stats }: { rx: ReplayIndex; stats: () =>
           clock.toggle()
           setPlaying(clock.playing)
         }}
-        title="space"
+        title={`${playing ? 'Pause' : 'Resume'} (Space)`}
+        aria-label={playing ? 'Pause simulation' : 'Resume simulation'}
       >
         {playing ? '❚❚' : '▶'}
       </button>
-      <span className="bworld-clock mono">{simClock(t)}</span>
+      <span className="bworld-clock mono" role="timer" aria-label="Simulation clock">{simClock(t, true)}</span>
       <input
         type="range"
         min={0}
@@ -53,10 +52,11 @@ export default function Transport({ rx, stats }: { rx: ReplayIndex; stats: () =>
       />
       <span className="mono small dim">{Math.floor(t / 60)}:{String(Math.floor(t % 60)).padStart(2, '0')}</span>
       <div className="bworld-speeds">
-        {SPEEDS.map((s) => (
+        {PLAYBACK_SPEEDS.map((s) => (
           <button
             key={s}
             className={s === speed ? 'on' : ''}
+            aria-pressed={s === speed}
             onClick={() => {
               clock.setSpeed(s)
               setSpeed(s)

@@ -11,6 +11,7 @@ rendered and simulated geography share one coordinate system by construction.  E
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -20,10 +21,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import sumolib
-from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
+from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import polygonize, unary_union
 
 from cityshift.citypack.build import PACK_ROOT
+from cityshift.citypack.geometry import iter_polys, polygon_record, resolve_building_volumes
+from cityshift.citypack.massing import prepare_massing
+
+MASSING_ASSET = PACK_ROOT.parents[1] / "frontend" / "public" / "assets" / "city" / "toronto-massing.json"
 
 LEVEL_M = 3.3
 DEFAULT_HEIGHT = {
@@ -52,6 +57,11 @@ LANDMARKS: dict[str, tuple[str, str, float | None]] = {  # osm way id -> (kind, 
     "w198500761": ("city_hall", "Toronto City Hall", 12.0),
     "w141694015": ("roy_thomson_hall", "Roy Thomson Hall", 22.0),
     "w197447638": ("ripleys_aquarium", "Ripley's Aquarium", 14.0),
+    "w382735686": ("engineering_7", "Engineering 7 (E7) / Pearl Sullivan Engineering", None),
+    "w51125806": ("engineering_5", "Engineering 5 (E5)", None),
+    "w158807251": ("engineering_6", "Engineering 6 (E6)", None),
+    "r8765264": ("davis_centre", "Davis Centre (DC)", None),
+    "w182091547": ("quantum_nano", "Quantum Nano Centre (QNC)", None),
 }
 GREEN_TAGS = {
     ("leisure", "park"), ("leisure", "garden"), ("leisure", "pitch"), ("leisure", "playground"),
@@ -146,19 +156,6 @@ def polygon_rings(poly: Polygon) -> tuple[list[float], list[list[float]]]:
     return flat(ext), holes
 
 
-def iter_polys(geom) -> Iterable[Polygon]:
-    if isinstance(geom, Polygon):
-        if not geom.is_empty:
-            yield geom
-    elif isinstance(geom, MultiPolygon):
-        for g in geom.geoms:
-            if not g.is_empty:
-                yield g
-    elif hasattr(geom, "geoms"):
-        for g in geom.geoms:
-            yield from iter_polys(g)
-
-
 def way_coords(osm: OsmData, refs: list[str], frame: WorldFrame) -> list[tuple[float, float]]:
     pts = []
     for r in refs:
@@ -192,6 +189,16 @@ def relation_polygons(osm: OsmData, members: list[tuple[str, str, str]], frame: 
     return [p for p in iter_polys(result) if p.area > 1.0]
 
 
+def building_base(tags: dict[str, str]) -> float:
+    height = parse_height(tags.get("min_height")) or parse_height(tags.get("building:min_height"))
+    if height is not None:
+        return height
+    try:
+        return max(0.0, min(600.0, float(tags.get("building:min_level", "0")) * LEVEL_M))
+    except ValueError:
+        return 0.0
+
+
 def building_height(tags: dict[str, str]) -> float:
     h = parse_height(tags.get("height")) or parse_height(tags.get("building:height"))
     if h is None:
@@ -204,8 +211,7 @@ def building_height(tags: dict[str, str]) -> float:
             h = levels * LEVEL_M + (1.5 if tags.get("roof:shape") not in (None, "flat") else 0.6)
     if h is None:
         h = DEFAULT_HEIGHT.get(tags.get("building", "yes"), 10.0)
-    min_h = parse_height(tags.get("min_height")) or 0.0
-    return max(2.5, h - min_h)
+    return max(2.5, h - building_base(tags))
 
 
 def compile_buildings(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[list[dict], list[dict]]:
@@ -228,7 +234,7 @@ def compile_buildings(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[l
             h = lm[2] or h
         elif h >= 90:
             cat = "tower"
-        rec: dict = {"id": key, "ring": ring, "h": q(h), "cat": cat}
+        rec: dict = {"id": key, "ring": ring, "h": q(h), "base": q(building_base(tags)), "cat": cat}
         if holes:
             rec["holes"] = holes
         name = tags.get("name")
@@ -237,7 +243,10 @@ def compile_buildings(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[l
         if lm:
             rec["lm"] = lm[0]
             c = poly.centroid
-            landmarks.append({"id": key, "kind": lm[0], "name": lm[1], "x": q(c.x), "z": q(c.y), "h": q(h), "ring": ring})
+            landmark = {"id": key, "kind": lm[0], "name": lm[1], "x": q(c.x), "z": q(c.y), "h": q(h), "ring": ring}
+            if holes:
+                landmark["holes"] = holes
+            landmarks.append(landmark)
         buildings.append(rec)
 
     for rid, (members, tags) in osm.relations.items():
@@ -261,15 +270,16 @@ def compile_buildings(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[l
             poly = poly.buffer(0)
         for i, p in enumerate(iter_polys(poly)):
             emit(p, tags, f"w{wid}" if i == 0 else f"w{wid}.{i}")
-    return buildings, landmarks
+    return resolve_building_volumes(buildings), landmarks
 
 
-def compile_areas(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[list[list[float]], list[list[float]], list[list[float]]]:
-    green: list[list[float]] = []
-    sand: list[list[float]] = []
+def compile_areas(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[list[dict], list[dict], list[list[float]]]:
+    green: list[dict] = []
+    sand: list[dict] = []
     rail: list[list[float]] = []
+    seen_relation_ways: set[str] = set()
 
-    def polys_for(tags: dict[str, str]) -> list[list[float]] | None:
+    def polys_for(tags: dict[str, str]) -> list[dict] | None:
         keys = {(k, v) for k, v in tags.items()}
         if keys & GREEN_TAGS:
             return green
@@ -281,10 +291,16 @@ def compile_areas(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[list[
         target = polys_for(tags) if tags.get("type") == "multipolygon" else None
         if target is None:
             continue
-        for poly in relation_polygons(osm, members, frame):
+        polygons = relation_polygons(osm, members, frame)
+        if polygons:
+            seen_relation_ways.update(ref for kind, ref, _ in members if kind == "way")
+        for poly in polygons:
             if poly.intersects(clip) and poly.area > 40:
-                target.append(polygon_rings(poly)[0])
-    for refs, tags in osm.ways.values():
+                ring, holes = polygon_rings(poly)
+                target.append({"ring": ring, "holes": holes})
+    for wid, (refs, tags) in osm.ways.items():
+        if wid in seen_relation_ways:
+            continue
         if tags.get("railway") in RAIL_VALUES and tags.get("tunnel") != "yes" and tags.get("service") not in ("yard", "siding", "spur"):
             pts = way_coords(osm, refs, frame)
             if len(pts) >= 2 and LineString(pts).intersects(clip):
@@ -301,7 +317,8 @@ def compile_areas(osm: OsmData, frame: WorldFrame, clip: Polygon) -> tuple[list[
             poly = poly.buffer(0)
         for p in iter_polys(poly):
             if p.intersects(clip) and p.area > 40:
-                target.append(polygon_rings(p)[0])
+                ring, holes = polygon_rings(p)
+                target.append({"ring": ring, "holes": holes})
     return green, sand, rail
 
 
@@ -377,6 +394,45 @@ def compile_water(water_json: Path | None, osm: OsmData, frame: WorldFrame, clip
     return out
 
 
+FAR_REACH_M = 12000.0
+
+
+def compile_far_water(water_json: Path | None, frame: WorldFrame, clip: Polygon, near_water: list[dict],
+                      land_probes: list[Point], reach_m: float = FAR_REACH_M) -> tuple[list[dict], list[float]]:
+    """Coarse lake extent beyond the pack, for the placeholder terrain.  The full shoreline linework partitions a
+    box `reach_m` past the pack; faces are lake only when they continue the compiled in-pack water and hold no
+    city probes, so an unclosed shoreline degrades to plain land rather than flooding the countryside."""
+    x0, z0, x1, z1 = clip.bounds
+    far = box(x0 - reach_m, z0 - reach_m, x1 + reach_m, z1 + reach_m)
+    far_bounds = [q(v) for v in far.bounds]
+    lake_ways = water_json.with_name("lake_ways.json") if water_json else None
+    if not lake_ways or not lake_ways.exists() or not near_water:
+        return [], far_bounds
+    lines: list[LineString] = []
+    for e in json.loads(lake_ways.read_text())["elements"]:
+        if e["type"] != "way" or len(e.get("geometry", [])) < 2:
+            continue
+        line = LineString([frame.lonlat_to_world(p["lon"], p["lat"]) for p in e["geometry"]]).intersection(far)
+        lines.extend(g for g in getattr(line, "geoms", [line]) if isinstance(g, LineString) and not g.is_empty)
+    if not lines:
+        return [], far_bounds
+    near = unary_union([Polygon(list(zip(a["ring"][::2], a["ring"][1::2], strict=True)),
+                                [list(zip(h[::2], h[1::2], strict=True)) for h in a.get("holes", [])]).buffer(0)
+                        for a in near_water])
+    lake: list[Polygon] = []
+    for face in polygonize(unary_union([*lines, far.exterior])):
+        if face.area < 1e5 or face.intersection(near).area < 0.3 * min(face.area, near.area):
+            continue
+        probes = sum(1 for p in land_probes if face.contains(p))
+        if probes / (face.area / 1e6) > 10.0:
+            continue
+        lake.append(face)
+    if not lake:
+        return [], far_bounds
+    merged = unary_union(lake).simplify(40.0, preserve_topology=True).difference(clip)
+    return [polygon_record(p) for p in iter_polys(merged) if p.area > 1e4], far_bounds
+
+
 def compile_network(net: sumolib.net.Net, frame: WorldFrame) -> tuple[list[dict], list[dict], list[Point]]:
     roads: list[dict] = []
     probes: list[Point] = []
@@ -432,6 +488,80 @@ def compile_network(net: sumolib.net.Net, frame: WorldFrame) -> tuple[list[dict]
     return roads, junctions, probes
 
 
+def compile_surfaces(plate: Polygon, roads: list[dict], junctions: list[dict], green: list[dict],
+                     sand: list[dict], rail: list[list[float]], water: list[dict], core: Polygon | None = None,
+                     buildings: list[dict] | None = None) -> dict[str, list[dict]]:
+    """Partition the plate into non-overlapping surfaces.  With `core` (the pack bounds), bare land is `ground`
+    only inside the core and near mapped buildings; the padded ring and the unmapped margins are `meadow`, so
+    the compiled city stops where its buildings stop instead of sitting on a concrete slab."""
+    def points(ring):
+        return list(zip(ring[::2], ring[1::2], strict=True))
+
+    def polygon(area):
+        return Polygon(points(area["ring"]), [points(h) for h in area.get("holes", [])]).buffer(0)
+
+    def ribbon(shape, width):
+        return LineString(points(shape)).buffer(width / 2, cap_style=2, join_style=2, mitre_limit=2)
+
+    raw: dict[str, list] = {k: [] for k in ("asphalt", "pavement", "rail", "sand", "grass")}
+    for road in roads:
+        if road["kind"] == "path" or not road.get("lanes"):
+            raw["pavement"].append(ribbon(road["shape"], max(1.6, min(road["w"], 4))))
+        else:
+            for lane in road["lanes"]:
+                kind = "pavement" if lane["allow"] == ["ped"] else "asphalt"
+                raw[kind].append(ribbon(lane["shape"], lane["w"]))
+    for junction in junctions:
+        raw["asphalt" if junction["kind"] == "road" else "pavement"].append(polygon(junction))
+    raw["rail"] = [ribbon(line, 1.6) for line in rail if len(line) >= 4]
+    raw["grass"] = [polygon(a) for a in green]
+    raw["sand"] = [polygon(a) for a in sand]
+    land = plate.difference(unary_union([polygon(a) for a in water]))
+    occupied = Polygon()
+    out: dict[str, list[dict]] = {}
+    x0, z0, x1, z1 = plate.bounds
+    tiles = [box(x, z, min(x + 800, x1), min(z + 800, z1))
+             for x in range(int(x0 // 800) * 800, int(x1) + 1, 800)
+             for z in range(int(z0 // 800) * 800, int(z1) + 1, 800)]
+
+    def emit(kind, surface):
+        out[kind] = []
+        for tile in tiles:
+            if not surface.intersects(tile):
+                continue
+            for poly in iter_polys(surface.intersection(tile)):
+                if poly.area < 0.01:
+                    continue
+                out[kind].append(polygon_record(poly))
+
+    for kind, pieces in raw.items():
+        surface = unary_union(pieces).intersection(plate)
+        if kind in ("grass", "sand"):
+            surface = surface.intersection(land)
+        surface = surface.difference(occupied)
+        emit(kind, surface)
+        occupied = unary_union([occupied, surface])
+    bare = land.difference(occupied)
+    if core is None:
+        emit("ground", bare)
+    else:
+        urban = built_up(buildings, core) if buildings is not None else core
+        emit("ground", bare.intersection(urban))
+        emit("meadow", bare.difference(urban))
+    return out
+
+
+def built_up(buildings: list[dict], core: Polygon, reach_m: float = 70.0) -> Polygon:
+    """The mapped city: building footprints grown by a street's width and merged, with gaps closed and the
+    outline rounded so the concrete ends in blocks rather than in a staircase or a straight survey line."""
+    blobs = [Polygon(list(zip(b["ring"][::2], b["ring"][1::2], strict=True))).buffer(reach_m, quad_segs=3)
+             for b in buildings if len(b["ring"]) >= 6]
+    if not blobs:
+        return Polygon()
+    merged = unary_union(blobs).buffer(80.0, quad_segs=2).buffer(-60.0, quad_segs=2)
+    return merged.intersection(core)
+
+
 def compile_world(pack_id: str, out_path: Path | None = None) -> Path:
     pack_dir = PACK_ROOT / pack_id
     pack = json.loads((pack_dir / "pack.json").read_text())
@@ -449,7 +579,15 @@ def compile_world(pack_id: str, out_path: Path | None = None) -> Path:
         r = b["ring"]
         probes.append(Point(sum(r[0::2]) / (len(r) // 2), sum(r[1::2]) / (len(r) // 2)))
     green, sand, rail = compile_areas(osm, frame, clip)
-    water = compile_water(PACK_ROOT.parent / "osm" / f"{pack_id}_water" / "lake.json", osm, frame, clip, probes)
+    water_json = PACK_ROOT.parent / "osm" / f"{pack_id}_water" / "lake.json"
+    water = compile_water(water_json, osm, frame, clip, probes)
+    far_water, far_bounds = compile_far_water(water_json, frame, clip, water, probes)
+
+    x0, z0, x1, z1 = bw
+    pad_x, pad_z = (x1 - x0) * 0.3, (z1 - z0) * 0.3
+    # The plate reaches past the pack; where the lake continues, the plate must not read as land.
+    surfaces = compile_surfaces(box(x0 - pad_x, z0 - pad_z, x1 + pad_x, z1 + pad_z),
+                                roads, junctions, green, sand, rail, [*water, *far_water], core=clip, buildings=buildings)
 
     stops = []
     for s in pack["stops"]:
@@ -474,18 +612,31 @@ def compile_world(pack_id: str, out_path: Path | None = None) -> Path:
             break
 
     loc = net.getLocationOffset()
+    crs = {
+        "proj": "+proj=utm +zone=17 +ellps=WGS84 +datum=WGS84 +units=m +no_defs",
+        "utm_zone": 17,
+        "net_offset": [loc[0], loc[1]],
+        "origin_net": [round(frame.origin[0], 3), round(frame.origin[1], 3)],
+        "origin_lonlat": [round(v, 7) for v in frame.world_to_lonlat(0.0, 0.0)],
+        "bounds_world": [round(v, 1) for v in bw],
+    }
+    massing = None
+    if pack_id == "toronto" and MASSING_ASSET.exists():
+        raw = MASSING_ASSET.read_bytes()
+        asset = json.loads(raw)
+        try:
+            buildings, massing = prepare_massing(asset, crs, landmarks, buildings, pack["network_fingerprint"],
+                                                 hashlib.sha256(raw).hexdigest())
+            massing_path = pack_dir / "massing.json"
+            massing_path.write_text(json.dumps(massing, separators=(",", ":")))
+            print(json.dumps({"massing": massing["alignment"], "buildings": len(massing["buildings"])}), f"-> {massing_path}", file=sys.stderr)
+        except ValueError as exc:
+            print(f"massing skipped: {exc}", file=sys.stderr)
     world = {
         "version": 1,
         "pack_id": pack_id,
         "network_fingerprint": pack["network_fingerprint"],
-        "crs": {
-            "proj": "+proj=utm +zone=17 +ellps=WGS84 +datum=WGS84 +units=m +no_defs",
-            "utm_zone": 17,
-            "net_offset": [loc[0], loc[1]],
-            "origin_net": [round(frame.origin[0], 3), round(frame.origin[1], 3)],
-            "origin_lonlat": [round(v, 7) for v in frame.world_to_lonlat(0.0, 0.0)],
-            "bounds_world": [round(v, 1) for v in bw],
-        },
+        "crs": crs,
         "anchors": anchors,
         "venue": {"x": q(vx), "z": q(vz), "edge": pack["venue_edge_id"]},
         "stops": stops,
@@ -494,13 +645,20 @@ def compile_world(pack_id: str, out_path: Path | None = None) -> Path:
         "junctions": junctions,
         "buildings": buildings,
         "landmarks": landmarks,
-        "green": green,
-        "sand": sand,
+        "green": [a["ring"] for a in green],
+        "sand": [a["ring"] for a in sand],
+        "surfaces": surfaces,
         "rail": rail,
         "water": water,
+        "far_water": far_water,
+        "far_bounds": far_bounds,
         "counts": {"roads": len(roads), "junctions": len(junctions), "buildings": len(buildings), "water": len(water), "green": len(green), "rail": len(rail)},
         "provenance": ["OpenStreetMap (ODbL) via api.openstreetmap.org tiles + Overpass shoreline", f"SUMO netconvert network {pack['network_fingerprint']}"],
     }
+    if massing:
+        world["massing_url"] = f"/api/packs/{pack_id}/massing"
+        world["counts"]["massing"] = len(massing["buildings"])
+        world["provenance"].append(f"{massing['source']} ({massing['license']}), aligned by {massing['alignment']['method']}")
     out = out_path or (pack_dir / "world.json")
     out.write_text(json.dumps(world, separators=(",", ":")))
     print(json.dumps(world["counts"]), f"-> {out} ({out.stat().st_size / 1e6:.1f} MB)", file=sys.stderr)

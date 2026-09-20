@@ -9,22 +9,25 @@ from cityshift.agents.orchestrator import InvestigationRunner, new_investigation
 from cityshift.contracts import (
     CityPack,
     DemandSet,
+    DevelopmentPreview,
+    DevelopmentSpec,
     InterventionProposal,
     Investigation,
+    InvestigationOptions,
     RunStatus,
     ScenarioSpec,
     ServicePlan,
     SimulationRun,
     ValidationReport,
 )
-from cityshift.domain import edits
+from cityshift.domain import developments, edits
 from cityshift.domain.compiler import baseline_plan, heuristic_plans
 from cityshift.domain.network import PACK_ROOT, load_pack
 from cityshift.domain.runs import execute_run, run_id_for
 from cityshift.domain.scenarios import flagship_scenario
 from cityshift.domain.validators import validate_plan
 from cityshift.providers import LLMClient
-from cityshift.store import Store
+from cityshift.store import Store, create_store
 
 
 class PopulationScenarioError(ValueError):
@@ -38,11 +41,18 @@ def require_transport(scenario: ScenarioSpec) -> None:
 
 class Service:
     def __init__(self, store: Store | None = None, workers: int = 2):
-        self.store = store or Store()
+        self.store = store if store is not None else create_store()
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="sumo")
         self.agent_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agents")
         self.cancel_flags: dict[str, threading.Event] = {}
         self.lock = threading.Lock()
+
+    def close(self) -> None:
+        for flag in list(self.cancel_flags.values()):
+            flag.set()
+        self.pool.shutdown(wait=True, cancel_futures=True)
+        self.agent_pool.shutdown(wait=True, cancel_futures=True)
+        self.store.close()
 
     # packs ---------------------------------------------------------------------------------------
     def list_packs(self) -> list[CityPack]:
@@ -58,24 +68,25 @@ class Service:
     def create_flagship(self, pack_id: str, seed: int, cohort_size: int, horizon_s: int) -> ScenarioSpec:
         pack = self.pack(pack_id)
         scenario, demand = flagship_scenario(pack, seed=seed, cohort_size=cohort_size, horizon_s=horizon_s)
-        existing = self.store.get_scenario(scenario.scenario_id)
-        if existing is not None:
-            return existing
-        self.store.put_scenario(scenario, demand)
-        for plan in [baseline_plan(), *heuristic_plans(pack, scenario, demand)]:
-            self.register_plan(scenario, plan)
-        return scenario
+        return self.register_scenario(scenario, demand)
 
     def register_scenario(self, scenario: ScenarioSpec, demand: DemandSet) -> ScenarioSpec:
         require_transport(scenario)
-        existing = self.store.get_scenario(scenario.scenario_id)
-        if existing is not None:
-            return existing
-        self.store.put_scenario(scenario, demand)
-        pack = self.pack(scenario.pack_id)
-        for plan in [baseline_plan(), *heuristic_plans(pack, scenario, demand)]:
-            self.register_plan(scenario, plan)
-        return scenario
+        with self.store.lock:
+            existing = self.store.get_scenario(scenario.scenario_id)
+            if existing is not None and (
+                existing.model_dump(exclude={"created_at"}) != scenario.model_dump(exclude={"created_at"})
+                or self.store.get_demand(scenario.scenario_id) != demand
+            ):
+                raise ValueError("scenario_id already exists with different immutable inputs")
+            pack = self.pack(scenario.pack_id)
+            plans = [baseline_plan(), *heuristic_plans(pack, scenario, demand)]
+            if existing is None:
+                self.store.put_scenario(scenario, demand)
+            for plan in plans:
+                if self.store.get_plan(scenario.scenario_id, plan.plan_id) is None:
+                    self.register_plan(scenario, plan)
+            return existing if existing is not None else scenario
 
     def scenario(self, sid: str) -> ScenarioSpec:
         s = self.store.get_scenario(sid)
@@ -110,7 +121,7 @@ class Service:
         plan = self.plan(sid, pid)
         demand = self.demand(sid)
         pack = self.pack(scenario.pack_id)
-        rid = run_id_for(scenario, plan, seed)
+        rid = run_id_for(scenario, plan, seed, demand)
         with self.lock:
             existing = self.store.get_run(rid)
             if existing is not None and existing.status in (
@@ -143,10 +154,10 @@ class Service:
         return r
 
     # prompt-to-edit ------------------------------------------------------------------------------
-    def preview_edit(self, sid: str, prompt: str) -> InterventionProposal:
+    def preview_edit(self, sid: str, prompt: str, use_ai: bool = True) -> InterventionProposal:
         scenario = self.scenario(sid)
         require_transport(scenario)
-        return edits.preview(self.pack(scenario.pack_id), scenario, prompt, llm=LLMClient())
+        return edits.preview(self.pack(scenario.pack_id), scenario, prompt, llm=LLMClient() if use_ai else None)
 
     def apply_edit(self, sid: str, proposal: InterventionProposal) -> ScenarioSpec:
         scenario = self.scenario(sid)
@@ -154,13 +165,69 @@ class Service:
         child = edits.apply(self.pack(scenario.pack_id), scenario, proposal)
         return self.register_scenario(child, self.demand(sid))
 
+    def preview_development(self, sid: str, spec: DevelopmentSpec) -> DevelopmentPreview:
+        scenario = self.scenario(sid)
+        require_transport(scenario)
+        proposal, _ = developments.prepare_development(self.pack(scenario.pack_id), scenario, self.demand(sid), spec)
+        return proposal
+
+    def apply_development(self, sid: str, proposal: DevelopmentPreview) -> ScenarioSpec:
+        scenario = self.scenario(sid)
+        require_transport(scenario)
+        child, demand = developments.apply_development(self.pack(scenario.pack_id), scenario, self.demand(sid), proposal)
+        with self.store.lock:
+            saved = self.register_scenario(child, demand)
+            for plan in self.store.list_plans(sid):
+                if self.store.get_plan(saved.scenario_id, plan.plan_id) is None:
+                    self.register_plan(saved, plan)
+        return saved
+
+    def remove_development(self, sid: str, development_id: str) -> ScenarioSpec:
+        with self.store.lock:
+            original = self.scenario(sid)
+            require_transport(original)
+            scenario, demand = developments.remove_development(original, self.demand(sid), development_id)
+            return self._rewrite_scenario(scenario, demand)
+
+    def demolish_building(self, sid: str, building_id: str) -> ScenarioSpec:
+        with self.store.lock:
+            original = self.scenario(sid)
+            require_transport(original)
+            scenario = developments.demolish_building(original, building_id)
+            return self._rewrite_scenario(scenario, self.demand(sid))
+
+    def _rewrite_scenario(self, scenario: ScenarioSpec, demand: DemandSet) -> ScenarioSpec:
+        """Edit a scenario in place: overwrite it, re-validate its plans against the new demand, keep custom plans."""
+        pack = self.pack(scenario.pack_id)
+        self.store.replace_scenario(scenario, demand)
+        generated = {p.plan_id: p for p in [baseline_plan(), *heuristic_plans(pack, scenario, demand)]}
+        for plan in self.store.list_plans(scenario.scenario_id):
+            generated.setdefault(plan.plan_id, plan)
+        for plan in generated.values():
+            self.store.replace_plan(scenario.scenario_id, plan, validate_plan(pack, scenario, plan, demand))
+        return scenario
+
+    def current_runs(self, sid: str) -> list[SimulationRun]:
+        """Runs whose identity still matches the scenario's current content; in-place edits make older ones stale."""
+        scenario = self.scenario(sid)
+        if scenario.scenario_kind == "population":
+            return [run for run in self.store.list_runs(sid)
+                    if run.run_kind == "population" and run.population_id == scenario.population_id]
+        demand = self.demand(sid)
+        current = []
+        for run in self.store.list_runs(sid):
+            plan = self.store.get_plan(sid, run.plan_id)
+            if plan is not None and run_id_for(scenario, plan, run.seed, demand) == run.run_id:
+                current.append(run)
+        return current
+
     # agents --------------------------------------------------------------------------------------
-    def investigate(self, sid: str, problem: str, constraint: str) -> Investigation:
+    def investigate(self, sid: str, problem: str, constraint: str, options: InvestigationOptions | None = None) -> Investigation:
         scenario = self.scenario(sid)
         require_transport(scenario)
         demand = self.demand(sid)
         pack = self.pack(scenario.pack_id)
-        inv = new_investigation(sid, problem, constraint)
+        inv = new_investigation(sid, problem, constraint, options)
         self.store.put_investigation(inv)
         runner = InvestigationRunner(self.store)
         self.agent_pool.submit(runner.run, inv, pack, scenario, demand)
@@ -174,10 +241,20 @@ class Service:
 
 
 _service: Service | None = None
+_service_lock = threading.Lock()
 
 
 def get_service() -> Service:
     global _service
-    if _service is None:
-        _service = Service()
-    return _service
+    with _service_lock:
+        if _service is None:
+            _service = Service()
+        return _service
+
+
+def close_service() -> None:
+    global _service
+    with _service_lock:
+        service, _service = _service, None
+    if service is not None:
+        service.close()

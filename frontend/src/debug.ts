@@ -4,6 +4,8 @@ import { cameraTo, leadMap, renderStats } from './world/registry'
 import type { CameraMode, CameraPose } from './world/camera'
 import { clock } from './world/playback'
 import type { WorldScene } from './babylon/scene'
+import type { LiveController } from './live/controller'
+import type { GlobeScene } from './globe/GlobeScene'
 
 declare global {
   interface Window {
@@ -17,6 +19,8 @@ declare global {
       stats?: typeof renderStats
       store?: typeof useStore
       babylon?: WorldScene
+      live?: { controller: LiveController; worlds: Record<string, WorldScene> }
+      globe?: GlobeScene
     }
   }
 }

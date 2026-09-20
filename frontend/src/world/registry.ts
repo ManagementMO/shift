@@ -1,14 +1,34 @@
-// Registry of live map instances so shell controls (camera modes, compare sync) can drive them.
+// Registry of live map instances so shell controls (camera framing, info bubble, compare sync) can drive them.
 import { moveTo, type CameraMode, type CameraPose, type MapCamera } from './camera'
 
+/** What the shell can say about a clicked building; only the Babylon world knows buildings. */
+export type BuildingFacts = {
+  id: string
+  name?: string
+  kind: 'building' | 'landmark' | 'massing'
+  cat?: string
+  height: number
+  area: number
+  sections: number
+  lonLat: [number, number]
+}
+
 export type SyncMap = MapCamera & {
+  cameraLocked?: boolean
+  setCameraPreset?: (pose: CameraPose, mode: CameraMode) => void
   jumpTo: (o: CameraPose) => unknown
   isMoving: () => boolean
   on: (ev: string, cb: (e: { originalEvent?: unknown }) => void) => unknown
   off: (ev: string, cb: (e: { originalEvent?: unknown }) => void) => unknown
-  /** Renderer-native framings (Babylon world): opening city hero and the venue egress scene. */
+  /** Renderer-native framing (Babylon world): the opening city hero. */
   cityHero?: () => void
-  egress?: () => boolean
+  setCameraMode?: (mode: CameraMode) => void
+  syncFrom?: (source: SyncMap) => boolean
+  /** CSS-pixel screen position of a point `height` metres above the ground. */
+  projectAt?: (lngLat: [number, number], height: number) => { x: number; y: number }
+  buildingFacts?: (id: string) => BuildingFacts | null
+  /** Where a drawn traveler / vehicle is right now (lon, lat, heading in degrees, speed in m/s); null if not on the map. */
+  entityAt?: (id: string) => { lonLat: [number, number]; heading: number; speed: number; state: number } | null
 }
 
 /** Renderer counters for diagnostics (Developer panel / debug bridge). */
@@ -23,7 +43,7 @@ export function registerMap(side: string, map: SyncMap): () => void {
     if (syncing) return
     syncing = true
     const pose: CameraPose = { center: [map.getCenter().lng, map.getCenter().lat], zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() }
-    for (const [k, m] of maps) if (k !== side) m.jumpTo(pose)
+    for (const [k, m] of maps) if (k !== side && !m.syncFrom?.(map)) m.jumpTo(pose)
     syncing = false
   }
   map.on('move', onMove)
@@ -31,6 +51,10 @@ export function registerMap(side: string, map: SyncMap): () => void {
     map.off('move', onMove)
     maps.delete(side)
   }
+}
+
+export function mapForSide(side: string): SyncMap | null {
+  return maps.get(side) ?? null
 }
 
 export function leadMap(): SyncMap | null {
@@ -49,7 +73,10 @@ export function watchCameraMode(cb: (m: CameraMode) => void): () => void {
 
 export function cameraTo(pose: CameraPose, mode: CameraMode) {
   const lead = leadMap()
-  if (lead && mode === 'city' && lead.cityHero) lead.cityHero()
-  else if (lead) moveTo(lead, pose, mode) // followers sync through the 'move' handler
+  if (!lead || (lead.cameraLocked && !lead.setCameraPreset)) return
+  for (const map of maps.values()) map.setCameraMode?.(mode)
+  if (lead.setCameraPreset) lead.setCameraPreset(pose, mode)
+  else if (mode === 'city' && lead.cityHero) lead.cityHero()
+  else moveTo(lead, pose, mode) // followers sync through the 'move' handler
   onMode?.(mode)
 }

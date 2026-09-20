@@ -20,7 +20,7 @@
   inset: 0;
   display: grid;
   place-items: center;
-  background: linear-gradient(180deg, #d9e2ea, #c9d3dc);
+  background: #0b0b0b;
   transition: opacity 0.4s;
 }
 .bworld-veil-card {
@@ -100,10 +100,6 @@
 .bworld-cams button:hover {
   background: var(--accent-soft);
   color: var(--accent);
-}
-.bworld-cams button.hero {
-  background: var(--accent);
-  color: #fff;
 }
 
 .bworld-transport {

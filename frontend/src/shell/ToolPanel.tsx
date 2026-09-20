@@ -1,24 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api } from '../api'
+import { environmentAt, live, liveClosuresAt, useLive } from '../live/session'
 import { useStore, type ToolId } from '../store'
-import type { Corridor, ServicePlan } from '../types'
-import { fmt } from '../util'
-import { ghostFromProposal } from './ghost'
-import ProposalCard from './ProposalCard'
-import PopulationRunControl from './PopulationRunControl'
-import { defaultPopulationSpec, populationCostLimit, populationScaleReason, populationUnavailableReason } from '../populationControls'
-import { brainColor } from '../population'
+import { AREAS, startPick } from '../world/areaSelect'
+import { leadMap } from '../world/registry'
+import DevelopmentTool from './DevelopmentTool'
+import LivePreviewCard from './LivePreviewCard'
+import PopulationPanel from './PopulationPanel'
 
 const TITLES: Record<ToolId, string> = {
-  closure: 'Close or reopen a street',
-  route: 'Add a bus route',
-  stop: 'Bus stops',
+  area: 'Area select',
+  closure: 'Road closures',
+  development: 'New development',
   population: 'Population',
-  event: 'Event',
-  weather: 'Moving hazard',
-  road: 'Roads',
-  intersection: 'Intersections',
-  custom: 'Custom intervention',
+  temperature: 'Temperature',
+  residents: 'AI residents',
 }
 
 export default function ToolPanel() {
@@ -26,400 +21,217 @@ export default function ToolPanel() {
   const setTool = useStore((s) => s.setTool)
   if (!tool) return null
   return (
-    <aside className="toolpanel">
+    <aside className={`toolpanel ${tool === 'development' ? 'toolpanel-development' : ''}`}>
       <div className="toolpanel-head">
         <b>{TITLES[tool]}</b>
         <button className="iconbtn small" onClick={() => setTool(null)} aria-label="Close">
           ✕
         </button>
       </div>
+      {tool === 'area' && <AreaTool />}
       {tool === 'closure' && <ClosureTool />}
-      {tool === 'weather' && <HazardTool />}
-      {tool === 'route' && <RouteTool />}
-      {tool === 'stop' && <StopTool />}
+      {tool === 'development' && <DevelopmentTool />}
       {tool === 'population' && <PopulationTool />}
-      {tool === 'event' && <EventTool />}
-      {(tool === 'road' || tool === 'intersection') && <StructuralTool kind={tool} />}
-      {tool === 'custom' && <div className="small dim">Type the intervention in the command bar below. The agent returns a typed proposal; nothing is applied until you confirm.</div>}
-      <ProposalCard />
+      {tool === 'temperature' && <TemperatureTool />}
+      {tool === 'residents' && <PopulationPanel />}
+      {tool !== 'development' && tool !== 'residents' && <LivePreviewCard onApplied={() => useStore.getState().setGhost(null)} />}
     </aside>
   )
 }
 
-function usePreview() {
-  const scenarioId = useStore((s) => s.scenarioId)
+/**
+ * District / Corridor pickers.  Choosing one closes this panel, frames every candidate and opens the pick: the
+ * cursor turns to a crosshair, the city outlines the regions and tints the one under the pointer, and a click
+ * flies in and closes the pick.  Escape, choosing the active picker again, or another tool ends it where the
+ * camera is.
+ */
+function AreaTool() {
+  const picking = useStore((s) => s.picking)
+  const cameraMode = useStore((s) => s.cameraMode)
+  const setPicking = useStore((s) => s.setPicking)
   const pack = useStore((s) => s.pack)
-  const setGhost = useStore((s) => s.setGhost)
-  const setError = useStore((s) => s.setError)
-  const [busy, setBusy] = useState(false)
-  const preview = async (prompt: string) => {
-    if (!scenarioId) return
-    setBusy(true)
-    try {
-      setGhost(ghostFromProposal(await api.previewEdit(scenarioId, prompt), pack))
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    const update = () => {
+      const lead = leadMap()
+      setReady(Boolean(lead && (!lead.cameraLocked || lead.setCameraPreset)))
     }
-  }
-  return { preview, busy }
-}
-
-function WindowPicker({ start, end, setStart, setEnd, horizon }: { start: number; end: number; setStart: (v: number) => void; setEnd: (v: number) => void; horizon: number }) {
+    update()
+    const id = setInterval(update, 500)
+    return () => clearInterval(id)
+  }, [pack])
+  const open = picking ? AREAS.find((a) => a.id === cameraMode) ?? null : null
   return (
-    <div className="row small">
-      <label>
-        from +{fmt(start)}
-        <input type="range" min={0} max={horizon} step={60} value={start} onChange={(e) => setStart(Math.min(Number(e.target.value), end))} />
-      </label>
-      <label>
-        to +{fmt(end)}
-        <input type="range" min={0} max={horizon} step={60} value={end} onChange={(e) => setEnd(Math.max(Number(e.target.value), start))} />
-      </label>
+    <div className="tool">
+      <div className="small dim">Zoom to a part of the city by pointing at it.</div>
+      <div className="list">
+        {AREAS.map((a) => {
+          const on = open?.id === a.id
+          return (
+            <button key={a.id} className={`listitem ${on ? 'on' : ''}`} aria-pressed={on} disabled={!ready || !pack} onClick={() => (on ? setPicking(false) : startPick(a.id))} title={`${a.label} (${a.key})`}>
+              <span>
+                {a.label} <span className="dim">· {a.key}</span>
+              </span>
+              <span className="dim">{a.hint}</span>
+            </button>
+          )
+        })}
+      </div>
+      <div className="small dim">{open ? `Choosing a ${open.label.toLowerCase()} — point at one on the map and click to zoom, Esc to stop.` : 'Districts are the pack’s destination zones and the venue; corridors are its named streets.'}</div>
     </div>
   )
 }
 
+/**
+ * Close a street in the running city. Pick a named street here or click a drivable segment on the map; the
+ * closure stays until it is reopened from its card (click the red street). Sidewalks stay open.
+ */
 function ClosureTool() {
-  const pack = useStore((s) => s.pack)
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
+  const corridors = useStore((s) => s.corridors)
+  const ghost = useStore((s) => s.ghost)
   const setGhost = useStore((s) => s.setGhost)
-  const [corridors, setCorridors] = useState<Record<string, Corridor>>({})
-  const [key, setKey] = useState<string>('')
-  const [mode, setMode] = useState<'close' | 'reopen'>('close')
-  const horizon = scenario?.constraints.horizon_s ?? 2700
-  const [start, setStart] = useState(0)
-  const [end, setEnd] = useState(horizon)
-  const { preview, busy } = usePreview()
+  const select = useStore((s) => s.select)
+  const { busy, draft, primary } = useLive()
+  const t = useStore((s) => s.t)
+  const picked = ghost?.edges ?? []
+  const closures = useMemo(() => liveClosuresAt(primary?.state ?? null, t, (edges) => Object.values(corridors).find((c) => c.edge_ids.every((e) => edges.includes(e)))?.label ?? null), [primary, t, corridors])
+  const closedBy = useMemo(() => {
+    const out = new Map<string, string>()
+    for (const [k, c] of Object.entries(corridors)) {
+      const r = closures.find((x) => c.edge_ids.some((e) => x.edge_ids.includes(e)))
+      if (r) out.set(k, r.restriction_id)
+    }
+    return out
+  }, [corridors, closures])
+  const pickedKey = Object.keys(corridors).find((k) => corridors[k].edge_ids.length === picked.length && corridors[k].edge_ids.every((e) => picked.includes(e))) ?? ''
 
-  useEffect(() => {
-    if (!pack) return
-    void api.corridors(pack.pack_id).then((c) => {
-      setCorridors(c)
-      const first = Object.keys(c).find((k) => !c[k].flagship_closure) ?? Object.keys(c)[0] ?? ''
-      setKey(first)
-    })
-  }, [pack])
-
-  // Placement preview: hovering/selecting a corridor ghosts it on the world before any agent call.
-  useEffect(() => {
-    const c = corridors[key]
-    if (!c) return
-    setGhost({ proposal: null, edges: c.edge_ids, stops: [], hazard: null })
-  }, [key, corridors, setGhost])
-
-  const closedKeys = useMemo(() => {
-    const closed = new Set(scenario?.restrictions.flatMap((r) => r.edge_ids) ?? [])
-    return new Set(Object.keys(corridors).filter((k) => corridors[k].edge_ids.some((e) => closed.has(e))))
-  }, [corridors, scenario])
+  const pick = (k: string) => {
+    const rid = closedBy.get(k)
+    if (rid) {
+      select({ kind: 'restriction', id: rid })
+      return
+    }
+    live.discard()
+    setGhost({ edges: corridors[k].edge_ids, stops: [], hazard: null })
+  }
 
   return (
     <div className="tool">
-      <div className="seg">
-        <button className={mode === 'close' ? 'on' : ''} onClick={() => setMode('close')}>
-          Close
-        </button>
-        <button className={mode === 'reopen' ? 'on' : ''} onClick={() => setMode('reopen')}>
-          Reopen
-        </button>
-      </div>
+      <div className="small dim">Choose a street below or click a drivable segment on the map. Closures stay until you reopen them from the red street’s card.</div>
       <div className="list">
         {Object.entries(corridors).map(([k, c]) => (
-          <button key={k} className={`listitem ${key === k ? 'on' : ''}`} onClick={() => setKey(k)}>
+          <button key={k} className={`listitem ${pickedKey === k ? 'on' : ''}`} onClick={() => pick(k)} aria-pressed={pickedKey === k}>
             <span>{c.label}</span>
-            <span className="dim">
-              {c.edge_ids.length} seg{closedKeys.has(k) ? ' · closed now' : ''}
+            <span className={closedBy.has(k) ? 'closed' : 'dim'}>
+              {c.edge_ids.length} seg{closedBy.has(k) ? ' · closed — click to manage' : ''}
             </span>
           </button>
         ))}
       </div>
-      {mode === 'close' && <WindowPicker start={start} end={end} setStart={setStart} setEnd={setEnd} horizon={horizon} />}
-      <button
-        className="primary"
-        disabled={!key || busy}
-        onClick={() => void preview(mode === 'close' ? `close ${corridors[key].label} from ${fmt(start)} to ${fmt(end)}` : `reopen ${corridors[key].label}`)}
-      >
-        {busy ? 'Proposing…' : 'Preview'}
-      </button>
-    </div>
-  )
-}
-
-function HazardTool() {
-  const pack = useStore((s) => s.pack)
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const horizon = scenario?.constraints.horizon_s ?? 2700
-  const places = useMemo(() => [{ id: 'venue', name: 'the venue' }, ...(pack?.zones.map((z) => ({ id: z.zone_id, name: z.name })) ?? [])], [pack])
-  const [from, setFrom] = useState('venue')
-  const [toChoice, setTo] = useState('')
-  const to = toChoice || places[1]?.id || ''
-  const [radius, setRadius] = useState(250)
-  const [start, setStart] = useState(Math.round(horizon * 0.3))
-  const [end, setEnd] = useState(Math.round(horizon * 0.7))
-  const { preview, busy } = usePreview()
-  const name = (id: string) => places.find((p) => p.id === id)?.name ?? id
-  return (
-    <div className="tool">
-      <div className="small dim">A declared moving hazard region: roads inside its footprint become unavailable while it passes. It is not a weather model.</div>
-      <label className="small">
-        from
-        <select value={from} onChange={(e) => setFrom(e.target.value)}>
-          {places.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="small">
-        towards
-        <select value={to} onChange={(e) => setTo(e.target.value)}>
-          {places.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="small">
-        radius {radius} m
-        <input type="range" min={100} max={600} step={25} value={radius} onChange={(e) => setRadius(Number(e.target.value))} />
-      </label>
-      <WindowPicker start={start} end={end} setStart={setStart} setEnd={setEnd} horizon={horizon} />
-      <button className="primary" disabled={busy || !to} onClick={() => void preview(`storm corridor via ${name(from)} and ${name(to)} ${radius} m from ${fmt(start)} to ${fmt(end)}`)}>
-        {busy ? 'Proposing…' : 'Preview path'}
-      </button>
-    </div>
-  )
-}
-
-function RouteTool() {
-  const pack = useStore((s) => s.pack)
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const scenarioId = useStore((s) => s.scenarioId)
-  const plans = useStore((s) => s.plans)
-  const setError = useStore((s) => s.setError)
-  const setGhost = useStore((s) => s.setGhost)
-  const [vehicle, setVehicle] = useState(scenario?.constraints.fleet[0]?.vehicle_id ?? '')
-  const [seq, setSeq] = useState<string[]>([])
-  const [q, setQ] = useState('')
-  const [result, setResult] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const allowed = useMemo(() => new Set(scenario?.constraints.allowed_stop_ids ?? []), [scenario])
-  const stops = useMemo(() => {
-    const list = pack?.stops ?? []
-    const lq = q.trim().toLowerCase()
-    return list.filter((s) => (!lq || s.name.toLowerCase().includes(lq)) && (lq || allowed.has(s.stop_id))).slice(0, 12)
-  }, [pack, q, allowed])
-
-  useEffect(() => {
-    setGhost({ proposal: null, edges: [], stops: pack?.stops.filter((s) => seq.includes(s.stop_id)) ?? [], hazard: null })
-  }, [seq, pack, setGhost])
-
-  const submit = async () => {
-    if (!scenarioId || seq.length < 2) return
-    setBusy(true)
-    try {
-      const plan: ServicePlan = {
-        plan_id: `route-${vehicle}-${seq.map((s) => s.slice(-4)).join('-')}`.toLowerCase().replace(/[^a-z0-9-]/g, ''),
-        name: `Route ${seq.map((s) => pack?.stops.find((x) => x.stop_id === s)?.name ?? s).join(' → ')}`,
-        family: 'custom',
-        duties: [{ duty_id: `${vehicle}-d1`, vehicle_id: vehicle, stop_sequence: seq, depart_s: scenario?.constraints.service_window_s[0] ?? 0, layover_s: 60 }],
-        authored_by: 'operator',
-        rationale: 'Drawn in the route tool.',
-        assumptions: [],
-        parent_plan_id: null,
-      }
-      const pv = await api.submitPlan(scenarioId, plan)
-      useStore.setState({ plans: [...plans.filter((p) => p.plan.plan_id !== pv.plan.plan_id), pv] })
-      setResult(pv.validation?.valid ? 'Valid — run it from the scenario drawer.' : `Rejected: ${pv.validation?.issues.map((i) => i.message).join('; ')}`)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="tool">
-      <div className="small dim">A route is a plan: one shuttle serving a stop sequence, validated by the same rules as agent plans.</div>
-      <label className="small">
-        vehicle
-        <select value={vehicle} onChange={(e) => setVehicle(e.target.value)}>
-          {scenario?.constraints.fleet.map((f) => (
-            <option key={f.vehicle_id} value={f.vehicle_id}>
-              {f.vehicle_id} · {f.capacity} seats
-            </option>
-          ))}
-        </select>
-      </label>
-      <input placeholder="find a stop (e.g. Union, Queens Quay)" value={q} onChange={(e) => setQ(e.target.value)} />
-      <div className="list">
-        {stops.map((s) => (
-          <button key={s.stop_id} className={`listitem ${seq.includes(s.stop_id) ? 'on' : ''}`} onClick={() => setSeq(seq.includes(s.stop_id) ? seq.filter((x) => x !== s.stop_id) : [...seq, s.stop_id])}>
-            <span>{s.name}</span>
-            <span className="dim">{allowed.has(s.stop_id) ? 'allowed' : 'not in allowed set'}</span>
-          </button>
-        ))}
-      </div>
-      {seq.length > 0 && <div className="small">{seq.map((s, i) => `${i + 1}. ${pack?.stops.find((x) => x.stop_id === s)?.name ?? s}`).join('  ')}</div>}
-      <button className="primary" disabled={busy || seq.length < 2 || !vehicle} onClick={() => void submit()}>
-        {busy ? 'Validating…' : 'Validate route'}
-      </button>
-      {result && <div className="small">{result}</div>}
-    </div>
-  )
-}
-
-function StopTool() {
-  const pack = useStore((s) => s.pack)
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const [from, setFrom] = useState('')
-  const [to, setTo] = useState('')
-  const { preview, busy } = usePreview()
-  const allowed = pack?.stops.filter((s) => scenario?.constraints.allowed_stop_ids.includes(s.stop_id)) ?? []
-  const name = (id: string) => pack?.stops.find((s) => s.stop_id === id)?.name ?? id
-  return (
-    <div className="tool">
-      <div className="small dim">Stops are real OSM bus stops plus declared shuttle bays (marked “declared”). Move boarding from one to another; plans are re-validated.</div>
-      <label className="small">
-        withdraw
-        <select value={from} onChange={(e) => setFrom(e.target.value)}>
-          <option value="">—</option>
-          {allowed.map((s) => (
-            <option key={s.stop_id} value={s.stop_id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="small">
-        use instead
-        <select value={to} onChange={(e) => setTo(e.target.value)}>
-          <option value="">—</option>
-          {pack?.stops.slice(0, 200).map((s) => (
-            <option key={s.stop_id} value={s.stop_id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button className="primary" disabled={!from || !to || busy} onClick={() => void preview(`move stop ${name(from)} to ${name(to)}`)}>
-        {busy ? 'Proposing…' : 'Preview'}
-      </button>
-      <div className="small dim">Adding a brand-new stop needs a network rebuild (netconvert); it is not available live in this build.</div>
-    </div>
-  )
-}
-
-function PopulationTool() {
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const [mode, setMode] = useState<'residents' | 'transport'>(scenario && scenario.scenario_kind !== 'population' ? 'transport' : 'residents')
-  return <div className="tool">
-    <div className="seg"><button className={mode === 'residents' ? 'on' : ''} onClick={() => setMode('residents')}>Resident society</button><button className={mode === 'transport' ? 'on' : ''} onClick={() => setMode('transport')}>Venue travelers</button></div>
-    {mode === 'residents' ? <ResidentPopulationTool /> : <TransportPopulationTool />}
-  </div>
-}
-
-function ResidentPopulationTool() {
-  const pack = useStore((s) => s.pack)
-  const status = useStore((s) => s.populationStatus)
-  const statusError = useStore((s) => s.populationStatusError)
-  const refresh = useStore((s) => s.refreshPopulationStatus)
-  const create = useStore((s) => s.createPopulation)
-  const setError = useStore((s) => s.setError)
-  const building = useStore((s) => s.building)
-  const [count, setCount] = useState(12)
-  const [seed, setSeed] = useState(7)
-  const [horizon, setHorizon] = useState(3600)
-  const [cost, setCost] = useState(20)
-  const [busy, setBusy] = useState(false)
-  useEffect(() => { void refresh() }, [refresh])
-  const reason = populationUnavailableReason(status, statusError)
-  const maxCost = populationCostLimit(status)
-  const scaleReason = populationScaleReason(status, count)
-  const build = async () => {
-    if (!status || reason) return
-    setBusy(true)
-    try {
-      await create(defaultPopulationSpec(status, { count, seed, horizon, packId: pack?.pack_id ?? 'toronto', maxCostUsd: cost }))
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return <div className="tool">
-    <div className="small dim">Define persistent synthetic residents with linked everyday tasks in {pack?.name ?? 'Toronto'}. Walking, bicycle, passenger car, delivery van, and truck classes are enabled. This is not venue-egress demand.</div>
-    <div className={`small ${reason ? 'warn' : 'ok'}`}>{reason ?? 'Native JiuwenSwarm service available; runs remain explicit.'}</div>
-    <button className="ghostbtn" onClick={() => void refresh()} disabled={busy}>Refresh availability</button>
-    <label className="small">Residents<select value={count} onChange={(e) => setCount(Number(e.target.value))}>{[12, 60, 120, 240, 300].map((n) => <option value={n} key={n}>{n}</option>)}</select></label>
-    <div className="row"><label className="small">Seed<input type="number" step={1} value={seed} onChange={(e) => setSeed(Number(e.target.value))} /></label><label className="small">Horizon<select value={horizon} onChange={(e) => setHorizon(Number(e.target.value))}>{[900, 1800, 3600, 7200].map((n) => <option value={n} key={n}>{n / 60} min</option>)}</select></label></div>
-    <label className="small">Run budget cap (USD, at most ${maxCost.toFixed(2)})<input type="number" min={0} max={maxCost} step={0.5} value={Math.min(cost, maxCost)} onChange={(e) => setCost(Number(e.target.value))} /></label>
-    <div className="small">Configured resident brains:</div>
-    {(status?.models ?? []).map((brain) => <div className="small" key={brain.config_ref}><i className="brain-dot" style={{ background: `rgb(${brainColor(brain).join(',')})` }} />{brain.model_family} · {brain.model_id}<div className="dim">{brain.api_provider} · {brain.control_mode}</div></div>)}
-    <button className="primary" onClick={() => void build()} disabled={busy || Boolean(building) || Boolean(reason) || !Number.isFinite(cost) || cost < 0 || !Number.isSafeInteger(seed)}>{busy ? 'Defining residents…' : `Build definition for ${count} residents`}</button>
-    <div className="small dim">Build creates a definition only, without inference. Then explicitly Run the society below or from Scenarios.</div>
-    {scaleReason && <div className="small warn">{scaleReason}</div>}
-    <PopulationRunControl />
-  </div>
-}
-
-function TransportPopulationTool() {
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const createFlagship = useStore((s) => s.createFlagship)
-  const building = useStore((s) => s.building)
-  const [n, setN] = useState(240)
-  const [busy, setBusy] = useState(false)
-  const go = async () => {
-    setBusy(true)
-    useStore.setState({ building: `Generating ${n} synthetic travelers · compiling scenario…` })
-    try {
-      await createFlagship(n, 7)
-    } finally {
-      useStore.setState({ building: null })
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="tool">
-      <div className="small dim">Demand is synthetic and declared as such. Changing the cohort compiles a new scenario (it is not a live edit).</div>
-      <label className="small">
-        travelers leaving the venue: <b>{n}</b>
-        <input type="range" min={20} max={2000} step={20} value={n} onChange={(e) => setN(Number(e.target.value))} />
-      </label>
-      <button className="primary" disabled={busy || !!building} onClick={() => void go()}>
-        {busy ? 'Compiling…' : `Build scenario with ${n} travelers`}
-      </button>
-      {scenario && <div className="small dim">current: {scenario.scenario_id}</div>}
-    </div>
-  )
-}
-
-function EventTool() {
-  const pack = useStore((s) => s.pack)
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  return (
-    <div className="tool">
-      <div className="small">Event egress at {pack ? 'the venue' : '—'}: everyone leaves at once when the event ends (+00:00).</div>
-      {scenario && (
-        <div className="small dim">
-          fleet {scenario.constraints.fleet.map((f) => `${f.vehicle_id} (${f.capacity})`).join(', ')} · service window +{fmt(scenario.constraints.service_window_s[0])}–+{fmt(scenario.constraints.service_window_s[1])} · horizon +{fmt(scenario.constraints.horizon_s)}
-        </div>
+      <div className="small dim">{picked.length ? `${picked.length} road segment${picked.length === 1 ? '' : 's'} selected` : 'Nothing selected yet'}</div>
+      {!draft && (
+        <button className="primary" disabled={!picked.length || !!busy || !primary} onClick={() => void live.preview({ kind: 'close_road', edge_ids: picked, until_s: null })}>
+          {busy ? 'Checking…' : picked.length ? 'Preview closure' : 'Choose a street'}
+        </button>
       )}
-      <div className="small dim">Change crowd size with Population; change the fleet from the command bar (“use three buses”).</div>
     </div>
   )
 }
 
-function StructuralTool({ kind }: { kind: 'road' | 'intersection' }) {
+/** Add travelers to the running city: real journeys, routed by SUMO like everyone else's. */
+function PopulationTool() {
+  const pack = useStore((s) => s.pack)
+  const t = useStore((s) => s.t)
+  const { busy, draft, primary } = useLive()
+  const session = primary?.state ?? null
+  const environment = session ? environmentAt(session, t) : null
+  const [count, setCount] = useState(500)
+  const [destination, setDestination] = useState(() => pack?.zones.find((z) => /financial|downtown/i.test(z.name))?.zone_id ?? pack?.zones[0]?.zone_id ?? '')
+  const [origin, setOrigin] = useState('')
+  const [windowS, setWindowS] = useState(300)
+  const ceiling = 10000 - (environment?.population ?? 0)
   return (
     <div className="tool">
-      <div className="small">
-        <b>Not available live.</b> Adding a {kind} changes the SUMO network itself and needs a netconvert rebuild of the city pack, then a fresh compile of every scenario on it.
+      <div className="population-head small">
+        <span>People in the city</span>
+        <span className="dim">{environment ? `${environment.population.toLocaleString()} travelers so far` : 'starting the city…'}</span>
       </div>
-      <div className="small dim">What you can do now without pretending: close or reopen existing streets (Closure), or move boarding between existing stops (Bus stop). Both branch the scenario and re-run in SUMO.</div>
+      <label className="small">
+        add travelers: <b>{count.toLocaleString()}</b>
+        <input type="range" min={50} max={Math.max(50, Math.min(5000, ceiling))} step={50} value={count} onChange={(e) => setCount(Number(e.target.value))} disabled={!!draft} />
+      </label>
+      <label className="small">
+        heading to
+        <select value={destination} onChange={(e) => setDestination(e.target.value)} disabled={!!draft}>
+          {pack?.zones.map((z) => (
+            <option key={z.zone_id} value={z.zone_id}>
+              {z.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="small">
+        starting from
+        <select value={origin} onChange={(e) => setOrigin(e.target.value)} disabled={!!draft}>
+          <option value="">spread across the other districts</option>
+          {pack?.zones.map((z) => (
+            <option key={z.zone_id} value={z.zone_id}>
+              {z.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="small">
+        leaving over
+        <select value={windowS} onChange={(e) => setWindowS(Number(e.target.value))} disabled={!!draft}>
+          <option value={0}>all at once</option>
+          <option value={60}>1 minute</option>
+          <option value={300}>5 minutes</option>
+          <option value={600}>10 minutes</option>
+        </select>
+      </label>
+      {!draft && (
+        <button className="primary" disabled={!!busy || !session || !destination || count < 1} onClick={() => void live.preview({ kind: 'population', count, destination_zone_id: destination, origin_zone_id: origin || null, release_window_s: windowS })}>
+          {busy ? 'Checking…' : `Preview +${count.toLocaleString()} travelers`}
+        </button>
+      )}
+      <div className="small dim">{session ? `${Math.round(session.config.car_share * 100)}% have a car; the rest walk or ride. Existing travelers keep their trips.` : ''}</div>
+    </div>
+  )
+}
+
+/** Change the temperature: an explicit cold-response model alters walking speed and tolerance. */
+function TemperatureTool() {
+  const t = useStore((s) => s.t)
+  const { busy, draft, primary } = useLive()
+  const session = primary?.state ?? null
+  const current = session ? environmentAt(session, t).temperature : 20
+  const [target, setTarget] = useState<number | null>(null)
+  const value = target ?? current
+  return (
+    <div className="tool">
+      <div className="population-head small">
+        <span>Temperature</span>
+        <span className="dim">now {current}°C</span>
+      </div>
+      <label className="small">
+        set to <b>{value}°C</b>
+        <input type="range" min={-40} max={50} step={1} value={value} onChange={(e) => setTarget(Number(e.target.value))} disabled={!!draft} />
+      </label>
+      <div className="row">
+        <button className="ghostbtn" disabled={!!draft || value <= -40} onClick={() => setTarget(Math.max(-40, value - 20))}>
+          −20°C
+        </button>
+        <button className="ghostbtn" disabled={!!draft || value >= 50} onClick={() => setTarget(Math.min(50, value + 20))}>
+          +20°C
+        </button>
+      </div>
+      {!draft && (
+        <button className="primary" disabled={!!busy || !session || value === current} onClick={() => void live.preview({ kind: 'temperature', temperature_c: value })}>
+          {busy ? 'Checking…' : value === current ? 'Temperature unchanged' : `Preview ${value}°C`}
+        </button>
+      )}
+      <div className="small dim">Illustrative mobility assumptions, not a weather forecast. It does not assume snow or ice.</div>
     </div>
   )
 }

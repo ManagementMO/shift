@@ -74,6 +74,37 @@ def test_pause_is_only_requested_until_checkpoint_is_committed(api_world):
     assert "checkpoint" in response.json()["detail"]
 
 
+def test_population_runs_are_not_filtered_out_as_stale_transport_plans(api_world):
+    _, service = api_world
+    scenario = ScenarioSpec(scenario_id="population-view", pack_id="fixture", demand_id="empty",
+                            scenario_kind="population", population_id="population-view",
+                            constraints=ConstraintSet(fleet=[], horizon_s=600, service_window_s=(0, 600),
+                                                      allowed_stop_ids=[], hard_max_fleet=0))
+    service.owner.store.put_scenario(scenario, DemandSet(demand_id="empty", seed=1, travelers=[]))
+    run = SimulationRun(run_id="society-recorded", scenario_id=scenario.scenario_id,
+                        population_id=scenario.population_id, run_kind="population", plan_id="service-ledger-v1",
+                        seed=7, status=RunStatus.completed)
+    service.owner.store.put_run(run)
+    service.owner.store.put_run(run.model_copy(update={"run_id": "society-wrong", "population_id": "another-population"}))
+    assert service.owner.current_runs(scenario.scenario_id) == [run]
+
+
+@pytest.mark.parametrize("method, argument", [
+    ("preview_development", None), ("apply_development", None),
+    ("remove_development", "development-id"), ("demolish_building", "building-id"),
+])
+def test_new_transport_development_operations_reject_population_scenarios(api_world, method, argument):
+    _, service = api_world
+    scenario = ScenarioSpec(scenario_id="population-locked", pack_id="fixture", demand_id="empty",
+                            scenario_kind="population", population_id="population-locked",
+                            constraints=ConstraintSet(fleet=[], horizon_s=600, service_window_s=(0, 600),
+                                                      allowed_stop_ids=[], hard_max_fleet=0))
+    service.owner.store.put_scenario(scenario, DemandSet(demand_id="empty", seed=1, travelers=[]))
+    with pytest.raises(PopulationScenarioError):
+        getattr(service.owner, method)(scenario.scenario_id, argument)
+    assert service.owner.scenario(scenario.scenario_id) == scenario
+
+
 def test_population_cannot_trigger_legacy_analysts_or_interventions(api_world):
     _, service = api_world
     scenario = ScenarioSpec(scenario_id="population-view", pack_id="fixture", demand_id="empty",

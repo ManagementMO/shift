@@ -27,6 +27,7 @@ function rx(): ReplayIndex {
     occupancy: {},
     stopQueue: {},
     tMax: 1000,
+    activityStart: 0,
   }
 }
 

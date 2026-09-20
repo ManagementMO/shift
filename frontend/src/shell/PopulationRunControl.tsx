@@ -20,7 +20,7 @@ export default function PopulationRunControl() {
     <button className="primary" onClick={() => void submit()} disabled={Boolean(reason) || busy || active}>
       {busy ? 'Submitting population run…' : active ? 'Population run in progress…' : 'Start new society run (uses models)'}
     </button>
-    <div className="dim">Start new creates a different run. Use execution Pause/Resume on an existing run in Scenarios to keep its simulation identity.</div>
+    <div className="dim">Start new creates a different run. Use execution Pause/Resume on a saved run below to keep its simulation identity.</div>
     <div className="dim">Only explicit Start/Resume actions execute cognition. Generation, playback, and inspection do not call models. No mock or rules execution is substituted.</div>
     <button className="ghostbtn" onClick={() => void refresh()} disabled={busy}>Refresh JiuwenSwarm status</button>
   </div>

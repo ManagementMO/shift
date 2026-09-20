@@ -5,6 +5,7 @@ import type { EntityTrack, HazardTrack, MobilityBinding, PersonEvent, RunBundle 
 import { bindingsForEntityAt, buildPopulationIndex, populationTrackVisible, residentForEntityAt, stationaryPresenceAt, type PopulationIndex } from './population'
 
 export const MAX_GAP_S = 3
+const ACTIVITY_START_FRACTION = 0.25
 
 export type PersonState = 'not_departed' | 'walking' | 'waiting' | 'riding' | 'arrived' | 'unroutable' | 'driving'
 
@@ -38,6 +39,7 @@ export type ReplayIndex = {
   occupancy: Record<string, { times: number[]; values: number[] }>
   stopQueue: Record<string, { times: number[]; values: number[] }>
   tMax: number
+  activityStart: number
 }
 
 function lowerBound(arr: number[], t: number): number {
@@ -54,9 +56,18 @@ function lowerBound(arr: number[], t: number): number {
 export function buildIndex(bundle: RunBundle): ReplayIndex {
   const tracks: Record<string, TrackIndex> = {}
   const population = bundle.run.run_kind === 'population' && bundle.population ? buildPopulationIndex(bundle.population) : null
+  const movingAtTime = new Map<number, number>()
+  let peakMoving = 0
   let tMax = population?.artifact?.metrics.end_time_s ?? bundle.run.metrics?.horizon_s ?? 0
   for (const [id, tr] of Object.entries(bundle.tracks)) {
-    const times = tr.samples.map((s) => s[0])
+    const times = tr.samples.map((s) => {
+      if (s[4] > 0.1) {
+        const moving = (movingAtTime.get(s[0]) ?? 0) + 1
+        movingAtTime.set(s[0], moving)
+        peakMoving = Math.max(peakMoving, moving)
+      }
+      return s[0]
+    })
     if (times.length) tMax = Math.max(tMax, times[times.length - 1])
     tracks[id] = { track: tr, times, breakSet: new Set(tr.breaks) }
   }
@@ -68,7 +79,10 @@ export function buildIndex(bundle: RunBundle): ReplayIndex {
     for (const [k, rows] of Object.entries(src)) out[k] = { times: rows.map((r) => r[0]), values: rows.map((r) => r[1]) }
     return out
   }
-  return { bundle, population, tracks, personEvents, occupancy: series(bundle.occupancy), stopQueue: series(bundle.stopQueue), tMax }
+  const threshold = Math.max(1, Math.ceil(peakMoving * ACTIVITY_START_FRACTION))
+  let activityStart = Infinity
+  for (const [t, moving] of movingAtTime) if (moving >= threshold && t < tMax) activityStart = Math.min(activityStart, t)
+  return { bundle, population, tracks, personEvents, occupancy: series(bundle.occupancy), stopQueue: series(bundle.stopQueue), tMax, activityStart: Number.isFinite(activityStart) ? activityStart : 0 }
 }
 
 export function seriesAt(s: { times: number[]; values: number[] } | undefined, t: number): number | undefined {
@@ -169,7 +183,8 @@ export function cohortSummaryAt(rx: ReplayIndex, t: number): Record<PersonState,
     not_departed: 0, walking: 0, waiting: 0, riding: 0, arrived: 0, unroutable: 0, driving: 0,
   }
   const modes = rx.bundle.compile?.mode_assignment ?? {}
-  for (const [pid, evs] of Object.entries(rx.personEvents)) out[personStateAt(evs, t, modes[pid])]++
+  const ids = rx.bundle.cohort?.cohort ?? rx.bundle.demand?.travelers.map((trip) => trip.person_id) ?? Object.keys(rx.personEvents)
+  for (const pid of ids) out[personStateAt(rx.personEvents[pid], t, modes[pid])]++
   return out
 }
 

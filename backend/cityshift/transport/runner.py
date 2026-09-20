@@ -335,7 +335,8 @@ def save_record(rec: RunRecord, metrics: RunMetrics, out_dir: Path) -> None:
     (out_dir / "stop_queue.json").write_text(json.dumps(rec.stop_queue))
     (out_dir / "metrics.json").write_text(metrics.model_dump_json(indent=2))
     (out_dir / "cohort.json").write_text(
-        json.dumps({"cohort": rec.cohort_ids, "desired_depart": rec.desired_depart, "arrived": rec.arrived})
+        json.dumps({"cohort": rec.cohort_ids, "desired_depart": rec.desired_depart, "arrived": rec.arrived,
+                    "final_state": rec.final_state, "waiting_seconds": rec.waiting_seconds})
     )
 
 

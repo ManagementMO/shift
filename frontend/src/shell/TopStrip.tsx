@@ -1,100 +1,53 @@
-import { useState } from 'react'
+import { environmentAt, useLive } from '../live/session'
 import { useStore } from '../store'
-import { api } from '../api'
+import SimulationSettings from './SimulationSettings'
+import { BrandMark } from '../components/Icon'
 
-const CITY_NAMES: Record<string, string> = { toronto: 'Toronto', waterloo: 'Waterloo' }
+const CITY_NAMES: Record<string, string> = { toronto: 'Toronto', waterloo: 'Waterloo', waterloo_e7: 'Waterloo · E7' }
 
-function runStatus(status: string | undefined, progress: number | undefined, loading: boolean): { label: string; cls: string } {
-  if (loading) return { label: 'Loading replay', cls: 'busy' }
-  if (!status) return { label: 'No run', cls: 'idle' }
-  if (status === 'completed') return { label: 'Measured replay', cls: 'ok' }
-  if (status === 'running') return { label: `Simulating ${Math.round((progress ?? 0) * 100)}%`, cls: 'busy' }
-  if (status === 'queued') return { label: 'Queued', cls: 'busy' }
-  if (status === 'paused') return { label: 'Execution paused', cls: 'idle' }
-  return { label: status, cls: 'bad' }
+function sessionStatus(status: string | undefined, playing: boolean, busy: string | null, error: string | null): { label: string; cls: string } {
+  if (error) return { label: 'SUMO problem', cls: 'bad' }
+  if (busy) return { label: busy, cls: 'busy' }
+  if (!status) return { label: 'Starting the city', cls: 'busy' }
+  if (status === 'starting' || status === 'restoring') return { label: 'Starting SUMO', cls: 'busy' }
+  if (status === 'completed') return { label: 'Horizon reached', cls: 'idle' }
+  if (status === 'failed') return { label: 'SUMO stopped', cls: 'bad' }
+  // SUMO itself alternates between running and paused as it is advanced in steps; the user's play state is what matters
+  return { label: playing ? 'Live · simulating' : 'Live · paused', cls: 'ok' }
 }
 
-export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => void }) {
+export default function TopStrip({ onGlobe, active = true }: { onGlobe?: () => void; active?: boolean }) {
   const pack = useStore((s) => s.pack)
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const run = useStore((s) => s.runs.find((r) => r.run_id === s.primaryRunId) ?? s.runs.find((r) => r.status === 'running' || r.status === 'queued') ?? (s.scenarios.find((sc) => sc.scenario_id === s.scenarioId)?.scenario_kind === 'population' ? s.runs.at(-1) : undefined))
-  const loading = useStore((s) => s.loadingReplay !== null)
-  const populationDefinition = useStore((s) => s.populationDefinition)
-  const compareMode = useStore((s) => s.compareMode)
-  const setCompareMode = useStore((s) => s.setCompareMode)
-  const lens = useStore((s) => s.lens)
-  const setLens = useStore((s) => s.setLens)
-  const primaryRunId = useStore((s) => s.primaryRunId)
-  const hasReplay = useStore((s) => Boolean(s.primaryRunId && s.replays[s.primaryRunId]))
-  const setError = useStore((s) => s.setError)
-  const [shared, setShared] = useState<{ href: string; label: string } | null>(null)
-
-  const st = runStatus(run?.status, run?.progress, loading)
-  const population = scenario?.scenario_kind === 'population'
-  if (population && run?.status === 'completed' && !loading) st.label = populationDefinition?.spec.brains.some((brain) => brain.control_mode === 'rules') ? 'Rules fixture replay' : 'Recorded society'
-  const title = scenario ? shortLabel(scenario.label) : 'No scenario'
-
-  const share = async () => {
-    if (!primaryRunId || !hasReplay) return
-    try {
-      const r = await api.exportReplay(primaryRunId)
-      const href = r.url ?? `/api/exports/${primaryRunId}.zip`
-      setShared({ href, label: r.url ? 'Uploaded to R2 — open link' : `Replay bundle ready (${(r.bytes / 1e6).toFixed(1)} MB) — download` })
-      setTimeout(() => setShared(null), 12000)
-    } catch (e) {
-      setError(String(e))
-    }
-  }
+  const t = useStore((s) => s.t)
+  const playing = useStore((s) => s.playing)
+  const { primary, busy, error } = useLive()
+  const populationActive = useStore(s => s.populationActive)
+  const population = useStore(s => s.populationDefinition)
+  const run = useStore(s => s.runs.find(r => r.run_id === s.primaryRunId) ?? s.runs.at(-1))
+  const session = primary?.state ?? null
+  const environment = session ? environmentAt(session, t) : null
+  const native = population?.spec.brains.every(b => b.control_mode === 'jiuwenswarm')
+  const st = populationActive ? { label: `${native ? 'JiuwenSwarm' : population ? 'Rules fixture' : 'Residents'} · ${run?.status ?? 'not executed'}`, cls: run?.status === 'failed' ? 'bad' : run?.status === 'running' ? 'busy' : 'idle' } : sessionStatus(session?.status, playing, busy, error)
 
   return (
     <header className="strip">
+      {onGlobe && <button className="ghostbtn globe-return" onClick={onGlobe} title="Return to the global view"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="12" cy="12" r="9" /><ellipse cx="12" cy="12" rx="4" ry="9" /><path d="M3 12h18" /></svg>Globe</button>}
       <div className="brand">
-        <span className="wordmark">CITY<span className="slash">//</span>SHIFT</span>
+        <BrandMark size={22} />
+        <span className="wordmark">Concrete Consequences</span>
         <span className="city">{pack ? CITY_NAMES[pack.pack_id] ?? pack.name : '—'}</span>
       </div>
-      <button className="scenario-name" onClick={onOpenScenarios} title={scenario?.label}>
-        {title}
-        <span className="chev">▾</span>
-      </button>
+      <div className="scenario-name" title={session?.session_id}>
+        {populationActive ? `${population?.spec.count ?? 0} persistent residents · ${native ? 'JiuwenSwarm assigned' : population ? 'labeled rules recording' : 'loading definition'}` : environment ? `${environment.population.toLocaleString()} travelers · ${environment.temperature}°C` : 'Live city'}
+      </div>
       <div className={`status ${st.cls}`}>
         <i />
         {st.label}
       </div>
       <div className="strip-actions">
-        <button className={`ghostbtn ${compareMode ? 'on' : ''}`} onClick={() => setCompareMode(!compareMode)} disabled={population} title={population ? 'Transport comparison is not used for resident society runs' : undefined}>
-          Compare
-        </button>
-        <button className="ghostbtn" onClick={() => void share()} disabled={!hasReplay}>
-          {shared ? 'Exported' : 'Share'}
-        </button>
-        <button className={`ghostbtn ${lens && lens !== 'diagnostics' ? 'on' : ''}`} onClick={() => setLens(lens && lens !== 'diagnostics' ? null : 'people')}>
-          Lens
-        </button>
-        <button className={`ghostbtn ${lens === 'diagnostics' ? 'on' : ''}`} onClick={() => setLens(lens === 'diagnostics' ? null : 'diagnostics')}>
-          Developer
-        </button>
+        {pack?.pack_id === 'toronto' && <a className="ghostbtn" href="/showcase">Cityscape</a>}
+        <SimulationSettings city disabled={!active} showCityAppearance />
       </div>
-      {shared && (
-        <div className="toast">
-          <a href={shared.href} target="_blank" rel="noreferrer">
-            {shared.label}
-          </a>
-        </div>
-      )}
     </header>
   )
-}
-
-function shortLabel(label: string): string {
-  // "Event egress (Toronto, ON (Downtown / Waterfront)) during the X closure; two extra buses for 35 minutes"
-  // Branches carry " · edit: <reason>" suffixes; keep the last one visible so a branch never reads as its parent.
-  const [head, ...edits] = label.split(' · edit: ')
-  const m = head.match(/^(.*?)\s*\(.*?\)\)?\s*(during .*?)(;|$)/)
-  let out = m ? `${m[1]} ${m[2]}`.replace(/\s+/g, ' ').trim() : head
-  if (out.length > 72) out = `${out.slice(0, 70)}…`
-  if (edits.length) {
-    const last = edits[edits.length - 1].replace(/\s*\(.*?\)\s*$/, '')
-    out += ` · branch: ${last.length > 44 ? `${last.slice(0, 42)}…` : last}`
-  }
-  return out
 }

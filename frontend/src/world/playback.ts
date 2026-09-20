@@ -4,20 +4,34 @@
 type Listener = (t: number) => void
 
 const UI_HZ = 10
+export const PLAYBACK_SPEEDS = [1, 2, 4, 8]
 
-class PlaybackClock {
+export class PlaybackClock {
   t = 0
   playing = false
-  speed = 10
+  speed = 1
   horizon = 2700
+  /** Where playback wraps to on reaching the horizon; null stops there instead (the live mode's own clock). */
+  loopStart: number | null = null
   private frameListeners = new Set<Listener>()
   private uiListeners = new Set<Listener>()
   private raf = 0
   private last = 0
   private lastUi = 0
+  private frontier: number | null = null
+
+  get buffering(): boolean {
+    return this.playing && this.frontier !== null && this.t >= this.frontier && this.t < this.horizon
+  }
+
+  setFrontier(t: number | null) {
+    this.frontier = t === null ? null : Math.max(0, Math.min(this.horizon, t))
+    if (this.frontier !== null && this.t > this.frontier) this.t = this.frontier
+    this.emit(true)
+  }
 
   seek(t: number) {
-    this.t = Math.max(0, Math.min(this.horizon, t))
+    this.t = Math.max(0, Math.min(this.horizon, this.frontier ?? this.horizon, t))
     this.emit(true)
   }
 
@@ -29,11 +43,17 @@ class PlaybackClock {
 
   setSpeed(s: number) {
     this.speed = s
+    this.emit(true)
+  }
+
+  /** Keep a recorded replay running: on reaching the horizon jump back to `start` (its active traffic) and carry on. */
+  setLoop(start: number | null) {
+    this.loopStart = start === null ? null : Math.max(0, start)
   }
 
   play() {
     if (this.playing) return
-    if (this.t >= this.horizon) this.t = 0
+    if (this.t >= this.horizon) this.t = this.wrapTo()
     this.playing = true
     this.last = performance.now()
     this.raf = requestAnimationFrame(this.step)
@@ -61,13 +81,24 @@ class PlaybackClock {
     return () => void this.uiListeners.delete(l)
   }
 
+  /** Start of the next pass: the loop start when it lies inside the recording, else the beginning. */
+  private wrapTo(): number {
+    return this.loopStart !== null && this.loopStart < this.horizon ? this.loopStart : 0
+  }
+
   private step = (now: number) => {
     const dt = (now - this.last) / 1000
     this.last = now
-    this.t = Math.min(this.horizon, this.t + dt * this.speed)
+    this.t = Math.min(this.horizon, this.frontier ?? this.horizon, this.t + dt * this.speed)
     if (this.t >= this.horizon) {
-      this.playing = false
+      if (this.loopStart === null) {
+        this.playing = false
+        this.emit(true)
+        return
+      }
+      this.t = this.wrapTo()
       this.emit(true)
+      this.raf = requestAnimationFrame(this.step)
       return
     }
     this.emit(false)
@@ -89,9 +120,10 @@ export const clock = new PlaybackClock()
 /** Simulated wall-clock label. The flagship egress is anchored at 22:30 (event end) by convention. */
 export const SIM_ORIGIN_MIN = 22 * 60 + 30
 
-export function simClock(t: number): string {
-  const total = (SIM_ORIGIN_MIN + Math.floor(t / 60)) % (24 * 60)
-  const h = Math.floor(total / 60)
-  const m = total % 60
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+export function simClock(t: number, seconds = false): string {
+  const total = (SIM_ORIGIN_MIN * 60 + Math.floor(t)) % (24 * 60 * 60)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor(total / 60) % 60
+  const label = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+  return seconds ? `${label}:${String(total % 60).padStart(2, '0')}` : label
 }

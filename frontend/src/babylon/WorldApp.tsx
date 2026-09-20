@@ -4,12 +4,12 @@ import { clock } from '../world/playback'
 import Transport from './Transport'
 import WorldCanvas from './WorldCanvas'
 import type { WorldScene } from './scene'
+import { EMPTY_STATS } from './traffic'
 import { useReplay } from './useReplay'
 import './world.css'
 
 /**
- * `/world` — the Babylon.js living-city route.  During the migration it is a self-contained preview of the
- * miniature Toronto; the HUD/sim dock/tooling from the Mapbox shell are wired in milestone by milestone.
+ * `/world/lab` — the bare Babylon workbench. `/` is the full simulation and `/showcase` the cityscape viewer.
  */
 export default function WorldApp() {
   const params = new URLSearchParams(window.location.search)
@@ -37,10 +37,11 @@ export default function WorldApp() {
       clock.pause()
     }
   }, [ready, rx])
-  const stats = useCallback(() => sceneRef.current?.traffic.stats ?? { buses: 0, cars: 0, people: 0, released: 0 }, [])
+  const stats = useCallback(() => sceneRef.current?.traffic.stats ?? EMPTY_STATS, [])
 
   const onReady = useCallback((ws: WorldScene) => {
     sceneRef.current = ws
+    ws.camera.setPreferredProjection('isometric')
     if (window.__cityshift) window.__cityshift.babylon = ws
     setReady(ws)
   }, [])
@@ -60,10 +61,8 @@ export default function WorldApp() {
         clock.toggle()
       }
       if (e.key === '1') ws.camera.city()
-      if (e.key === '2') flyLandmark(ws, 'cn_tower')
-      if (e.key === '3') flyLandmark(ws, 'union_station')
-      if (e.key === '4') flyLandmark(ws, 'rogers_centre')
-      if (e.key === '5') egress(ws)
+      const landmark = landmarkShortcuts(ws)[Number(e.key) - 2]
+      if (landmark) flyLandmark(ws, landmark.kind)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -72,11 +71,11 @@ export default function WorldApp() {
   const world = ready?.world
   return (
     <div className="bworld-shell">
-      <WorldCanvas packId={packId} onReady={onReady} />
+      <WorldCanvas packId={packId} onReady={onReady} fixedCamera={false} />
 
       <div className="bworld-top">
         <div className="bworld-brand">
-          <b>CITY//SHIFT</b>
+          <b>Concrete Consequences</b>
           <span className="small dim">world · {packId}</span>
         </div>
         {world && (
@@ -91,8 +90,8 @@ export default function WorldApp() {
         )}
         <div className="bworld-top-right">
           <span className="small dim">Babylon.js preview</span>
-          <a className="bworld-link small" href="/">
-            Mapbox view
+          <a className="bworld-link small" href={`/world?pack=${encodeURIComponent(packId)}`}>
+            Full simulation
           </a>
         </div>
       </div>
@@ -102,20 +101,11 @@ export default function WorldApp() {
           <button onClick={() => ready.camera.city()} title="1">
             City
           </button>
-          <button onClick={() => flyLandmark(ready, 'cn_tower')} title="2">
-            CN Tower
-          </button>
-          <button onClick={() => flyLandmark(ready, 'union_station')} title="3">
-            Union
-          </button>
-          <button onClick={() => flyLandmark(ready, 'rogers_centre')} title="4">
-            Rogers Centre
-          </button>
-          {rx && (
-            <button className="hero" onClick={() => egress(ready)} title="5 — rewind to the first traveller leaving the Blue Jays game">
-              Egress
+          {landmarkShortcuts(ready).map((landmark, i) => (
+            <button key={landmark.id} onClick={() => flyLandmark(ready, landmark.kind)} title={`${i + 2} — ${landmark.name}`}>
+              {landmark.name.split(' / ')[0]}
             </button>
-          )}
+          ))}
         </div>
       )}
 
@@ -128,25 +118,15 @@ export default function WorldApp() {
   )
 }
 
+function landmarkShortcuts(ws: WorldScene) {
+  return ['cn_tower', 'union_station', 'rogers_centre', 'engineering_7', 'davis_centre', 'quantum_nano']
+    .flatMap((kind) => ws.world.landmarks.filter((l) => l.kind === kind))
+    .slice(0, 3)
+}
+
 function flyLandmark(ws: WorldScene, kind: string): void {
   const l = ws.world.landmarks.find((x) => x.kind === kind)
   if (!l) return
   const h = kind === 'cn_tower' ? 200 : 10
   ws.camera.flyTo({ target: [l.x, l.z], radius: kind === 'cn_tower' ? 900 : 640, heading: ws.camera.pose.heading, elevation: kind === 'cn_tower' ? 22 : 38, y: h }, 1300, 'district')
-}
-
-/**
- * Hero scene: the crowd leaving Rogers Centre.  Camera sits outside the gates looking back at the dome, clock
- * rewound to when the recorded departs start coming thick (10th percentile), at real time.
- */
-function egress(ws: WorldScene): void {
-  const l = ws.world.landmarks.find((x) => x.kind === 'rogers_centre')
-  const t0 = ws.traffic.releaseQuantile(0.1)
-  const gate = ws.traffic.releaseCentroid()
-  if (!l || t0 === null || !gate) return
-  const heading = (Math.atan2(l.x - gate[0], l.z - gate[1]) * 180) / Math.PI
-  ws.camera.flyTo({ target: gate, radius: 300, heading, elevation: 46, y: 4 }, 1600, 'district')
-  clock.seek(Math.max(0, t0 - 3))
-  clock.setSpeed(1)
-  if (!clock.playing) clock.toggle()
 }

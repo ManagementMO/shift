@@ -3,7 +3,7 @@ import { brainColor, buildDefinitionIndex, populationSummaryAt, residentStateAt 
 import { useStore } from '../store'
 import type { MobilityMode, PopulationMetrics, ResidentRole, RunStatus } from '../types'
 import { fmt } from '../util'
-import Inspector from '../components/Inspector'
+import ResidentInspector from '../components/ResidentInspector'
 
 export function PopulationMetricsPanel({ metrics, status }: { metrics: PopulationMetrics; status?: RunStatus }) {
   const final = status === 'completed'
@@ -72,7 +72,7 @@ export default function PopulationLens() {
       {!rows.length && <div className="small dim">No residents match these filters.</div>}
     </div>
     <div className="small dim">{rows.length} of {profiles.length} residents. All remain selectable here, including co-located residents and those with no current movement sample.</div>
-    {selection ? <Inspector /> : <div className="small dim">Select a resident for persona, tasks, memories, recorded decisions, and actual framework provenance.</div>}
+    {population && selection?.kind === 'resident' ? <ResidentInspector population={population} residentId={selection.id} t={time} onSelect={id => select({ kind: 'resident', id })} onClose={() => select(null)} /> : <div className="small dim">Select a resident for persona, tasks, memories, recorded decisions, and actual framework provenance.</div>}
     {population?.artifact && <PopulationMetricsPanel metrics={population.artifact.metrics} status={rx?.bundle.run.status} />}
     {(population?.definition.assumptions ?? definition?.assumptions ?? []).length > 0 && <details className="small"><summary>Declared synthetic assumptions</summary>{(population?.definition.assumptions ?? definition?.assumptions ?? []).map((assumption, i) => <div key={i}>{assumption}</div>)}</details>}
   </div>

@@ -1,6 +1,6 @@
 // Cinematic camera presets. Every transition is an eased easeTo/flyTo; nothing jumps.
 
-export type CameraMode = 'city' | 'district' | 'corridor' | 'agent' | 'incident'
+export type CameraMode = 'city' | 'district' | 'corridor' | 'agent' | 'incident' | 'development'
 
 export type CameraPose = { center: [number, number]; zoom: number; pitch: number; bearing: number }
 
@@ -23,14 +23,40 @@ export const TORONTO_CITY: CameraPose = { center: [-79.3848, 43.6438], zoom: 15.
 const CITY_POSES: Record<string, CameraPose> = {
   toronto: TORONTO_CITY,
   waterloo: { center: [-80.5265, 43.4668], zoom: 14.4, pitch: 55, bearing: -8 },
+  waterloo_e7: { center: [-80.5395046, 43.4729528], zoom: 15.7, pitch: 42, bearing: -35 },
 }
 
 export function cityPose(packId: string, center: [number, number]): CameraPose {
   return CITY_POSES[packId] ?? { center, zoom: 14.4, pitch: 55, bearing: -10 }
 }
 
+/** One district (a destination zone or the venue): close enough to read its streets, wide enough to see its edges. */
 export function districtPose(center: [number, number], base: CameraPose): CameraPose {
-  return { center, zoom: 15.6, pitch: 60, bearing: base.bearing }
+  return { center, zoom: 16.1, pitch: 60, bearing: base.bearing }
+}
+
+/**
+ * Frame a set of points (every district centre, every corridor) so they can all be pointed at: centred on
+ * their extent, zoomed to the wider span, steep enough that the ground reads as a map.
+ */
+export function framePose(points: [number, number][], base: CameraPose): CameraPose {
+  let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity
+  for (const [lon, lat] of points) {
+    west = Math.min(west, lon)
+    east = Math.max(east, lon)
+    south = Math.min(south, lat)
+    north = Math.max(north, lat)
+  }
+  const center: [number, number] = [(west + east) / 2, (south + north) / 2]
+  const spanKm = Math.max((east - west) * Math.cos((center[1] * Math.PI) / 180), north - south) * 111
+  const zoom = Math.max(13.5, Math.min(16.5, 16.2 - Math.log2(Math.max(0.25, spanKm))))
+  return { center, zoom, pitch: 22, bearing: base.bearing }
+}
+
+/** One building and its block: the taller it is, the further back the camera sits so the whole thing fits. */
+export function buildingPose(center: [number, number], heightM: number, base: CameraPose): CameraPose {
+  const zoom = Math.max(16, Math.min(17.6, 17.6 - Math.log2(Math.max(1, heightM / 40))))
+  return { center, zoom, pitch: 62, bearing: base.bearing }
 }
 
 export function corridorPose(path: [number, number][], base: CameraPose): CameraPose {
@@ -53,6 +79,13 @@ export function agentPose(center: [number, number], heading: number | null, base
 export function incidentPose(center: [number, number], radiusM: number, base: CameraPose): CameraPose {
   const zoom = Math.max(14.5, Math.min(16.5, 17.2 - Math.log2(Math.max(60, radiusM) / 60)))
   return { center, zoom, pitch: 60, bearing: base.bearing + 25 }
+}
+
+/** Close-up on a placed building: the whole footprint and roof stay in frame, with street context around it. */
+export function developmentPose(center: [number, number], footprintM: [number, number], heightM: number, base: CameraPose): CameraPose {
+  const extent = Math.max(60, ...footprintM, heightM * 0.8)
+  const zoom = Math.max(15.5, Math.min(17.9, 18.9 - Math.log2(extent / 30)))
+  return { center, zoom, pitch: 58, bearing: base.bearing }
 }
 
 export function currentPose(map: MapCamera): CameraPose {

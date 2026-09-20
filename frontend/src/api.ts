@@ -1,8 +1,11 @@
 import type {
   CityPack,
+  CohortRecord,
   CompileInfo,
   Corridor,
   DemandSet,
+  DevelopmentPreview,
+  DevelopmentSpec,
   EntityTrack,
   EvidenceBundle,
   Health,
@@ -20,6 +23,8 @@ import type {
   ValidationReport,
 } from './types'
 import { parsePopulationArtifact, parsePopulationDefinition, parsePopulationStatus } from './populationValidation'
+
+import { investigationOptions, usePreferences } from './preferences'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -50,6 +55,12 @@ async function populationArtifact(run: SimulationRun): Promise<PopulationArtifac
   return artifact
 }
 
+async function del<T>(path: string): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`)
+  return (await r.json()) as T
+}
+
 export const api = {
   populationStatus: async () => parsePopulationStatus(await get<unknown>('/api/population/status', true)),
   createPopulation: (spec: PopulationSpec) => post<ScenarioSpec>('/api/population/scenarios', spec),
@@ -78,24 +89,36 @@ export const api = {
   cancelRun: (rid: string) => post<{ canceled: boolean }>(`/api/runs/${rid}/cancel`, {}),
   async bundle(run: SimulationRun): Promise<RunBundle> {
     const fresh = run.run_kind === 'population'
-    const [tracks, events, occupancy, stopQueue, compile, population] = await Promise.all([
+    const [tracks, events, occupancy, stopQueue, compile, population, scenario, demand, cohort] = await Promise.all([
       get<Record<string, EntityTrack>>(`/api/runs/${run.run_id}/tracks`, fresh),
       get<PersonEvent[]>(`/api/runs/${run.run_id}/events`, fresh),
       get<Record<string, [number, number][]>>(`/api/runs/${run.run_id}/occupancy`, fresh),
       get<Record<string, [number, number][]>>(`/api/runs/${run.run_id}/stop_queue`, fresh),
       get<CompileInfo>(`/api/runs/${run.run_id}/compile`, fresh).catch(() => null),
       populationArtifact(run),
+      fresh ? undefined : get<ScenarioSpec>(`/api/runs/${run.run_id}/scenario`).catch(() => get<ScenarioSpec>(`/api/scenarios/${run.scenario_id}`)),
+      fresh ? undefined : get<DemandSet>(`/api/runs/${run.run_id}/demand`).catch(() => get<DemandSet>(`/api/scenarios/${run.scenario_id}/demand`)),
+      fresh ? undefined : get<CohortRecord>(`/api/runs/${run.run_id}/cohort`),
     ])
-    return { run, tracks, events, occupancy, stopQueue, compile, population }
+    return { run, tracks, events, occupancy, stopQueue, compile, population, scenario, demand, cohort }
   },
   // prompt-to-edit
   previewEdit: (sid: string, prompt: string) =>
-    post<InterventionProposal>(`/api/scenarios/${sid}/edit/preview`, { prompt }),
+    post<InterventionProposal>(`/api/scenarios/${sid}/edit/preview`, { prompt, use_ai: usePreferences.getState().preferences.aiEnabled }),
   applyEdit: (sid: string, proposal: InterventionProposal) =>
     post<ScenarioSpec>(`/api/scenarios/${sid}/edit/apply`, proposal),
+  previewDevelopment: (sid: string, spec: DevelopmentSpec) =>
+    post<DevelopmentPreview>(`/api/scenarios/${sid}/developments/preview`, spec),
+  applyDevelopment: (sid: string, proposal: DevelopmentPreview) =>
+    post<ScenarioSpec>(`/api/scenarios/${sid}/developments/apply`, proposal),
+  // In-place edits: the scenario keeps its id; the backend hides runs of the superseded content.
+  removeDevelopment: (sid: string, developmentId: string) =>
+    del<ScenarioSpec>(`/api/scenarios/${sid}/developments/${encodeURIComponent(developmentId)}`),
+  demolishBuilding: (sid: string, buildingId: string) =>
+    post<ScenarioSpec>(`/api/scenarios/${sid}/demolitions`, { building_id: buildingId }),
   // agents
   investigate: (sid: string, problem: string, constraint: string) =>
-    post<Investigation>(`/api/scenarios/${sid}/investigate`, { problem, constraint }),
+    post<Investigation>(`/api/scenarios/${sid}/investigate`, { problem, constraint, options: investigationOptions(usePreferences.getState().preferences) }),
   investigation: (id: string) => get<Investigation>(`/api/investigations/${id}`),
   // evidence
   evidence: (bid: string) => get<EvidenceBundle>(`/api/evidence/${bid}`),

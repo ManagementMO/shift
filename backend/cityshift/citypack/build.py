@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -22,7 +23,7 @@ import sumolib
 
 from cityshift.contracts import CityPack, DestinationZone, StopCandidate
 
-PACK_ROOT = Path(__file__).resolve().parents[3] / "var" / "citypacks"
+PACK_ROOT = Path(os.environ.get("CITYSHIFT_PACK_ROOT") or Path(__file__).resolve().parents[3] / "var" / "citypacks").expanduser().resolve()
 
 
 def _fingerprint(path: Path) -> str:
@@ -249,7 +250,34 @@ TORONTO = CityConfig(
     lake_relations=(1206310,),  # Lake Ontario
 )
 
-CITIES: dict[str, CityConfig] = {c.pack_id: c for c in (WATERLOO, TORONTO)}
+WATERLOO_E7 = CityConfig(
+    pack_id="waterloo_e7",
+    name="Waterloo · E7, ON (University of Waterloo / Engineering) — OpenStreetMap",
+    osm_bbox=(-80.5550, 43.4650, -80.5250, 43.4830),
+    center=(-80.5395046, 43.4729528),
+    venue_lonlat=(-80.5395046, 43.4729528),
+    venue_name="Engineering 7 (E7) / Pearl Sullivan Engineering Building",
+    zones=(
+        ZoneSpec("Z_UW_TRANSIT", "University of Waterloo Station / Transit Plaza", 0.35, anchor_lonlat=(-80.5404298, 43.4740482)),
+        ZoneSpec("Z_VILLAGE", "Village 1 / Columbia", 0.20, anchor_lonlat=(-80.5510484, 43.4731675)),
+        ZoneSpec("Z_WLU", "Wilfrid Laurier / University Ave", 0.20, anchor_lonlat=(-80.5274582, 43.4751553)),
+        ZoneSpec("Z_SOUTH_CAMPUS", "South campus / Environment 3", 0.15, anchor_lonlat=(-80.5435900, 43.4678112)),
+        ZoneSpec("Z_PHILLIP", "Phillip / Columbia", 0.10, anchor_lonlat=(-80.5394934, 43.4765035)),
+    ),
+    corridors=(
+        CorridorSpec("phillip_campus", "Phillip St, University Ave → Columbia St", "Phillip Street", (43.4715, 43.4773), (-80.5405, -80.5353)),
+        CorridorSpec("university_campus", "University Ave W, campus frontage", "University Avenue West", (43.4670, 43.4740), (-80.5460, -80.5335)),
+        CorridorSpec("columbia_campus", "Columbia St W, Village 1 → Phillip", "Columbia Street West", (43.4715, 43.4785), (-80.5530, -80.5385)),
+    ),
+    flagship_closure="phillip_campus",
+    transit_agency="GRT/ION",
+    limitations=(
+        "E7 is mapped as Pearl Sullivan Engineering Building (PSE) in OpenStreetMap.",
+        "Building heights use OSM levels/defaults; facade materials are procedural, not surveyed or photographic.",
+    ),
+)
+
+CITIES: dict[str, CityConfig] = {c.pack_id: c for c in (WATERLOO, TORONTO, WATERLOO_E7)}
 
 
 def _nearest_stop(stops: list[StopCandidate], lonlat: tuple[float, float]) -> StopCandidate:

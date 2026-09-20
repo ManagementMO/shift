@@ -77,12 +77,15 @@ def stops_by_id(pack: CityPack) -> dict[str, StopCandidate]:
     return {s.stop_id: s for s in pack.stops}
 
 
-def zone_for_stop(pack: CityPack, stop: StopCandidate) -> str | None:
+def zone_for_stop(pack: CityPack, stop: StopCandidate, scenario: ScenarioSpec | None = None) -> str | None:
     best, bestd = None, ZONE_STOP_RADIUS_M
-    for z in pack.zones:
-        d = _dist_m((stop.lon, stop.lat), (z.lon, z.lat))
+    destinations = [(z.zone_id, (z.lon, z.lat)) for z in pack.zones]
+    if scenario:
+        destinations.extend((d.development_id, d.spec.position) for d in scenario.developments)
+    for zone_id, position in destinations:
+        d = _dist_m((stop.lon, stop.lat), position)
         if d < bestd:
-            best, bestd = z.zone_id, d
+            best, bestd = zone_id, d
     return best
 
 
@@ -213,9 +216,8 @@ def compile_scenario(
     zone_service: dict[str, list[tuple[DutySchedule, str]]] = {}  # zone -> [(schedule, alight stop id)]
     for s in schedules:
         for sid in s.duty.stop_sequence[1:]:
-            z = zone_for_stop(pack, stops[sid])
-            if z:
-                zone_service.setdefault(z, []).append((s, sid))
+            zone_service.setdefault(zone_for_stop(pack, stops[sid], scenario) or sid, []).append((s, sid))
+    stop_service = [pair for entries in zone_service.values() for pair in entries]
     persons: list[PersonTrip] = []
     cars: list[CarTrip] = []
     cohort_ids: list[str] = []
@@ -223,21 +225,35 @@ def compile_scenario(
     cohort_vehicles: dict[str, str] = {}
     unroutable: dict[str, str] = {}
     mode: dict[str, str] = {}
-    walk_cache: dict[tuple[str, str, str, str], float | None] = {}
+    walk_cache: dict[tuple[str, str], float | None] = {}
+    car_edges: dict[str, str | None] = {}
+    car_paths: dict[tuple[str, str], bool] = {}
+    service_cache: dict[tuple[str, str, int], list[tuple[DutySchedule, str, str, float]]] = {}
     window_end = scenario.constraints.service_window_s[1]
+
+    def walking(a: str, b: str) -> float | None:
+        key = (a, b)
+        if key not in walk_cache:
+            walk_cache[key] = walk_distance_m(pack.pack_id, a, b)
+        return walk_cache[key]
+
     for tr in demand.travelers:
         cohort_ids.append(tr.person_id)
         desired[tr.person_id] = tr.depart_s
         if tr.has_car:
-            origin_car_edge = _nearest_allowed_edge_to_edge(net, tr.origin_edge, "passenger")
-            dest_car_edge = _nearest_allowed_edge_to_edge(net, tr.dest_edge, "passenger")
+            for eid in (tr.origin_edge, tr.dest_edge):
+                if eid not in car_edges:
+                    car_edges[eid] = _nearest_allowed_edge_to_edge(net, eid, "passenger")
+            origin_car_edge, dest_car_edge = car_edges[tr.origin_edge], car_edges[tr.dest_edge]
             if origin_car_edge is None or dest_car_edge is None:
                 unroutable[tr.person_id] = "no drivable edge near origin or destination"
                 mode[tr.person_id] = "unroutable"
                 continue
-            path, _ = net.getShortestPath(net.getEdge(origin_car_edge), net.getEdge(dest_car_edge), vClass="passenger")
-            if path is None:
-                unroutable[tr.person_id] = "no passenger path from origin to destination"
+            od = (origin_car_edge, dest_car_edge)
+            if od not in car_paths:
+                car_paths[od] = net.getShortestPath(net.getEdge(od[0]), net.getEdge(od[1]), vClass="passenger")[0] is not None
+            if not car_paths[od]:
+                unroutable[tr.person_id] = "no passenger route from origin to destination"
                 mode[tr.person_id] = "unroutable"
                 continue
             vid = f"car_{tr.person_id}"
@@ -249,18 +265,25 @@ def compile_scenario(
             unroutable[tr.person_id] = "no pedestrian access at origin or destination"
             mode[tr.person_id] = "unroutable"
             continue
-        served = [(s, sid) for s, sid in zone_service.get(tr.dest_zone, []) if s.duty.depart_s + 1800 >= tr.depart_s and s.duty.depart_s <= window_end]
+        service_key = (tr.origin_edge, tr.dest_edge, tr.walk_limit_m)
+        if service_key not in service_cache:
+            options = []
+            for s, alight in stop_service:
+                pickup = s.duty.stop_sequence[0]
+                access = walking(tr.origin_edge, stops[pickup].edge_id)
+                egress = walking(stops[alight].edge_id, tr.dest_edge)
+                if access is not None and egress is not None and access + egress <= tr.walk_limit_m:
+                    options.append((s, pickup, alight, access))
+            service_cache[service_key] = sorted(options, key=lambda x: (x[0].duty.depart_s, x[3], x[1], x[2]))
+        served = [(s, pickup, alight) for s, pickup, alight, access in service_cache[service_key]
+                  if tr.depart_s + math.ceil(access / WALK_SPEED_MPS) <= s.duty.depart_s <= window_end]
         if served:
-            pickup = served[0][0].duty.stop_sequence[0]
-            lines = sorted({s.line for s, _ in served})
-            alight = served[0][1]
+            _, pickup, alight = served[0]
+            lines = sorted({s.line for s, board, drop in served if board == pickup and drop == alight})
             persons.append(PersonTrip(tr.person_id, tr.origin_edge, pickup, alight, tr.dest_edge, tr.depart_s, lines=" ".join(lines)))
             mode[tr.person_id] = "ride"
             continue
-        key = (pack.network_fingerprint, tr.origin_edge, tr.dest_edge, "pedestrian")
-        if key not in walk_cache:
-            walk_cache[key] = walk_distance_m(pack.pack_id, tr.origin_edge, tr.dest_edge)
-        dist = walk_cache[key]
+        dist = walking(tr.origin_edge, tr.dest_edge)
         if dist is None:
             unroutable[tr.person_id] = "no pedestrian path to destination"
             mode[tr.person_id] = "unroutable"
@@ -317,18 +340,17 @@ def _lane_of(stops: dict[str, StopCandidate], edge_id: str) -> int | None:
     return None
 
 
-def _nearest_allowed(net, lonlat: tuple[float, float], vclass: str, radius: float = 400.0) -> str:
+def _nearest_allowed(net, lonlat: tuple[float, float], vclass: str, radius: float = 400.0) -> str | None:
     x, y = net.convertLonLat2XY(*lonlat)
     cands = [(d, e) for e, d in net.getNeighboringEdges(x, y, radius) if e.allows(vclass) and not e.isSpecial()]
-    cands.sort(key=lambda t: t[0])
-    return cands[0][1].getID()
+    cands.sort(key=lambda t: (t[0], t[1].getID()))
+    return cands[0][1].getID() if cands else None
 
 
 def _nearest_allowed_edge_to_edge(net, edge_id: str, vclass: str) -> str | None:
-    try:
-        e = net.getEdge(edge_id)
-    except KeyError:
+    if not net.hasEdge(edge_id):
         return None
+    e = net.getEdge(edge_id)
     if e.isSpecial():
         return None
     if e.allows(vclass):
@@ -388,11 +410,64 @@ def zone_anchor_stop(pack: CityPack, zone_id: str) -> str:
     return stops[0].stop_id
 
 
-def heuristic_plans(pack: CityPack, scenario: ScenarioSpec, demand: DemandSet) -> list[ServicePlan]:
-    fleet = [f.vehicle_id for f in scenario.constraints.fleet]
-    if len(fleet) < 2:
+def origin_destination_plans(pack: CityPack, scenario: ScenarioSpec, demand: DemandSet) -> list[ServicePlan]:
+    allowed = set(scenario.constraints.allowed_stop_ids)
+    stops = [s for s in pack.stops if s.allowed and (not allowed or s.stop_id in allowed)]
+    anchors: dict[tuple[str, bool], tuple[str, float] | None] = {}
+
+    def anchor(edge_id: str, origin: bool) -> tuple[str, float] | None:
+        key = (edge_id, origin)
+        if key not in anchors:
+            distances = []
+            for stop in stops:
+                a, b = (edge_id, stop.edge_id) if origin else (stop.edge_id, edge_id)
+                distance = walk_distance_m(pack.pack_id, a, b)
+                if distance is not None:
+                    distances.append((distance, stop.stop_id))
+            nearest = min(distances) if distances else None
+            anchors[key] = (nearest[1], nearest[0]) if nearest else None
+        return anchors[key]
+
+    counts: dict[tuple[str, str], int] = {}
+    ready: dict[tuple[str, str], int] = {}
+    for traveler in demand.travelers:
+        if traveler.has_car:
+            continue
+        pickup, drop = anchor(traveler.origin_edge, True), anchor(traveler.dest_edge, False)
+        if not pickup or not drop or pickup[0] == drop[0] or pickup[1] + drop[1] > traveler.walk_limit_m:
+            continue
+        pair = (pickup[0], drop[0])
+        counts[pair] = counts.get(pair, 0) + 1
+        arrival = traveler.depart_s + math.ceil(pickup[1] / WALK_SPEED_MPS)
+        ready[pair] = min(ready.get(pair, arrival), arrival)
+    pairs = sorted(counts, key=lambda pair: (-counts[pair], pair))
+    duties = []
+    served_pairs = []
+    for vehicle, pair in zip(scenario.constraints.fleet, pairs):
+        first = max(scenario.constraints.service_window_s[0], vehicle.available_from_s, ready[pair] + 60)
+        cycles = make_cycles(pack, scenario, vehicle.vehicle_id, pair[0], [pair[1]], first, f"{vehicle.vehicle_id}-od-")
+        if cycles:
+            duties.extend(cycles)
+            served_pairs.append(f"{pair[0]} → {pair[1]} ({counts[pair]} eligible no-car trips)")
+    if not duties:
         return []
-    pickup = venue_stop_candidates(pack)[0].stop_id
+    return [ServicePlan(
+        plan_id="od-direct", name="Shuttles: busiest origin/destination pairs", family="heuristic",
+        duties=duties, authored_by="heuristic", rationale="; ".join(served_pairs),
+        assumptions=["Ranked by declared trips with connected walking access, not venue-only zones.",
+                     "A separate service response: run it against the no-extra-service baseline; capacity and timing are measured in SUMO."],
+    )]
+
+
+def heuristic_plans(pack: CityPack, scenario: ScenarioSpec, demand: DemandSet) -> list[ServicePlan]:
+    zone_ids = {z.zone_id for z in pack.zones}
+    if scenario.developments or any(t.origin_edge != pack.venue_edge_id or t.dest_zone not in zone_ids for t in demand.travelers):
+        return origin_destination_plans(pack, scenario, demand)
+    fleet = [f.vehicle_id for f in scenario.constraints.fleet]
+    pickups = venue_stop_candidates(pack)
+    if len(fleet) < 2 or not pickups:
+        return []
+    pickup = pickups[0].stop_id
     start = scenario.constraints.service_window_s[0]
     # demand by zone (declared), used only to order zones for heuristics
     counts: dict[str, int] = {}

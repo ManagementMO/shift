@@ -21,6 +21,8 @@ function fetchReplay(population = true) {
     if (url === '/api/population/status') return Response.json(populationStatus())
     if (url === '/api/population/scenarios/population') return Response.json(data.population!.definition)
     if (url.startsWith('/api/runs?')) return Response.json([data.run])
+    if (url.endsWith('/scenario')) return Response.json(scenario(population))
+    if (url.endsWith('/cohort')) return Response.json({ cohort: [], desired_depart: {}, arrived: {} })
     if (url.endsWith('/tracks')) return Response.json(data.tracks)
     if (url.endsWith('/events')) return Response.json(data.events)
     if (url.endsWith('/occupancy') || url.endsWith('/stop_queue')) return Response.json({})
@@ -69,7 +71,7 @@ function lifecycleServer(status: RunStatus = 'running') {
   const data = bundle(artifact)
   data.run = record
   const cached = buildIndex(data)
-  useStore.setState({ scenarioId: 'scenario', populationDefinition: artifact.definition, runs: [record], replays: { [record.run_id]: cached }, primaryRunId: record.run_id, selection: { kind: 'resident', id: 'r1' } })
+  useStore.setState({ populationActive: true, scenarioId: 'scenario', populationDefinition: artifact.definition, runs: [record], replays: { [record.run_id]: cached }, primaryRunId: record.run_id, selection: { kind: 'resident', id: 'r1' } })
   clock.setHorizon(60)
   clock.seek(12)
   vi.stubGlobal('fetch', fetcher)
