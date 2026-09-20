@@ -13,13 +13,15 @@ export interface DisplaySettings {
 export const useDisplay = create<DisplaySettings & { set: (patch: Partial<DisplaySettings>) => void }>((set) => ({
   shadows: true,
   textures: true,
-  sharp: false,
+  sharp: true,
   projection: 'perspective',
   lighting: 'afternoon',
   swarmScale: 1,
   set: (patch) => set(patch),
 }))
 
-export function renderScale(dpr: number, sharp: boolean): number {
-  return 1 / Math.min(Math.max(1, dpr || 1), sharp ? 2 : 1.5)
+export function renderScale(dpr: number, sharp: boolean, width = 0, height = 0): number {
+  const desired = sharp ? 2 : Math.min(Math.max(1, dpr || 1), 1.5)
+  const budget = width > 0 && height > 0 ? Math.max(1, Math.sqrt(8_294_400 / (width * height))) : desired
+  return 1 / Math.min(desired, budget)
 }

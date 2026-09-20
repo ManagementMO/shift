@@ -7,6 +7,7 @@ import { cameraTo, leadMap } from '../world/registry'
 import { edgePath } from '../util'
 import DevelopmentTool from './DevelopmentTool'
 import LivePreviewCard from './LivePreviewCard'
+import PopulationPanel from './PopulationPanel'
 
 const TITLES: Record<ToolId, string> = {
   area: 'Area select',
@@ -14,6 +15,7 @@ const TITLES: Record<ToolId, string> = {
   development: 'New development',
   population: 'Population',
   temperature: 'Temperature',
+  residents: 'AI residents',
 }
 
 export default function ToolPanel() {
@@ -33,7 +35,8 @@ export default function ToolPanel() {
       {tool === 'development' && <DevelopmentTool />}
       {tool === 'population' && <PopulationTool />}
       {tool === 'temperature' && <TemperatureTool />}
-      {tool !== 'development' && tool !== 'closure' && <LivePreviewCard onApplied={() => useStore.getState().setGhost(null)} />}
+      {tool === 'residents' && <PopulationPanel />}
+      {tool !== 'development' && tool !== 'closure' && tool !== 'residents' && <LivePreviewCard onApplied={() => useStore.getState().setGhost(null)} />}
     </aside>
   )
 }

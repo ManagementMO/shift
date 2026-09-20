@@ -79,9 +79,11 @@ const eventDefinitions: Record<GodEventKind, EventDefinition> = {
   development: { label: 'New Development', description: 'Place a building that adds real trips', alert: 'New Development' },
   orbital: { label: 'Orbital Strike', description: 'High-impact scenario', alert: 'High-Impact Event' },
   tornado: { label: 'Tornado', description: 'Extreme weather event', alert: 'Severe Weather Event' },
+  rain: { label: 'Heavy Rain', description: 'A downpour over one part of the city', alert: 'Weather Event' },
+  storm: { label: 'Storm', description: 'Lightning and rain; streets inside close to traffic', alert: 'Severe Weather Event' },
   earthquake: { label: 'Earthquake', description: 'Seismic activity', alert: 'Seismic Event' },
-  flood: { label: 'Flood', description: 'Heavy rain and flooding', alert: 'Severe Weather Event' },
-  wildfire: { label: 'Wildfire', description: 'Spreading fire', alert: 'Wildfire Warning' },
+  flood: { label: 'Flood', description: 'Streets and sidewalks inside are impassable', alert: 'Severe Weather Event' },
+  wildfire: { label: 'Fire', description: 'Spreading fire; the footprint is evacuated', alert: 'Fire Warning' },
   outage: { label: 'Power Outage', description: 'Grid disruption', alert: 'Infrastructure Event' },
   riot: { label: 'Riot', description: 'Civil unrest', alert: 'Social Event' },
   transit: { label: 'Transit Disruption', description: 'Service delays', alert: 'Transit Disruption' },
@@ -95,19 +97,21 @@ const categories: {
   icon: string
   events: readonly GodEventKind[]
 }[] = [
-  { id: 'natural', label: 'Natural Disasters', description: 'Weather and natural hazards', icon: 'cloud', events: ['tornado', 'earthquake', 'flood', 'wildfire'] },
+  { id: 'natural', label: 'Natural Disasters', description: 'Weather and natural hazards', icon: 'cloud', events: ['rain', 'storm', 'flood', 'wildfire', 'tornado', 'earthquake'] },
   { id: 'infrastructure', label: 'Infrastructure', description: 'Roads, buildings, power and transit', icon: 'bolt', events: ['closure', 'development', 'outage', 'transit'] },
   { id: 'social', label: 'Social Events', description: 'Crowds and civil unrest', icon: 'people', events: ['riot'] },
   { id: 'custom', label: 'Custom Event', description: 'Tell the city what happens...', icon: 'sparkles', events: [] },
 ]
 
-const referenceEvents: readonly GodEventKind[] = ['normal', 'closure', 'development', 'tornado', 'earthquake', 'outage', 'riot', 'transit', 'flood', 'orbital']
+const referenceEvents: readonly GodEventKind[] = ['normal', 'closure', 'development', 'rain', 'storm', 'flood', 'wildfire', 'tornado', 'earthquake', 'outage', 'riot', 'transit', 'orbital']
 
 const eventIconNames: Record<GodEventKind, string> = {
   normal: 'sun',
   closure: 'route',
   development: 'building',
   tornado: 'tornado',
+  rain: 'cloud',
+  storm: 'lightning',
   earthquake: 'activity',
   flood: 'flood',
   wildfire: 'wildfire',
@@ -222,7 +226,7 @@ export function EventMenu({
         aria-pressed={selected}
         onClick={() => onSelect(kind)}
       >
-        {kind === 'normal' || kind === 'earthquake' || kind === 'outage' || kind === 'closure' || kind === 'development'
+        {kind === 'normal' || kind === 'earthquake' || kind === 'outage' || kind === 'closure' || kind === 'development' || kind === 'rain' || kind === 'storm'
           ? <GodIcon name={eventIconNames[kind]} size={36} className={`gp-event-glyph gp-event-glyph-${kind}`} />
           : <EventGlyph kind={kind} size={40} className={`gp-event-glyph gp-event-glyph-${kind}`} />}
         <span className="gp-event-row-copy"><span className="gp-event-row-title">{definition.label}</span><span className="gp-event-row-description">{definition.description}</span></span>
@@ -281,11 +285,12 @@ export function EventMenu({
 export function EventConfigPanel({ draft, onChange, onPlace, onCancel, supported, placing = false, className }: EventConfigPanelProps) {
   const id = useId()
   const definition = eventDefinitions[draft.kind]
-  const radiusMin = draft.kind === 'tornado' ? 30 : 25
-  const radiusMax = draft.kind === 'tornado' ? 240 : 5000
-  const radiusStep = draft.kind === 'tornado' ? 5 : 25
-  const durationMin = draft.kind === 'tornado' ? 100 : 15
-  const durationMax = draft.kind === 'tornado' ? 600 : 1800
+  const live = draft.kind === 'rain' || draft.kind === 'storm' || draft.kind === 'flood' || draft.kind === 'wildfire'
+  const radiusMin = draft.kind === 'tornado' ? 30 : live ? 40 : 25
+  const radiusMax = draft.kind === 'tornado' ? 240 : live ? 600 : 5000
+  const radiusStep = draft.kind === 'tornado' ? 5 : live ? 10 : 25
+  const durationMin = draft.kind === 'tornado' ? 100 : live ? 60 : 15
+  const durationMax = draft.kind === 'tornado' ? 600 : live ? 1800 : 1800
 
   function changeNumber(key: 'radiusM' | 'durationS', value: number) {
     if (Number.isFinite(value) && value > 0) onChange({ [key]: value })
@@ -302,7 +307,7 @@ export function EventConfigPanel({ draft, onChange, onPlace, onCancel, supported
       onWheel={(event) => event.stopPropagation()}
     >
       <header className="gp-event-config-heading">
-        <EventGlyph kind={draft.kind} size={38} className={`gp-event-glyph gp-event-glyph-${draft.kind}`} />
+        {draft.kind === 'rain' || draft.kind === 'storm' ? <GodIcon name={eventIconNames[draft.kind]} size={36} className={`gp-event-glyph gp-event-glyph-${draft.kind}`} /> : <EventGlyph kind={draft.kind} size={38} className={`gp-event-glyph gp-event-glyph-${draft.kind}`} />}
         <div><h2 id={`${id}-title`}>{definition.label}</h2><p>{definition.description}</p></div>
         <GlassIconButton icon="close" label="Cancel event" size={22} className="gp-event-close" autoFocus onClick={onCancel} />
       </header>

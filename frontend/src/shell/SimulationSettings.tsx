@@ -88,7 +88,7 @@ export function SettingsPanel({ city = false, showCityAppearance = true, appeara
         <div className="settings-row"><label htmlFor={`${titleId}-swarm`}>Swarm size</label><select id={`${titleId}-swarm`} value={display.swarmScale} onChange={(e) => display.set({ swarmScale: Number(e.target.value) })}>{SWARM_SCALES.map((s) => <option key={s.value} value={s.value}>{s.label} · {s.value}×</option>)}</select></div>
         <label className="settings-check"><span>City shadows</span><input type="checkbox" checked={display.shadows} onChange={(e) => display.set({ shadows: e.target.checked })} /></label>
         <label className="settings-check"><span>City textures</span><input type="checkbox" checked={display.textures} onChange={(e) => display.set({ textures: e.target.checked })} /></label>
-        <label className="settings-check"><span>City high resolution</span><input type="checkbox" checked={display.sharp} onChange={(e) => display.set({ sharp: e.target.checked })} /></label></>}
+        <label className="settings-check"><span>HD rendering · up to 4K</span><input type="checkbox" checked={display.sharp} onChange={(e) => display.set({ sharp: e.target.checked })} /></label></>}
       </details>}
       <footer><p>Saved on this browser. Applies to new investigations and edit requests; running jobs are unchanged.</p><div><button onClick={reset}>Reset preferences</button></div></footer>
     </aside>

@@ -63,7 +63,7 @@ try {
     const w = window.__cityshift.babylon
     const root = w.scene.getTransformNodeByName('plane-flyover')
     const V = root.position.constructor
-    const viewport = w.camera.cam.viewport.toGlobal(w.engine.getRenderWidth(), w.engine.getRenderHeight())
+    const viewport = w.camera.cam.viewport.toGlobal(w.canvas.clientWidth, w.canvas.clientHeight)
     const meshes = w.scene.meshes.filter(m => m.name.startsWith('plane-'))
     const points = []
     for (const mesh of meshes) {

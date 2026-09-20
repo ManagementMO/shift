@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import tempfile
 import threading
 from pathlib import Path
 from typing import TypeVar
@@ -14,6 +16,7 @@ from cityshift.contracts import (
     DemandSet,
     EvidenceBundle,
     Investigation,
+    PopulationDefinition,
     ScenarioSpec,
     ServicePlan,
     SimulationRun,
@@ -38,7 +41,7 @@ class Store:
     def __init__(self, root: Path = STORE_ROOT):
         self.root = root
         self.lock = threading.RLock()
-        for sub in ("scenarios", "demand", "plans", "validations", "runs", "evidence", "investigations"):
+        for sub in ("scenarios", "demand", "plans", "validations", "runs", "evidence", "investigations", "populations"):
             (root / sub).mkdir(parents=True, exist_ok=True)
 
     def ping(self) -> bool:
@@ -49,7 +52,17 @@ class Store:
 
     def _write(self, sub: str, key: str, obj: BaseModel) -> None:
         with self.lock:
-            (self.root / sub / f"{key}.json").write_text(obj.model_dump_json(indent=1))
+            target = self.root / sub / f"{key}.json"
+            with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, prefix=".write-", suffix=".tmp",
+                                             encoding="utf-8", delete=False) as stream:
+                temporary = Path(stream.name)
+                try:
+                    stream.write(obj.model_dump_json(indent=1))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                    os.replace(temporary, target)
+                finally:
+                    temporary.unlink(missing_ok=True)
 
     def _read(self, sub: str, key: str, cls: type[T]) -> T | None:
         p = self.root / sub / f"{key}.json"
@@ -152,6 +165,28 @@ class Store:
         if sid:
             runs = [r for r in runs if r.scenario_id == sid]
         return sorted(runs, key=lambda r: r.created_at)
+
+    def put_population(self, population: PopulationDefinition) -> None:
+        self._population_key(population.population_id)
+        with self.lock:
+            existing = self.get_population(population.population_id)
+            if existing is not None:
+                if existing != population:
+                    raise ValueError("population definitions are immutable")
+                return
+            self._write("populations", population.population_id, population)
+
+    def get_population(self, population_id: str) -> PopulationDefinition | None:
+        self._population_key(population_id)
+        return self._read("populations", population_id, PopulationDefinition)
+
+    def list_populations(self) -> list[PopulationDefinition]:
+        return self._list("populations", PopulationDefinition)
+
+    @staticmethod
+    def _population_key(value: str) -> None:
+        if re.fullmatch(r"[a-zA-Z0-9_-]{1,160}", value) is None:
+            raise ValueError("invalid population identifier")
 
 
 def storage_backend() -> str:

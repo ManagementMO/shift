@@ -21,6 +21,7 @@ function rx(): ReplayIndex {
   })
   return {
     bundle: { events: [] } as unknown as ReplayIndex['bundle'],
+    population: null,
     tracks: { p1: track('p1', 7), p2: track('p2', 55), p3: track('p3', 60) },
     personEvents: { p2: [ev(55, 'p2', 'depart')], p1: [ev(7, 'p1', 'depart'), ev(900, 'p1', 'arrive')], p3: [ev(60, 'p3', 'arrive')] },
     occupancy: {},

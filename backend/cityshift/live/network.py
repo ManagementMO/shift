@@ -205,7 +205,9 @@ class LiveNetwork:
         return {"closed_edges": len(self.closed_edges), "rerouted": self.rerouted}
 
     def apply_incident(self, event: SwarmEvent, t: int) -> None:
-        self.closures.append(Closure(frozenset(event.edge_ids), event.end_s, frozenset(event.blocks), False, event.event_id))
+        # a hazard that blocks nothing (heavy rain) is witnessed and talked about but never touches lane permissions
+        if event.blocks:
+            self.closures.append(Closure(frozenset(event.edge_ids), event.end_s, frozenset(event.blocks), False, event.event_id))
         self.expire(t)
 
     def expire(self, t: int) -> None:

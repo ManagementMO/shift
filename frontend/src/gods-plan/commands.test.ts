@@ -16,6 +16,16 @@ describe('local city commands', () => {
     expect(cityCommand(text, false)).not.toBe('plane')
   })
 
+  it.each([
+    ['storm', 'storm'], ['lightning', 'storm'], ['thunder', 'storm'],
+    ['rain', 'rain'], ['downpour', 'rain'], ['flood', 'flood'],
+    ['fire', 'wildfire'], ['blaze', 'wildfire'],
+  ])('preserves the live event command %s', (text, action) => {
+    expect(cityCommand(text, true)).toBe(action)
+    expect(cityCommand(text, false)).toBe(action)
+    expect(cityCommand(`a plane above the ${text}`, true)).toBe('plane')
+  })
+
   it('preserves the existing tools and agent demo lock', () => {
     expect(cityCommand('a tornado', true)).toBe('tornado')
     expect(cityCommand('cold weather', true)).toBe('temperature')

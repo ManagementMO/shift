@@ -7,7 +7,9 @@ import type { CityPack, Corridor } from '../types'
 import { GlassIconButton, GlassSurface } from './ui'
 import { GodIcon } from './icons'
 
-export type LogSource = 'Roads' | 'Transit' | 'Planning' | 'People' | 'Weather' | 'Emergency' | 'City Hall'
+export type LogSource = 'Roads' | 'Transit' | 'Planning' | 'People' | 'Weather' | 'Emergency' | 'City Hall' | 'City News' | 'Alert Ready'
+/** breaking: a newsroom bulletin; alert: a public-safety alert. Plain notices have no kind. */
+export type LogKind = 'breaking' | 'alert'
 
 export interface LogEntry {
   id: string
@@ -16,11 +18,13 @@ export interface LogEntry {
   source: LogSource
   title: string
   body: string
+  kind?: LogKind
   /** a visual-only event (not measured by SUMO) */
   visual?: boolean
 }
 
-const ICONS: Record<LogSource, string> = { Roads: 'route', Transit: 'bus', Planning: 'building', People: 'users', Weather: 'cloud', Emergency: 'warning', 'City Hall': 'globe' }
+const ICONS: Record<LogSource, string> = { Roads: 'route', Transit: 'bus', Planning: 'building', People: 'users', Weather: 'cloud', Emergency: 'warning', 'City Hall': 'globe', 'City News': 'activity', 'Alert Ready': 'shield' }
+const KIND_LABEL: Record<LogKind, string> = { breaking: 'Breaking', alert: 'Safety alert' }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`
 
@@ -52,6 +56,27 @@ export function baselineAnnouncements(session: LiveSession | null, pack: CityPac
   ]
 }
 
+/**
+ * Hard-coded bulletins that break as the evening unfolds, whatever the user does: the opening rush, a safety alert
+ * for the crowds, transit and traffic updates. Each appears once the city reaches its time.
+ */
+export function scheduledAnnouncements(session: LiveSession | null, pack: CityPack | null): LogEntry[] {
+  const config = session?.config
+  const people = config?.initial_population ?? 600
+  const buses = config?.fleet_size ?? 2
+  const city = pack?.name.split(',')[0] ?? 'the city'
+  const zones = pack?.zones.map((z) => z.name) ?? []
+  const destinations = zones.length >= 2 ? `${zones.slice(0, -1).join(', ')} and ${zones.at(-1)}` : zones[0] ?? 'the surrounding districts'
+  return [
+    { id: 'sched-rush', at: 90, source: 'City News', kind: 'breaking', title: `${plural(people, 'person', 'people')} leave the venue at once`, body: `The event has let out. Reporters on Front St W describe sidewalks shoulder to shoulder and cars queuing out of the parking decks. Everyone is heading for ${destinations}.` },
+    { id: 'sched-pedestrians', at: 240, source: 'Alert Ready', kind: 'alert', title: 'Heavy pedestrian traffic downtown', body: 'Large crowds are on foot around the venue for the next half hour. Drivers: slow down and expect people in the roadway at crossings. Walkers: stay on the sidewalks and keep moving.' },
+    { id: 'sched-transit', at: 600, source: 'Transit', title: buses ? 'First shuttles fill within minutes' : 'No shuttles running tonight', body: buses ? `${plural(buses, 'shuttle bus', 'shuttle buses')} are working the venue stops with 60 seats each. Queues are forming; those who can are walking.` : 'The fleet is idle. Tonight the crowd is walking and driving.' },
+    { id: 'sched-traffic', at: 1200, source: 'City News', kind: 'breaking', title: 'Downtown traffic slow to clear', body: 'Twenty minutes in, the first arrivals are reaching their districts while the streets nearest the venue are still the slowest in the city. Police are waving cars through the busiest crossings.' },
+    { id: 'sched-services', at: 1800, source: 'City Hall', title: 'Half-hour check-in', body: `${city} services report no incidents beyond the ones announced here. Streets, sidewalks and the shuttle loop are operating as described above.` },
+    { id: 'sched-late', at: 2700, source: 'City News', kind: 'breaking', title: 'Most of the crowd is home', body: 'The bulk of the evening crowd has reached its destination. Stragglers are still walking in from the venue; the last shuttle runs continue until the simulation horizon.' },
+  ]
+}
+
 /** One announcement per live change in the running city, in the voice of the department that would issue it. */
 export function announcementFor(change: Intervention, at: number, id: string, session: LiveSession, pack: CityPack | null, corridors: Record<string, Corridor>): LogEntry | null {
   const zone = (zid?: string | null) => pack?.zones.find((z) => z.zone_id === zid)?.name ?? zid ?? 'downtown'
@@ -80,7 +105,9 @@ export function announcementFor(change: Intervention, at: number, id: string, se
       return { id, at, source: 'Transit', title: `${change.bus_id.replace('_', ' ')} assigned to a shuttle route`, body: `Serving ${plural(change.stop_ids.length, 'stop')} on a repeating loop. 60 seats.` }
     case 'incident': {
       const hazard = HAZARDS.find((h) => h.id === change.hazard)
-      return { id, at, source: 'Emergency', title: `${change.label ?? hazard?.label ?? change.hazard} declared`, body: `${change.radius_m} m footprint. ${hazard?.detail ?? ''} Only people within the warning radius see it; everyone else hears it from a neighbour.` }
+      const name = change.label ?? hazard?.label ?? change.hazard
+      if (change.hazard === 'rain') return { id, at, source: 'Weather', title: `${name} over downtown`, body: `A downpour ${change.radius_m} m across. Streets stay open; people caught in it will tell their neighbours.` }
+      return { id, at, source: 'Alert Ready', kind: 'alert', title: `${name} declared`, body: `Avoid the area within ${change.radius_m} m. ${hazard?.detail ?? ''} Only people within the warning radius see it; everyone else hears it from a neighbour.` }
     }
     default:
       return null
@@ -91,7 +118,18 @@ export function visualAnnouncement(event: VisualCityEvent): LogEntry {
   return { id: `visual-${event.id}`, at: event.track.start_s, source: 'Weather', title: `Tornado sighted near ${event.area}`, body: `${event.intensity[0].toUpperCase()}${event.intensity.slice(1)} intensity, ${Math.round(event.track.radius_m)} m across, tracking through until ${simClock(event.track.end_s)}. Visual event: it does not change measured journeys.`, visual: true }
 }
 
-/** Everything announced so far, newest first: live changes, visual events, then the standing baseline. */
+/** A minute after an incident, the newsroom reports how far word of it has spread (measured by the swarm layer). */
+export function spreadBulletins(session: LiveSession | null, t: number): LogEntry[] {
+  const out: LogEntry[] = []
+  for (const event of session?.metrics?.swarm?.events ?? []) {
+    const at = event.start_s + 60
+    if (at > t || event.aware <= 0) continue
+    out.push({ id: `spread-${event.event_id}`, at, source: 'City News', kind: 'breaking', title: `Word of the ${event.label.toLowerCase()} is spreading`, body: `${plural(event.aware, 'resident')} know about it so far: some saw it, the rest heard from someone nearby. ${event.ended ? 'It has since ended.' : 'It is still under way.'}` })
+  }
+  return out
+}
+
+/** Everything announced so far, newest first: live changes, bulletins, visual events, then the standing baseline. */
 export function cityLog(session: LiveSession | null, pack: CityPack | null, corridors: Record<string, Corridor>, visuals: VisualCityEvent[], t: number): LogEntry[] {
   const entries: LogEntry[] = []
   if (session) for (const command of session.commands) {
@@ -99,6 +137,8 @@ export function cityLog(session: LiveSession | null, pack: CityPack | null, corr
     const entry = announcementFor(command.intervention, command.at_s, command.command_id, session, pack, corridors)
     if (entry) entries.push(entry)
   }
+  entries.push(...spreadBulletins(session, t))
+  entries.push(...scheduledAnnouncements(session, pack).filter((e) => e.at <= t))
   for (const event of visuals) if (event.track.start_s <= t) entries.push(visualAnnouncement(event))
   entries.sort((a, b) => b.at - a.at)
   return [...entries, ...baselineAnnouncements(session, pack)]
@@ -113,10 +153,10 @@ export default function CityLogPanel({ session, pack, corridors, visuals, time, 
       <p className="gp-panel-subtitle">{live ? `${plural(live, 'announcement')} since the city opened.` : 'What residents are hearing. New announcements appear as the city changes.'}</p>
       <ol className="gp-log-list">
         {entries.map((entry) => (
-          <li key={entry.id} className={`gp-log-entry${entry.visual ? ' is-visual' : ''}`}>
+          <li key={entry.id} className={`gp-log-entry${entry.visual ? ' is-visual' : ''}${entry.kind ? ` is-${entry.kind}` : ''}`}>
             <span className={`gp-log-icon gp-log-icon-${entry.source.replace(' ', '').toLowerCase()}`}><GodIcon name={ICONS[entry.source]} size={18} /></span>
             <div className="gp-log-copy">
-              <div className="gp-log-meta"><time>{simClock(entry.at)}</time><span>{entry.source}</span>{entry.visual && <span className="gp-log-visual">visual</span>}</div>
+              <div className="gp-log-meta"><time>{simClock(entry.at)}</time><span>{entry.source}</span>{entry.kind && <span className={`gp-log-kind gp-log-kind-${entry.kind}`}>{KIND_LABEL[entry.kind]}</span>}{entry.visual && <span className="gp-log-visual">visual</span>}</div>
               <b>{entry.title}</b>
               <p>{entry.body}</p>
             </div>

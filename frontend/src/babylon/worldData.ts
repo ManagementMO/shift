@@ -10,7 +10,7 @@ import type { MassingData } from './massing'
 /** Flat [x0, z0, x1, z1, ...] */
 export type Flat = number[]
 
-export type Mode = 'bus' | 'car' | 'ped'
+export type Mode = 'bus' | 'car' | 'ped' | 'bicycle' | 'delivery' | 'truck'
 
 export interface WorldLane {
   shape: Flat

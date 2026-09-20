@@ -29,7 +29,7 @@ NETCONVERT_OPTS = [
     "--tls.guess-signals", "true",
     "--tls.default-type", "actuated",
     "--ramps.guess", "true",
-    "--keep-edges.by-vclass", "passenger,bus,pedestrian",
+    "--keep-edges.by-vclass", "passenger,bus,pedestrian,bicycle,delivery,truck",
     "--remove-edges.by-vclass", "rail,rail_urban,tram,ship,aircraft",
     "--no-turnarounds.except-deadend", "true",
     "--junctions.join", "true",
