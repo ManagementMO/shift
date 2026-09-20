@@ -1,56 +1,37 @@
 import { create } from 'zustand'
-import { api } from '../api'
-import type { ScenarioSpec, SimulationRun } from '../types'
+import { liveApi } from '../live/api'
+import type { LiveSession } from '../live/types'
 import { locationForPack, type Location } from './flight'
 
 export interface RecentItem {
-  scenario: ScenarioSpec
+  session: LiveSession
   location: Location
   title: string
-  branch: string | null
-  run: SimulationRun | null
   status: string
-  measured: boolean
-  createdAt: number
+  live: boolean
 }
 
-const RANK: Record<string, number> = { running: 0, queued: 1, completed: 2, failed: 3, canceled: 4, invalid: 5, validated: 6, draft: 7 }
-
-/** Human title for a scenario label such as "Event egress (Toronto, ON (Downtown)) during the X closure; two extra buses". */
-export function scenarioTitle(label: string): { title: string; branch: string | null } {
-  const [head, ...edits] = label.split(' · edit: ')
-  const m = head.match(/^(.*?)\s*\(.*?\)\)?\s*(during .*?)(;|$)/)
-  const title = (m ? `${m[1]} ${m[2]}` : head).replace(/\s+/g, ' ').trim()
-  const branch = edits.length ? edits[edits.length - 1].replace(/\s*\(.*?\)\s*$/, '').trim() : null
-  return { title: title || 'Scenario', branch: branch || null }
+/** Human summary of a live city: what is in it and how far it has run. */
+export function sessionSummary(session: LiveSession): { title: string; status: string; live: boolean } {
+  const people = session.counts?.total ?? session.config.initial_population
+  const changes = session.commands.length
+  const title = `${people.toLocaleString()} travelers${changes ? ` · ${changes} change${changes === 1 ? '' : 's'}` : ''}`
+  const minutes = Math.max(0, Math.floor(Math.max(session.available_until_s, 0) / 60))
+  if (session.status === 'failed') return { title, status: 'SUMO stopped', live: false }
+  if (session.status === 'completed') return { title, status: `Finished · ${minutes} min simulated`, live: false }
+  if (session.status === 'starting' || session.status === 'restoring') return { title, status: 'Starting SUMO', live: true }
+  return { title, status: `${session.status === 'running' ? 'Running' : 'Paused'} · ${minutes} min simulated`, live: true }
 }
 
-export function runSummary(run: SimulationRun | null): { status: string; measured: boolean } {
-  if (!run) return { status: 'No run yet', measured: false }
-  if (run.status === 'completed') {
-    const m = run.metrics
-    return { status: m ? `Measured · ${m.completed} of ${m.cohort_size} arrived` : 'Measured', measured: true }
-  }
-  if (run.status === 'running') return { status: `Simulating ${Math.round((run.progress ?? 0) * 100)}%`, measured: false }
-  if (run.status === 'queued') return { status: 'Queued', measured: false }
-  return { status: run.status[0].toUpperCase() + run.status.slice(1), measured: false }
-}
-
-/** Most relevant run per scenario: active work first, then the newest measured result. */
-export function latestRun(runs: SimulationRun[]): SimulationRun | null {
-  return [...runs].sort((a, b) => (RANK[a.status] ?? 9) - (RANK[b.status] ?? 9) || Date.parse(b.created_at) - Date.parse(a.created_at))[0] ?? null
-}
-
-export function recentItems(scenarios: ScenarioSpec[], runs: SimulationRun[], limit = 8): RecentItem[] {
+export function recentItems(sessions: LiveSession[], limit = 8): RecentItem[] {
   const items: RecentItem[] = []
-  for (const scenario of scenarios) {
-    const location = locationForPack(scenario.pack_id)
-    if (!location) continue
-    const run = latestRun(runs.filter((r) => r.scenario_id === scenario.scenario_id))
-    const { title, branch } = scenarioTitle(scenario.label)
-    items.push({ scenario, location, title, branch, run, ...runSummary(run), createdAt: Math.max(Date.parse(scenario.created_at) || 0, run ? Date.parse(run.created_at) || 0 : 0) })
+  for (const session of sessions) {
+    const location = locationForPack(session.pack_id)
+    if (!location || session.status === 'failed') continue
+    items.push({ session, location, ...sessionSummary(session) })
   }
-  return items.sort((a, b) => b.createdAt - a.createdAt).slice(0, limit)
+  // newest first: sessions list in creation order
+  return items.reverse().slice(0, limit)
 }
 
 interface RecentState {
@@ -70,8 +51,8 @@ export const useRecentWork = create<RecentState>((set) => ({
   async refresh() {
     const request = ++refreshRequest
     try {
-      const [scenarios, runs] = await Promise.all([api.scenarios(), api.runs()])
-      if (request === refreshRequest) set({ items: recentItems(scenarios, runs), failed: false, loadedAt: Date.now() })
+      const sessions = await liveApi.list()
+      if (request === refreshRequest) set({ items: recentItems(sessions), failed: false, loadedAt: Date.now() })
     } catch { if (request === refreshRequest) set({ failed: true }) }
   },
 }))

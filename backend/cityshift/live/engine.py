@@ -11,9 +11,11 @@ from cityshift.contracts import CityPack
 from cityshift.live.contracts import (
     HAZARDS,
     BusRouteChange,
+    DevelopmentChange,
     IncidentChange,
     Intervention,
     PopulationChange,
+    RemoveDevelopmentChange,
     RoadChange,
     SessionConfig,
     TemperatureChange,
@@ -87,6 +89,10 @@ class LiveEngine:
             return self.population.add(intervention, command_id, self.time_s)
         if isinstance(intervention, IncidentChange):
             return self.declare_incident(intervention, command_id)
+        if isinstance(intervention, DevelopmentChange):
+            return self.population.add_development(intervention, command_id, self.time_s)
+        if isinstance(intervention, RemoveDevelopmentChange):
+            return self.population.remove_development(intervention.development_id, self.time_s)
         raise ValueError("unsupported live intervention")
 
     def declare_incident(self, change: IncidentChange, command_id: str) -> dict:
@@ -105,6 +111,9 @@ class LiveEngine:
         self.population.respond(self.swarm.step(self.time_s, self.population.positions, self.population.reach), self.time_s)
         self.population.reconsider()
         return {"event_id": event.event_id, "edges": len(edges), "alarm_radius_m": event.alarm_radius_m, "ends_s": event.end_s, "witnesses": self.swarm.witnessed}
+
+    def snapshot_developments(self) -> list[dict]:
+        return self.population.snapshot_developments()
 
     def snapshot_incidents(self) -> list[dict]:
         return [

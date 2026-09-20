@@ -4,7 +4,7 @@ import { LOCATIONS, smooth, type Location } from './flight'
 import RecentWork from './RecentWork'
 import SimulationSettings from '../shell/SimulationSettings'
 import { BrandMark } from '../components/Icon'
-import type { ScenarioSpec } from '../types'
+import type { LiveSession } from '../live/types'
 import './globe.css'
 
 export type GlobePhase = 'globe' | 'preparing' | 'flight'
@@ -13,7 +13,7 @@ interface Props {
   phase: GlobePhase
   selected: Location | null
   error: string | null
-  onSelect: (place: Location, scenario?: ScenarioSpec) => void
+  onSelect: (place: Location, session?: LiveSession) => void
   onReveal: () => void
   onComplete: () => void
   onCancel: () => void
@@ -103,7 +103,7 @@ export default function Globe(props: Props) {
         {busy && <div className="orbital-flight-status" role="status" aria-live="polite"><div><span>{props.error ? 'Unable to open city' : props.phase === 'preparing' ? 'Preparing Toronto…' : `Opening ${target.name}`}</span><button onClick={props.onCancel}>Cancel</button></div><small>{props.error ?? 'Toronto prototype · From orbit to street level'}</small><progress max={1} value={props.phase === 'flight' ? progress : undefined} aria-label="Flight progress" /></div>}
       </section>
 
-      <div className="orbital-panel orbital-panel-right"><RecentWork disabled={busy} onOpen={(place, scenario) => { if (!busy) props.onSelect(place, scenario) }} /></div>
+      <div className="orbital-panel orbital-panel-right"><RecentWork disabled={busy} onOpen={(place, session) => { if (!busy) props.onSelect(place, session) }} /></div>
 
       <footer className="orbital-footer"><span>Prototype · All markers open Toronto</span><span><a href="https://github.com/mrdoob/three.js" target="_blank" rel="noreferrer">Earth imagery</a><i /><a href="https://github.com/nvkelso/natural-earth-vector" target="_blank" rel="noreferrer">Natural Earth</a></span></footer>
     </main>

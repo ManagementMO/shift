@@ -1,11 +1,12 @@
 import type { CSSProperties } from 'react'
 import { BUILDING_KIND_ORDER, BUILDING_KINDS, DEVELOPMENT_USES, developmentCounts, developmentDirection, developmentKind, validDevelopmentGeometry } from '../development'
-import { useStore } from '../store'
+import { live, useLive } from '../live/session'
+import { liveDevelopments, useStore } from '../store'
 import type { BuildingKind, Development, DevelopmentSpec } from '../types'
 import { fmt } from '../util'
 import { DeleteButton } from './DeleteButton'
+import LivePreviewCard from './LivePreviewCard'
 import { currentPose, developmentPose } from '../world/camera'
-import { clock } from '../world/playback'
 import { cameraTo, leadMap } from '../world/registry'
 
 function frameDevelopment(spec: DevelopmentSpec) {
@@ -44,14 +45,15 @@ function Assumptions({ spec }: { spec: DevelopmentSpec }) {
 function DevelopmentDetails({ development }: { development: Development }) {
   const { spec } = development
   const setTool = useStore((s) => s.setTool)
-  const removeDevelopment = useStore((s) => s.removeDevelopment)
-  const deleting = useStore((s) => s.deleting)
+  const select = useStore((s) => s.select)
+  const { busy, draft } = useLive()
+  const removing = draft?.intervention.kind === 'remove_development' && draft.intervention.development_id === development.development_id
   const counts = developmentCounts(spec)
   const kind = developmentKind(spec)
   return <div className="tool development-tool" style={{ '--kind-color': kind ? BUILDING_KINDS[kind].color : DEVELOPMENT_USES[spec.land_use].color } as CSSProperties}>
     <div className="development-saved-head">
       {kind && <span className="kind-glyph"><KindIcon kind={kind} /></span>}
-      <div><span className="development-eyebrow">Saved in this scenario</span><h3>{spec.name}</h3></div>
+      <div><span className="development-eyebrow">Standing in the city</span><h3>{spec.name}</h3></div>
     </div>
     <div className="development-summary"><b>{counts.trips.toLocaleString()} added one-way trips</b><span>{spec.capacity.toLocaleString()} {DEVELOPMENT_USES[spec.land_use].unit} · {counts.participants.toLocaleString()} travellers · {counts.cars.toLocaleString()} by car</span></div>
     <Assumptions spec={spec} />
@@ -60,39 +62,37 @@ function DevelopmentDetails({ development }: { development: Development }) {
     </details>
     <div className="row wrap">
       <button className="ghostbtn" onClick={() => frameDevelopment(spec)}>Frame building</button>
-      <button className="ghostbtn" onClick={() => { clock.seek(spec.first_wave.start_s); frameDevelopment(spec) }}>Show first wave</button>
-    </div>
-    <div className="row wrap">
       <button className="ghostbtn" onClick={() => setTool('development')}>Place another</button>
-      <DeleteButton label={`Delete ${spec.name}`} busy={deleting === development.development_id}
-        prompt={`Remove ${spec.name} and its ${counts.trips.toLocaleString()} trips from this scenario? The scenario is edited in place and re-run.`}
-        onConfirm={() => void removeDevelopment(development.development_id)} />
     </div>
+    {removing ? <LivePreviewCard applyLabel="Demolish & play" onApplied={() => select(null)} /> : (
+      <div className="row wrap">
+        <DeleteButton label={`Delete ${spec.name}`} busy={!!busy}
+          prompt={`Demolish ${spec.name}? Its travelers who have not set off yet are dropped; those already on their way finish their trips.`}
+          onConfirm={() => void live.preview({ kind: 'remove_development', development_id: development.development_id })} />
+      </div>
+    )}
     <div className="small dim">Synthetic one-way trips, not a calibrated forecast. No roads or construction restrictions were added.</div>
   </div>
 }
 
 export default function DevelopmentTool() {
   const pack = useStore((s) => s.pack)
-  const scenario = useStore((s) => s.scenarios.find((sc) => sc.scenario_id === s.scenarioId) ?? null)
   const selection = useStore((s) => s.selection)
   const draft = useStore((s) => s.developmentDraft)
   const placed = useStore((s) => s.developmentPlaced)
-  const preview = useStore((s) => s.developmentPreview)
   const error = useStore((s) => s.developmentError)
-  const previewing = useStore((s) => s.developmentPreviewing)
-  const preparing = useStore((s) => s.developmentPreparing)
-  const building = useStore((s) => s.building)
   const chooseKind = useStore((s) => s.chooseDevelopmentKind)
   const applyDevelopment = useStore((s) => s.applyDevelopment)
   const setTool = useStore((s) => s.setTool)
-  const existing = scenario?.developments?.find((d) => selection?.kind === 'development' && selection.id === d.development_id)
+  const { busy, draft: livePreview, primary } = useLive()
+  const preview = livePreview?.intervention.kind === 'development' ? livePreview : null
+  const existing = liveDevelopments().find((d) => selection?.kind === 'development' && selection.id === d.development_id)
   if (existing) return <DevelopmentDetails development={existing} />
   if (!pack || !draft) return <div className="tool small dim">Loading the city…</div>
   const kind = developmentKind(draft) ?? 'apartment'
   const preset = BUILDING_KINDS[kind]
   // Nothing is shown until a footprint is placed; the tiles and the map speak for themselves.
-  const status = !placed ? null : previewing || preparing ? 'checking' : error ? 'blocked' : preview ? 'ready' : 'checking'
+  const status = !placed ? null : busy || !primary ? 'checking' : error ? 'blocked' : preview ? 'ready' : 'checking'
   return <div className="tool development-tool" style={{ '--kind-color': preset.color } as CSSProperties}>
     <div className="kind-grid" role="radiogroup" aria-label="Building type">
       {BUILDING_KIND_ORDER.map((k) => <button key={k} role="radio" aria-checked={kind === k} aria-label={BUILDING_KINDS[k].label}
@@ -104,13 +104,13 @@ export default function DevelopmentTool() {
 
     {status && <div key={status} className={`development-status ${status}`} role="status" aria-live="polite">
       <i aria-hidden="true" />
-      {status === 'checking' && <div><b>{preparing ? 'Preparing the city…' : 'Checking access…'}</b></div>}
+      {status === 'checking' && <div><b>{primary ? 'Checking access…' : 'Starting the city…'}</b></div>}
       {status === 'blocked' && <div><b>Can’t build here</b><span>{error}</span></div>}
-      {status === 'ready' && preview && <div><b>+{preview.added_trips.toLocaleString()} one-way trips</b><span>{preview.outbound_trips.toLocaleString()} leaving · {preview.inbound_trips.toLocaleString()} arriving</span></div>}
+      {status === 'ready' && preview && <div><b>+{(preview.added_trips ?? 0).toLocaleString()} one-way trips</b><span>{(preview.outbound_trips ?? 0).toLocaleString()} leaving · {(preview.inbound_trips ?? 0).toLocaleString()} arriving</span></div>}
     </div>}
 
     {status === 'ready' && <div className="development-confirm">
-      <button className="primary confirm" disabled={!!building} onClick={() => void applyDevelopment()}>Confirm {preset.label.toLowerCase()}</button>
+      <button className="primary confirm" disabled={!!busy} onClick={() => void applyDevelopment()}>Confirm {preset.label.toLowerCase()}</button>
     </div>}
     <button className="ghostbtn" onClick={() => setTool(null)}>Cancel</button>
   </div>

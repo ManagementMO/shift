@@ -7,6 +7,7 @@ const TOOLS: { id: ToolId; label: string; path: string }[] = [
   { id: 'closure', label: 'Road closures', path: 'M5 5h14v14H5z M8 12h8' },
   { id: 'development', label: 'Development', path: 'M4 22V9l5-4 5 4v13 M14 22V13l6-3v12 M2 22h20 M7 12h1 M10 12h1 M7 16h1 M10 16h1 M17 15h1 M17 18h1' },
   { id: 'population', label: 'Population', path: 'M8 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M2 20v-3a6 6 0 0 1 12 0v3 M16 5a3 3 0 0 1 0 6 M17 14a5 5 0 0 1 5 5v1' },
+  { id: 'temperature', label: 'Temperature', path: 'M10 14V5a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0Z M12 9v7' },
 ]
 
 export default function ToolRail({ active = true }: { active?: boolean }) {

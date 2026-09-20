@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import { DEVELOPMENT_USES, developmentColor, developmentCounts, validDevelopmentGeometry } from '../development'
+import { useLive } from '../live/session'
 import { useStore } from '../store'
 import { mapForSide } from './registry'
 
@@ -7,10 +8,10 @@ import { mapForSide } from './registry'
  * Placement-time label only: the pin over a placed-but-unconfirmed footprint. Confirmed developments are ordinary
  * city buildings and carry no marker; clicking one opens the building card instead.
  */
-export default function DevelopmentMarkers({ side }: { runId: string | null; side: string }) {
+export default function DevelopmentMarkers({ side }: { side: string }) {
   const draft = useStore((s) => s.developmentDraft)
   const placed = useStore((s) => s.developmentPlaced)
-  const preview = useStore((s) => s.developmentPreview)
+  const preview = useLive().draft?.intervention.kind === 'development'
   const error = useStore((s) => s.developmentError)
   const refs = useRef(new Map<string, HTMLButtonElement>())
   const rows = useMemo(() => side !== 'left' && draft && placed && validDevelopmentGeometry(draft) ? [{ id: 'draft', spec: draft, draft: true }] : [], [side, draft, placed])

@@ -27,6 +27,8 @@ export type SyncMap = MapCamera & {
   /** CSS-pixel screen position of a point `height` metres above the ground. */
   projectAt?: (lngLat: [number, number], height: number) => { x: number; y: number }
   buildingFacts?: (id: string) => BuildingFacts | null
+  /** Where a drawn traveler / vehicle is right now (lon, lat, heading in degrees, speed in m/s); null if not on the map. */
+  entityAt?: (id: string) => { lonLat: [number, number]; heading: number; speed: number; state: number } | null
 }
 
 /** Renderer counters for diagnostics (Developer panel / debug bridge). */

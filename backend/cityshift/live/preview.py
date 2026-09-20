@@ -8,14 +8,17 @@ from cityshift.live.contracts import (
     HAZARDS,
     MAX_TRAVELERS,
     BusRouteChange,
+    DevelopmentChange,
     IncidentChange,
     InterventionRequest,
     PopulationChange,
+    RemoveDevelopmentChange,
     RoadChange,
     SessionConfig,
     TemperatureChange,
     temperature_response,
 )
+from cityshift.live.developments import resolve_access, trip_counts
 from cityshift.live.network import LiveNetwork
 
 
@@ -93,4 +96,25 @@ def preview(pack: CityPack, config: SessionConfig, state: dict, request: Interve
             if not path:
                 raise ValueError(f"no bus route from {a.name} to {b.name}")
         out.update(title=f"Assign {value.bus_id.replace('_', ' ')} to a shuttle route", detail="60 seats, one persistent physical vehicle, repeated pickup and drop-off visits.", stop_names=[s.name for s in sequence])
+    elif isinstance(value, DevelopmentChange):
+        spec = value.spec
+        access = resolve_access(net, pack, spec)
+        counts = trip_counts(spec)
+        if total + counts["added_trips"] > MAX_TRAVELERS:
+            raise ValueError(f"this would exceed {MAX_TRAVELERS} travelers in one session")
+        if request.at_s + spec.first_wave.start_s >= config.horizon_s - 1:
+            raise ValueError("the building's first trips would start after the simulation horizon")
+        arriving, leaving = counts["inbound_trips"], counts["outbound_trips"]
+        what = " and ".join(part for part in [f"{leaving:,} leaving" if leaving else "", f"{arriving:,} arriving" if arriving else ""] if part)
+        out.update(
+            title=f"Place {spec.name}: {counts['added_trips']:,} one-way trips", detail=f"{what}, individually simulated from the moment it is placed. Existing travelers remain intact.",
+            assumption=f"{spec.capacity:,} {'homes' if spec.land_use == 'residential' else 'people'} · {round(spec.car_share * 100)}% by car, the rest walk or ride. Declared assumptions, not a forecast.",
+            cohort_after=total + counts["added_trips"], access=[a.model_dump(mode="json") for a in access], **counts,
+        )
+    elif isinstance(value, RemoveDevelopmentChange):
+        standing = {d["development_id"]: d for d in state.get("developments", [])}
+        if value.development_id not in standing:
+            raise ValueError("no such development stands in this city")
+        name = standing[value.development_id]["spec"]["name"]
+        out.update(title=f"Demolish {name}", detail="Travelers who have not set off yet are dropped; those already on their way finish their trips.", assumption="Demolition changes future demand only; the street network is untouched.")
     return out
