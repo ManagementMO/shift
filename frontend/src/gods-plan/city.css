@@ -194,3 +194,19 @@
 .gp-shell.gp-live .live-panel.gp-glass :is(select, input:not([type=range])) { min-height: 32px; padding: 6px 9px; font-size: 12px; }
 .gp-shell.gp-live .live-panel.gp-glass .live-submit { min-height: 34px; padding: 7px 10px; font-size: 12px; }
 @media (max-width: 900px) { .gp-shell { --gp-panel-top: calc(var(--gp-edge) + 96px); } }
+
+/* city log: announcements in the voice of the department that would issue them, newest first */
+.gp-shell .gp-city-log { display: grid; gap: 14px; align-content: start; }
+.gp-shell .gp-city-log > header { display: flex; align-items: center; gap: 11px; }
+.gp-shell .gp-city-log > header > button { margin-left: auto; }
+.gp-shell .gp-log-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.gp-shell .gp-log-entry { display: flex; gap: 12px; padding: 12px 13px; border: 1px solid #def1ff26; border-radius: 14px; background: #cce7fa12; }
+.gp-shell .gp-log-entry.is-visual { border-style: dashed; }
+.gp-shell .gp-log-icon { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; border-radius: 10px; background: #d2ecff1f; color: #e8f4ff; }
+.gp-shell .gp-log-icon-roads { color: #ffb36b; } .gp-shell .gp-log-icon-emergency { color: #ff8d7a; } .gp-shell .gp-log-icon-weather { color: #bfe3ff; } .gp-shell .gp-log-icon-planning { color: #c9f0c1; } .gp-shell .gp-log-icon-people { color: #f3d7ff; } .gp-shell .gp-log-icon-transit { color: #9fd0ff; }
+.gp-shell .gp-log-copy { display: grid; gap: 3px; min-width: 0; }
+.gp-shell .gp-log-meta { display: flex; gap: 8px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: #b0cadd; }
+.gp-shell .gp-log-meta time { font-variant-numeric: tabular-nums; color: #dbeefc; }
+.gp-shell .gp-log-visual { padding: 0 6px; border-radius: 8px; background: #ffffff1c; }
+.gp-shell .gp-log-copy b { font-size: 14px; font-weight: 600; }
+.gp-shell .gp-log-copy p { margin: 0; font-size: 13px; line-height: 1.5; color: #c6dceb; }

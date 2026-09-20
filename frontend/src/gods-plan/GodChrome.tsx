@@ -6,7 +6,7 @@ import './chrome.css'
 
 const tabs: { value: GodTab; label: string }[] = [
   { value: 'live', label: 'Live' },
-  { value: 'simulate', label: 'Simulate' },
+  { value: 'log', label: 'City log' },
   { value: 'agents', label: 'Agents' },
   { value: 'events', label: 'Events' },
   { value: 'analytics', label: 'Analytics' },

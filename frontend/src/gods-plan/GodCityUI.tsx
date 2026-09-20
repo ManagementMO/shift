@@ -12,6 +12,7 @@ import ToolPanel from '../shell/ToolPanel'
 import AgentBubble from '../shell/AgentBubble'
 import GodChrome from './GodChrome'
 import LivePeoplePanel from './LivePeoplePanel'
+import CityLogPanel from './CityLog'
 import { EventMenu, EventConfigPanel, ActiveEventPanel, DisasterAlert } from './EventPanels'
 import { CitizenPanel, type CitizenTab } from './PeoplePanels'
 import { GlassSurface, GlassButton, GlassIconButton } from './ui'
@@ -22,7 +23,7 @@ import { AGENT_DEMO_LOCKED, AGENT_UNAVAILABLE_MESSAGE } from './demo'
 import type { GodEventDraft, GodEventKind, GodEventStatus, GodTab, GodTool, GodCitizen } from './model'
 import './city.css'
 
-type Panel = 'none' | 'events' | 'event-config' | 'event-active' | 'agents' | 'analytics' | 'settings' | 'tools'
+type Panel = 'none' | 'log' | 'events' | 'event-config' | 'event-active' | 'agents' | 'analytics' | 'settings' | 'tools'
 const TITLES: Record<ToolId, string> = { area: 'Area select', closure: 'Road closures', development: 'New development', population: 'Population', temperature: 'Temperature' }
 
 function PanelBox({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
@@ -33,6 +34,7 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
   const view = useLive()
   const pack = useStore(s => s.pack)
   const tool = useStore(s => s.tool)
+  const corridors = useStore(s => s.corridors)
   const selection = useStore(s => s.selection)
   const t = useStore(s => s.t)
   const playing = useStore(s => s.playing)
@@ -98,7 +100,7 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
     else if (AGENT_DEMO_LOCKED) open('agents')
     else setNotice('Choose a city tool to configure and apply this change. Free-form group objectives are not connected yet.')
   }
-  const onTab = (tab: GodTab) => { if (tab === 'simulate') open('settings'); else open(tab === 'live' ? 'none' : tab) }
+  const onTab = (tab: GodTab) => open(tab === 'live' ? 'none' : tab)
   const onTool = (next: GodTool) => {
     if (next === 'map') openTool('area')
     else if (next === 'population') openTool('population')
@@ -135,7 +137,8 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
   const citizen: GodCitizen | null = entity ? { id: entity.id, name: citizenName(entity.person_id ?? entity.id), role: 'Synthetic traveler', status: 'Live journey', destination: entity.destination_edge ?? 'Unknown destination', activity: 'Measured in SUMO', synthetic: true, traits: [], thoughts: [], relationships: [] } : null
   if (!active) return null
   return <>
-    <GodChrome city={pack?.name ?? ''} activeTab="live" openTab={panel === 'events' || panel === 'event-config' ? 'events' : null} activeTool={panel === 'agents' ? 'people' : panel.startsWith('event') || tool === 'closure' || tool === 'development' ? 'events' : tool === 'temperature' ? 'weather' : tool === 'population' ? 'population' : tool === 'area' ? 'map' : 'select'} dateLabel="" timeLabel={simClock(t)} weatherLabel="Clear" temperatureLabel={environment ? `${environment.temperature}°C` : '—'} weatherNote="Simulation temperature, not a weather forecast" statusLabel={statusLabel} agentCount={counts?.total ?? 0} playing={playing} speed={useStore.getState().speed} speeds={PLAYBACK_SPEEDS} ready={ready} onSpeed={speed => live.setSpeed(speed)} is2D={display.projection === 'isometric'} command={command} onTab={onTab} onTool={onTool} onHome={onHome} onCommandChange={setCommand} onCommand={() => commandAction(command)} onSuggestion={commandAction} onTogglePlay={() => live.toggle()} onView={() => {}} />
+    <GodChrome city={pack?.name ?? ''} activeTab="live" openTab={panel === 'events' || panel === 'event-config' ? 'events' : panel === 'log' ? 'log' : panel === 'agents' ? 'agents' : panel === 'analytics' ? 'analytics' : null} activeTool={panel === 'agents' ? 'people' : panel.startsWith('event') || tool === 'closure' || tool === 'development' ? 'events' : tool === 'temperature' ? 'weather' : tool === 'population' ? 'population' : tool === 'area' ? 'map' : 'select'} dateLabel="" timeLabel={simClock(t)} weatherLabel="Clear" temperatureLabel={environment ? `${environment.temperature}°C` : '—'} weatherNote="Simulation temperature, not a weather forecast" statusLabel={statusLabel} agentCount={counts?.total ?? 0} playing={playing} speed={useStore.getState().speed} speeds={PLAYBACK_SPEEDS} ready={ready} onSpeed={speed => live.setSpeed(speed)} is2D={display.projection === 'isometric'} command={command} onTab={onTab} onTool={onTool} onHome={onHome} onCommandChange={setCommand} onCommand={() => commandAction(command)} onSuggestion={commandAction} onTogglePlay={() => live.toggle()} onView={() => {}} />
+    {panel === 'log' && <CityLogPanel session={session ?? null} pack={pack} corridors={corridors} visuals={events} time={t} onClose={close} />}
     {panel === 'events' && <EventMenu onClose={close} onSelect={selectEvent} selectedEvent={chosen ? 'tornado' : 'normal'} supportedEvents={['normal','closure','development','tornado']} />}
     {panel === 'event-config' && <EventConfigPanel draft={draft} supported={draft.kind === 'tornado'} placing={armed} onChange={updateDraft} onCancel={armed ? cancel : close} onPlace={arm} />}
     {armed && world && <TornadoPlacement scene={world} armed settings={settings} onSettings={patch => { setSettings(s => ({ ...s, ...patch })); setDraft(d => ({ ...d, radiusM: patch.radius ?? d.radiusM, heading: patch.heading ?? d.heading, intensity: patch.power === undefined ? d.intensity : powerIntensity(patch.power) })) }} onCast={cast} onCancel={cancel} />}

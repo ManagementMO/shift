@@ -1,4 +1,4 @@
-export type GodTab = 'live' | 'simulate' | 'agents' | 'events' | 'analytics'
+export type GodTab = 'live' | 'log' | 'agents' | 'events' | 'analytics'
 export type GodTool = 'select' | 'map' | 'people' | 'population' | 'events' | 'weather' | 'layers'
 export type GodEventKind = 'normal' | 'closure' | 'development' | 'tornado' | 'earthquake' | 'flood' | 'wildfire' | 'outage' | 'riot' | 'transit' | 'orbital' | 'custom'
 export type GodEventCategory = 'all' | 'natural' | 'infrastructure' | 'social' | 'custom'
