@@ -5,7 +5,7 @@
  * crosses the footprint edge — so a click on a tower's facade picks the tower, not the street behind it.
  */
 
-import { bounds, signedArea } from './geometry'
+import { boundaryDistance, bounds, signedArea } from './geometry'
 import type { Flat, BuildingCategory, WorldData } from './worldData'
 
 export interface Prism {
@@ -110,6 +110,22 @@ export class BuildingIndex {
 
   building(id: string): BuildingInfo | undefined {
     return this.info.get(id)
+  }
+
+  overlapsCircle(x: number, z: number, radius: number, y0: number, y1: number): boolean {
+    const seen = new Set<number>()
+    for (let cx = Math.floor((x - radius) / CELL); cx <= Math.floor((x + radius) / CELL); cx++) {
+      for (let cz = Math.floor((z - radius) / CELL); cz <= Math.floor((z + radius) / CELL); cz++) {
+        for (const k of this.cells.get(cellKey(cx, cz)) ?? []) {
+          if (seen.has(k)) continue
+          seen.add(k)
+          const p = this.prisms[k]
+          if (p.y1 <= y0 || p.y0 >= y1) continue
+          if (inside(x, z, p.ring, p.holes) || boundaryDistance(x, z, p.ring) < radius || p.holes?.some(h => boundaryDistance(x, z, h) < radius)) return true
+        }
+      }
+    }
+    return false
   }
 
   /** The nearest building the ray meets, or null; `maxT` bounds the search along the ray (metres). */

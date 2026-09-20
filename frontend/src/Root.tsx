@@ -8,9 +8,11 @@ import Experience from './globe/Experience'
 const WorldApp = lazy(() => import('./babylon/WorldApp.tsx'))
 const CityShowcase = lazy(() => import('./babylon/CityShowcase.tsx'))
 const LiveCity = lazy(() => import('./live/LiveCity.tsx'))
+const TornadoDemo = lazy(() => import('./babylon/TornadoDemo.tsx'))
 
 export default function Root() {
   const path = window.location.pathname.replace(/\/+$/, '')
+  if (path === '/tornado') return <Suspense fallback={<div className="bworld-veil">Loading tornado sandbox…</div>}><TornadoDemo /></Suspense>
   if (path === '/live') return <Suspense fallback={null}><LiveCity /></Suspense>
   if (path === '/showcase') return <Suspense fallback={null}><CityShowcase /></Suspense>
   if (path === '/mapbox') return <App renderer="mapbox" />

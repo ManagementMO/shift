@@ -40,6 +40,21 @@ describe('building index', () => {
     expect(index.building('cn')).toMatchObject({ kind: 'landmark', name: 'CN Tower', height: 553 })
   })
 
+  it('tests object extents against OSM, official tiers and landmarks, not just their centre points', () => {
+    expect(index.overlapsCircle(14, 0, 5, 0.5, 12)).toBe(true)
+    expect(index.overlapsCircle(20, 0, 5, 0.5, 12)).toBe(false)
+    expect(index.overlapsCircle(314, 0, 4, 0.5, 12)).toBe(true)
+    expect(index.overlapsCircle(314, 0, 4, 55, 65)).toBe(false)
+    expect(index.overlapsCircle(535, 0, 6, 0.5, 12)).toBe(true)
+    expect(index.overlapsCircle(0, 0, 2, 11, 15)).toBe(false)
+  })
+
+  it('allows objects inside clear courtyards but rejects contact with courtyard walls', () => {
+    const courtyard = new BuildingIndex({ buildings: [{ id: 'court', cat: 'office', h: 20, ring: square(0, 0, 30), holes: [square(0, 0, 15)] }], landmarks: [] })
+    expect(courtyard.overlapsCircle(0, 0, 6, 0.5, 12)).toBe(false)
+    expect(courtyard.overlapsCircle(12, 0, 6, 0.5, 12)).toBe(true)
+  })
+
   it('picks the building whose roof the ray looks down onto', () => {
     expect(index.pick(ray([0, 500, -300], [0, 0, 0]))?.info.id).toBe('low')
     expect(index.pick(ray([100, 500, -300], [100, 0, 0]))?.info.id).toBe('tower')

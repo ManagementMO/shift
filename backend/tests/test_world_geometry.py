@@ -1,6 +1,7 @@
+import json
 from itertools import combinations
 
-from shapely.geometry import Polygon, box
+from shapely.geometry import Point, Polygon, box
 from shapely.ops import unary_union
 
 from cityshift.citypack.world import OsmData, compile_areas, compile_buildings
@@ -117,6 +118,55 @@ def test_separated_vertical_buildings_are_not_rewritten():
     buildings = [{"id": "a", "ring": ring, "base": 0, "h": 5, "cat": "generic"},
                  {"id": "b", "ring": ring, "base": 10, "h": 10, "cat": "generic"}]
     assert resolve_building_volumes(buildings) == buildings
+
+
+def test_far_water_continues_the_compiled_lake_and_stops_at_the_pack(tmp_path):
+    from cityshift.citypack.world import compile_far_water
+
+    class Frame:
+        def lonlat_to_world(self, lon, lat):
+            return lon * 1000.0, lat * 1000.0
+
+    # A straight east-west shoreline at z=-500 through a 2 km pack; land to the north, lake to the south.
+    shoreline = {"elements": [{"type": "way", "geometry": [{"lon": x, "lat": -0.5} for x in (-40, 40)]},
+                              {"type": "way", "geometry": [{"lon": 30, "lat": 30}, {"lon": 30, "lat": 30.001}]}]}
+    (tmp_path / "lake_ways.json").write_text(json.dumps(shoreline))
+    clip = box(-1000, -1000, 1000, 1000)
+    near = [{"ring": [-1000, -1000, 1000, -1000, 1000, -500, -1000, -500]}]
+    probes = [Point(x, 600) for x in range(-900, 900, 30)]
+    far, far_bounds = compile_far_water(tmp_path / "lake.json", Frame(), clip, near, probes, reach_m=3000)
+    assert far_bounds == [-4000.0, -4000.0, 4000.0, 4000.0]
+    assert len(far) == 1
+    lake = Polygon(list(zip(far[0]["ring"][::2], far[0]["ring"][1::2])))
+    assert lake.contains(Point(0, -2500))
+    assert lake.contains(Point(3000, -700))
+    assert not lake.contains(Point(0, 2000))
+    assert not lake.contains(Point(0, -700)), "in-pack water stays with the compiled near water"
+    assert lake.contains(Point(2500, -700))
+    assert compile_far_water(tmp_path / "elsewhere" / "lake.json", Frame(), clip, near, probes) == ([], [-13000.0, -13000.0, 13000.0, 13000.0])
+    assert compile_far_water(tmp_path / "lake.json", Frame(), clip, [], probes, reach_m=3000)[0] == []
+
+
+def test_plate_beyond_the_pack_is_meadow_not_ground():
+    from cityshift.citypack.world import compile_surfaces
+
+    def area(records):
+        return sum(Polygon(list(zip(a["ring"][::2], a["ring"][1::2])), [list(zip(h[::2], h[1::2])) for h in a.get("holes", [])]).area for a in records)
+
+    water = [{"ring": [-30, -30, 30, -30, 30, -20, -30, -20]}]  # lake strip crossing the ring and the core
+    road = [{"id": "r", "shape": [-5, 0, 5, 0], "w": 4, "kind": "road", "lanes": [{"shape": [-5, 0, 5, 0], "w": 4, "allow": ["car"]}]}]
+    surfaces = compile_surfaces(box(-30, -30, 30, 30), road, [], [], [], [], water, core=box(-10, -10, 10, 10))
+    assert area(surfaces["ground"]) == 400 - area(surfaces["asphalt"])
+    assert area(surfaces["meadow"]) == 3600 - 400 - 600
+    assert "meadow" not in compile_surfaces(box(-30, -30, 30, 30), road, [], [], [], [], water)
+
+    # a core far larger than its mapped buildings: bare land away from every building is meadow, roads or not
+    houses = [{"ring": [x, 0, x + 10, 0, x + 10, 10, x, 10]} for x in range(-200, 200, 40)]
+    wide = compile_surfaces(box(-2000, -2000, 2000, 2000), road, [], [], [], [], [], core=box(-2000, -2000, 2000, 2000), buildings=houses)
+    urban = area(wide["ground"])
+    assert 400 * 180 < urban < 700 * 400, urban  # the houses grown by a street's width, merged into one block
+    assert area(wide["meadow"]) > 4000 * 4000 - urban - 200
+    assert all(abs(v) <= 400 for a in wide["ground"] for v in a["ring"]), "the concrete hugs the buildings"
 
 
 def test_park_courtyards_survive_surface_compilation():

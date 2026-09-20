@@ -81,7 +81,11 @@ export class WorldCamera {
       cam.inputs.clear()
       this.presetPose = { ...cityPose(world), radius: 1450, elevation: 52 }
       this.resize(cam.getEngine().getAspectRatio(cam))
-    } else this.city(0)
+    } else {
+      cam._panningMouseButton = 1
+      cam.movement.input.addEntry({ source: 'pointer', button: 2, interaction: 'rotate' })
+      this.city(0)
+    }
     cam.getScene().onBeforeRenderObservable.add(() => this.updateProjection())
   }
 

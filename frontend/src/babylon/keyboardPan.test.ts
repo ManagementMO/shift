@@ -109,6 +109,45 @@ describe('WASD travel', () => {
     expect(camera.pose.target[0]).toBe(bounds[2])
   })
 
+  it('raises with E and lowers with Q without rotating or zooming', () => {
+    const { camera, pan } = setup()
+    camera.apply({ target: [0, 0], y: 100, radius: 1000, heading: 25, elevation: 45 })
+    const initial = camera.pose
+    pan.press('KeyE')
+    hold(pan, 1)
+    expect(camera.pose.y).toBeGreaterThan(initial.y! + 500)
+    expect(camera.pose.target).toEqual(initial.target)
+    expect(camera.pose.radius).toBe(initial.radius)
+    expect(camera.pose.heading).toBe(initial.heading)
+    pan.release()
+    hold(pan, 1)
+    const elevated = camera.pose.y!
+    pan.press('KeyQ')
+    hold(pan, 1)
+    expect(camera.pose.y).toBeLessThan(elevated - 500)
+  })
+
+  it('keeps the camera above the ground while descending', () => {
+    const { cam, camera, pan } = setup()
+    camera.apply({ target: [0, 0], y: 0, radius: 200, heading: 0, elevation: 45 })
+    pan.press('KeyQ')
+    hold(pan, 5)
+    cam.getViewMatrix(true)
+    expect(cam.position.y).toBeGreaterThanOrEqual(2)
+    expect(cam.position.y).toBeLessThan(10)
+  })
+
+  it('does not move after being hidden, even if a key was held', () => {
+    const { camera, pan } = setup()
+    pan.press('KeyW')
+    hold(pan, 0.25)
+    pan.setEnabled(false)
+    const before = camera.pose
+    hold(pan, 1)
+    expect(camera.pose).toEqual(before)
+    expect(pan.moving).toBe(false)
+  })
+
   it('does nothing for a fixed camera or while disabled', () => {
     const fixed = setup(true)
     const before = fixed.camera.pose
@@ -127,7 +166,7 @@ describe('WASD travel', () => {
     hold(pan, 1)
     expect(camera.pose.target[1]).toBeGreaterThan(0)
     pan.setEnabled(false)
-    expect(pan.moving).toBe(true)
+    expect(pan.moving).toBe(false)
     hold(pan, 1)
     expect(pan.moving).toBe(false)
   })

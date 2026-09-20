@@ -293,8 +293,9 @@ export class Traffic {
 
   /** Model sizes for this frame: the chosen swarm scale, gentler for vehicles, boosted for far-LOD pins from the city camera. */
   private scalesFor(view: Viewpoint): Record<Kind | 'marker', number> {
-    const vehicle = vehicleScale(this.agentScale) * farBoost(view.radius, 'vehicle')
-    return { person: this.agentScale, car: vehicle, bus: vehicle, marker: this.agentScale * farBoost(view.radius, 'marker') }
+    const enlarged = this.agentScale > 1
+    const vehicle = vehicleScale(this.agentScale) * (enlarged ? farBoost(view.radius, 'vehicle') : 1)
+    return { person: this.agentScale, car: vehicle, bus: vehicle, marker: this.agentScale * (enlarged ? farBoost(view.radius, 'marker') : 1) }
   }
 
   private counters(): Record<SetKind, number> {

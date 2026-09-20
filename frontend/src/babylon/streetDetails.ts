@@ -1,12 +1,14 @@
 import type { Scene } from '@babylonjs/core/scene'
 import type { Mesh } from '@babylonjs/core/Meshes/mesh'
-import { Batch, bounds, centroid, hash01, type RGB } from './geometry'
+import { Batch, hash01, type RGB } from './geometry'
 import { meshFromBatch, vertexColorMaterial, Y } from './city'
-import { boundaryDistance, pointInRing, TREE_CLEARANCE, type TreePlacement } from './details'
+import { boundaryDistance, pointInRing, PlacementGrid, TREE_HEIGHT, TREE_RADIUS, type TreePlacement } from './details'
+import { BuildingIndex } from './buildingIndex'
+import { RoadIndex } from './roadIndex'
 import { buildVegetation } from './vegetation'
 import type { WorldData } from './worldData'
 
-export function buildStreetDetails(scene: Scene, world: WorldData): Mesh[] {
+export function buildStreetDetails(scene: Scene, world: WorldData, parkTrees: TreePlacement[] = []): Mesh[] {
   const focus = world.landmarks.find(l => l.kind === 'cn_tower') ?? world.venue
   const ground = world.surfaces ? Y.road : Y.path
   const nearby = (x: number, z: number) => Math.hypot(x - focus.x, z - focus.z) < 1550
@@ -18,8 +20,21 @@ export function buildStreetDetails(scene: Scene, world: WorldData): Mesh[] {
     return value
   }
   const box = (b: Batch, x: number, z: number, sx: number, sz: number, y: number, h: number, c: RGB) => b.extrude([x-sx,z-sz,x+sx,z-sz,x+sx,z+sz,x-sx,z+sz], undefined, y, y+h, c, c)
-  const buildings = world.buildings.filter(b => { const c = centroid(b.ring); return nearby(c[0], c[1]) }).map(b => ({ ring: b.ring, box: bounds(b.ring) }))
-  const free = (x: number, z: number, clearance = 0.25) => !buildings.some(b => x > b.box[0]-clearance && x < b.box[2]+clearance && z > b.box[1]-clearance && z < b.box[3]+clearance && (pointInRing(x,z,b.ring) || boundaryDistance(x,z,b.ring) < clearance)) && !world.water.some(w => pointInRing(x,z,w.ring) && !w.holes?.some(h => pointInRing(x,z,h)))
+  const buildings = new BuildingIndex(world)
+  const roads = new RoadIndex({ roads: world.roads.flatMap(r => r.lanes?.length
+    ? r.lanes.filter(l => l.allow.includes('car') || l.allow.includes('bus')).map((l, i) => ({ ...r, id: `${r.id}:lane:${i}`, shape: l.shape, w: l.w }))
+    : r.allow.includes('car') || r.allow.includes('bus') ? [r] : []) })
+  const occupied = new PlacementGrid()
+  for (const t of parkTrees) occupied.reserve(t.x, t.z, TREE_RADIUS * t.scale + 0.1, ground, ground + TREE_HEIGHT * t.scale)
+  const free = (x: number, z: number, clearance = 0.25, height = 8) => !buildings.overlapsCircle(x, z, clearance, ground, ground + height) && !world.water.some(w => {
+    const hole = w.holes?.find(h => pointInRing(x, z, h))
+    return hole ? boundaryDistance(x, z, hole) < clearance : pointInRing(x, z, w.ring) || boundaryDistance(x, z, w.ring) < clearance
+  })
+  const offRoad = (x: number, z: number, radius: number) => {
+    const hit = roads.nearest(x, z, radius + 30)
+    return !hit || hit.dist >= hit.road.w / 2 + radius
+  }
+  const reserve = (x: number, z: number, radius: number, height: number) => free(x, z, radius, height) && occupied.reserve(x, z, radius, ground, ground + height)
   const trees: TreePlacement[] = []
   const used = new Set<string>()
   for (const r of world.roads) {
@@ -35,7 +50,7 @@ export function buildStreetDetails(scene: Scene, world: WorldData): Mesh[] {
         if (length < 0.1) continue
         for (const side of [-1, 1]) {
           const nx = -(bz - az) / length * lane.w / 2 * side, nz = (bx - ax) / length * lane.w / 2 * side
-          batch.stone.ribbon([ax + nx, az + nz, bx + nx, bz + nz], 0.18, ground + 0.07, [0.68, 0.66, 0.58])
+          if (free((ax + bx) / 2 + nx, (az + bz) / 2 + nz, Math.hypot(length / 2, 0.09), 0.1)) batch.stone.ribbon([ax + nx, az + nz, bx + nx, bz + nz], 0.18, ground + 0.07, [0.68, 0.66, 0.58])
         }
       }
     }
@@ -49,6 +64,7 @@ export function buildStreetDetails(scene: Scene, world: WorldData): Mesh[] {
         if (length < 24) continue
         for (let t=3; t<7; t+=1) {
           const x=s[i]+dx/length*t, z=s[i+1]+dz/length*t, width=lane.w*0.4
+          if (!free(x, z, Math.hypot(width, 0.24), 0.15)) continue
           batch.paint.ribbon([x-dz/length*width,z+dx/length*width,x+dz/length*width,z-dx/length*width],0.48,0.6,[0.84,0.82,0.72])
         }
       }
@@ -63,10 +79,12 @@ export function buildStreetDetails(scene: Scene, world: WorldData): Mesh[] {
           used.add(key)
           const b=cell(x,z), h=hash01(key)
           if (h>0.3) {
-            if (!free(x,z,TREE_CLEARANCE)) continue
-            trees.push({x,z,scale:0.8+h*0.35,shade:h})
+            const scale = 0.8 + h * 0.35
+            if (!offRoad(x, z, 0.5) || !reserve(x, z, TREE_RADIUS * scale + 0.2, TREE_HEIGHT * scale)) continue
+            trees.push({x,z,scale,shade:h})
             box(b.stone,x,z,1.35,1.35,ground,0.08,[0.4,0.42,0.34])
           } else {
+            if (!offRoad(x, z, 0.25) || !reserve(x, z, 1.45, 6.9)) continue
             b.metal.lathe(x,z,[[0.13,ground],[0.09,ground+6.8]],[0.24,0.26,0.24],6,1)
             box(b.metal,x+0.6,z,0.8,0.18,ground+6.7,0.2,[0.27,0.3,0.29])
           }
@@ -77,21 +95,30 @@ export function buildStreetDetails(scene: Scene, world: WorldData): Mesh[] {
   for (const line of world.rail) {
     if (!nearby(line[0],line[1])) continue
     const b=cell(line[0],line[1])
-    b.stone.ribbon(line,3.2,0.61,[0.41,0.4,0.36])
     for (let i=0; i+3<line.length; i+=2) {
       const ax=line[i],az=line[i+1],dx=line[i+2]-ax,dz=line[i+3]-az,len=Math.hypot(dx,dz)
       if (len<0.1) continue
       const nx=-dz/len,nz=dx/len
-      for(const side of [-0.72,0.72]) b.metal.ribbon([ax+nx*side,az+nz*side,ax+dx+nx*side,az+dz+nz*side],0.12,0.72,[0.64,0.64,0.58])
       for(let d=0;d<len;d+=2.5) {
-        const x=ax+dx*d/len,z=az+dz*d/len
-        b.timber.ribbon([x-nx*1.25,z-nz*1.25,x+nx*1.25,z+nz*1.25],0.32,0.68,[0.32,0.28,0.23])
+        const end = Math.min(len, d + 2.5), mid = (d + end) / 2
+        const x=ax+dx*mid/len,z=az+dz*mid/len
+        if (!free(x, z, Math.hypot((end - d) / 2, 1.6), 0.25)) continue
+        const a = [ax + dx*d/len, az + dz*d/len], c = [ax + dx*end/len, az + dz*end/len]
+        b.stone.ribbon([...a, ...c],3.2,ground+0.11,[0.41,0.4,0.36])
+        for(const side of [-0.72,0.72]) b.metal.ribbon([a[0]+nx*side,a[1]+nz*side,c[0]+nx*side,c[1]+nz*side],0.12,ground+0.22,[0.64,0.64,0.58])
+        b.timber.ribbon([x-nx*1.25,z-nz*1.25,x+nx*1.25,z+nz*1.25],0.32,ground+0.18,[0.32,0.28,0.23])
       }
     }
   }
   for(const stop of world.stops) {
     if(!nearby(stop.x,stop.z)) continue
-    const {x,z}=stop,b=cell(x,z)
+    const hit = roads.nearest(stop.x, stop.z, 30)
+    const heading = (hit?.heading ?? 0) * Math.PI / 180
+    const distance = (hit?.road.w ?? 0) / 2 + 4
+    const candidates = [[stop.x, stop.z], ...[1, -1, 1.5, -1.5].map(side => [stop.x + Math.cos(heading) * distance * side, stop.z - Math.sin(heading) * distance * side])]
+    const place = candidates.find(([x, z]) => offRoad(x, z, 3.05) && reserve(x, z, 3.05, 2.9))
+    if (!place) continue
+    const [x,z]=place,b=cell(x,z)
     box(b.stone,x,z,2.8,1.1,ground,0.12,[0.77,0.76,0.69])
     for(const dx of [-2.4,2.4]) box(b.metal,x+dx,z,0.09,0.09,ground+0.12,2.58,[0.31,0.33,0.3])
     box(b.metal,x,z,2.8,1.1,ground+2.7,0.16,[0.38,0.44,0.42])
@@ -112,11 +139,11 @@ export function buildStreetDetails(scene: Scene, world: WorldData): Mesh[] {
         if(!side) continue
         const b=cell(x,z), ox=nx*side,oz=nz*side
         const edge=[ax+dx/len*d,az+dz/len*d,ax+dx/len*(d+reach),az+dz/len*(d+reach)]
-        b.stone.ribbon(edge,0.9,ground+0.08,[0.69,0.68,0.6])
+        if (!buildings.overlapsCircle(x, z, Math.hypot(reach / 2, 0.45), ground, ground + 0.1)) b.stone.ribbon(edge,0.9,ground+0.08,[0.69,0.68,0.6])
         const walk=edge.map((v,k)=>v+(k%2?oz:ox)*2.5)
         if(!world.surfaces && free(walk[0],walk[1]) && free(walk[2],walk[3])) b.stone.ribbon(walk,4,0.26,[0.62,0.6,0.51])
-        b.metal.lathe(x+ox,z+oz,[[0.15,ground],[0.12,ground+0.75]],[0.29,0.32,0.3],6,1)
-        if(free(x+ox*5.5,z+oz*5.5)) {
+        if (reserve(x+ox,z+oz,0.2,0.75)) b.metal.lathe(x+ox,z+oz,[[0.15,ground],[0.12,ground+0.75]],[0.29,0.32,0.3],6,1)
+        if(offRoad(x+ox*5.5,z+oz*5.5,1.5) && reserve(x+ox*5.5,z+oz*5.5,1.5,0.65)) {
           const bx=x+ox*5.5,bz=z+oz*5.5
           b.timber.ribbon([bx-dx/len*1.4,bz-dz/len*1.4,bx+dx/len*1.4,bz+dz/len*1.4],0.55,ground+0.5,[0.53,0.4,0.26])
           for(const s of [-1,1]) box(b.metal,bx+dx/len*s,bz+dz/len*s,0.12,0.2,ground,0.5,[0.27,0.3,0.28])

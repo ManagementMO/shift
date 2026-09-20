@@ -50,6 +50,22 @@ describe('Geometry-driven cosmetic detail', () => {
     }
   })
 
+  it('reserves the official massing footprint even when no OSM fallback building remains', () => {
+    const world = { ...park(), buildings: [], roads: [], water: [], junctions: [], massing: {
+      version: 1, network_fingerprint: '', source: '', source_url: '', license: '', excluded_osm_ids: [],
+      buildings: [{ id: 'official', x: 50, z: 50, cat: 'office' as const, h: 50, tiers: [{ y0: 0, y1: 50, ring: square(0, 0, 100), holes: [] }] }],
+    } }
+    expect(treePlacements(world)).toEqual([])
+  })
+
+  it('keeps entire park-tree crowns outside one another', () => {
+    const trees = treePlacements({ green: [square(0, 0, 200)], buildings: [], roads: [], water: [], junctions: [] })
+    for (let i = 0; i < trees.length; i++) for (const b of trees.slice(i + 1)) {
+      const a = trees[i]
+      expect(Math.hypot(a.x - b.x, a.z - b.z)).toBeGreaterThanOrEqual(4.1 * (a.scale + b.scale))
+    }
+  })
+
   it('works at another city origin, deduplicates overlapping parks and enforces a budget', () => {
     const world = { green: [square(-17000, 24000, 150)], buildings: [], roads: [], water: [], junctions: [] }
     const trees = treePlacements(world, 20)

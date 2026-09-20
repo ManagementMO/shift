@@ -26,6 +26,7 @@ import { WorldFrame } from './coords'
 import { renderScale, type DisplaySettings } from './display'
 import { fitShadowLight } from './shadows'
 import { buildCity, Y, type CityMeshes } from './city'
+import { buildTerrain, type Terrain } from './terrain'
 import { BuildingIndex } from './buildingIndex'
 import { WorldCamera } from './camera'
 import { KeyboardPan } from './keyboardPan'
@@ -36,6 +37,7 @@ import { applyWorldAtmosphere } from './atmosphere'
 import type { WorldData } from './worldData'
 import { buildStreetDetails } from './streetDetails'
 import { loadLandmarkModels } from './landmarkModels'
+import { StormSystem } from './tornado'
 
 export interface WorldSceneOptions {
   shadows?: boolean
@@ -53,6 +55,7 @@ export class WorldScene {
   readonly keys: KeyboardPan
   readonly sun: DirectionalLight
   readonly city: CityMeshes
+  readonly terrain: Terrain
   readonly shadows: ShadowGenerator | null
   readonly canvas: HTMLCanvasElement
   readonly world: WorldData
@@ -60,6 +63,7 @@ export class WorldScene {
   /** Every drawn building as pickable prisms, for pointer picking and info. */
   readonly buildings: BuildingIndex
   readonly traffic: Traffic
+  readonly storm: StormSystem
   readonly fill: HemisphericLight
   readonly assetsReady: Promise<void>
   private readonly post: DefaultRenderingPipeline
@@ -108,9 +112,11 @@ export class WorldScene {
 
     // --- city
     this.city = buildCity(scene, world, balanced ? 512 : 1024)
-    const streets = buildStreetDetails(scene, world)
+    const streets = buildStreetDetails(scene, world, this.city.treePositions)
     this.city.chunks.push(...streets)
     this.city.shadowCasters.push(...streets.filter(m => m.name.startsWith('street-trees-')))
+    // Placeholder countryside past the pack: grassland hills, the lake carried on, main roads to the horizon.
+    this.terrain = buildTerrain(scene, world, this.city.materials, { cells: balanced ? 96 : 176, treeLimit: balanced ? 500 : 1500 })
 
     // --- camera
     const cam = new ArcRotateCamera('cam', -1.95, 0.98, 1500, new Vector3(380, 0, -520), scene)
@@ -129,12 +135,12 @@ export class WorldScene {
     cam.panningInertia = 0.82
     cam.inertia = 0.84
     cam.useNaturalPinchZoom = true
-    if (!opts.fixedCamera) cam.attachControl(canvas, true)
+    if (!opts.fixedCamera) cam.attachControl(false, true, 1)
     scene.onBeforeRenderObservable.add(() => {
       cam.panningSensibility = 45
     })
     this.camera = new WorldCamera(cam, world, opts.fixedCamera ?? false)
-    this.keys = new KeyboardPan(this.camera, world.crs.bounds_world, scene)
+    this.keys = new KeyboardPan(this.camera, this.terrain.shape.farBounds, scene, (x, z) => Math.max(0, this.terrain.shape.surface(x, z)))
     if (!this.camera.fixed) {
       this.keys.attach(window)
       const cancelFlight = () => this.camera.cancel()
@@ -145,7 +151,7 @@ export class WorldScene {
         canvas.removeEventListener('wheel', cancelFlight)
       })
     }
-    applyWorldAtmosphere(scene, world.crs.bounds_world, sky)
+    applyWorldAtmosphere(scene, this.terrain.shape.farBounds, sky)
 
     // --- shadows (sun) use a fixed world-space frustum, independent of camera rotation and zoom.
     if (opts.shadows ?? true) {
@@ -211,9 +217,11 @@ export class WorldScene {
     this.roads = new RoadIndex(world)
     this.buildings = new BuildingIndex(world)
     this.traffic = new Traffic(scene, this.frame, balanced ? null : this.shadows, world.surfaces ? Y.road : Y.path)
+    this.storm = new StormSystem(scene, this.frame, world, this.city, balanced ? null : this.shadows)
     scene.onBeforeRenderObservable.add(() => {
       const p = this.camera.cam.globalPosition
       this.traffic.update(this.simT, { x: p.x, y: p.y, z: p.z, radius: this.camera.cam.radius })
+      this.storm.update(this.simT)
     })
 
     scene.autoClear = true
@@ -265,7 +273,9 @@ export class WorldScene {
     window.removeEventListener('resize', this.resize)
     this.engine.stopRenderLoop()
     this.camera.cancel()
+    this.storm.dispose()
     this.traffic.dispose()
+    this.terrain.dispose()
     this.city.dispose()
     this.scene.dispose()
     this.engine.dispose()

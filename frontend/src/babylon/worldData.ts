@@ -136,9 +136,15 @@ export interface WorldData {
   landmarks: WorldLandmark[]
   green: Flat[]
   sand: Flat[]
-  surfaces?: Record<'ground' | 'grass' | 'sand' | 'pavement' | 'asphalt' | 'rail', { ring: Flat; holes?: Flat[] }[]>
+  surfaces?: Record<'ground' | 'grass' | 'sand' | 'pavement' | 'asphalt' | 'rail', { ring: Flat; holes?: Flat[] }[]> & {
+    /** bare plate outside the pack bounds: rendered as grassland, not concrete */
+    meadow?: { ring: Flat; holes?: Flat[] }[]
+  }
   rail: Flat[]
   water: { ring: Flat; holes?: Flat[] }[]
+  /** Coarse lake extent beyond the pack (outside `crs.bounds_world`), for the placeholder terrain. */
+  far_water?: { ring: Flat; holes?: Flat[] }[]
+  far_bounds?: [number, number, number, number]
   counts: Record<string, number>
   provenance: string[]
   massing_url?: string

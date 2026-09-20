@@ -190,6 +190,7 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
       }
       const onDown = (e: PointerEvent): void => {
         if (e.button === 0) down = { x: e.clientX, y: e.clientY }
+        else stopFollowing(map)
       }
       const onUp = (e: PointerEvent): void => {
         if (!down) return
@@ -237,7 +238,7 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
           const s = useStore.getState()
           if (s.picking) s.setPicking(false)
           else s.select(null)
-        } else if (!e.ctrlKey && !e.metaKey && !e.altKey && /^Key[WASD]$/.test(e.code) && activeRef.current) stopFollowing(map)
+        } else if (!e.ctrlKey && !e.metaKey && !e.altKey && /^Key[WASDEQ]$/.test(e.code) && activeRef.current) stopFollowing(map)
       }
       canvas.addEventListener('pointerdown', onDown)
       canvas.addEventListener('pointerup', onUp)
@@ -334,7 +335,7 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
   )
 }
 
-/** Active closures, ghost proposal, focus corridor, developments and scenario demolitions for sim time `t`, from the store. */
+/** Active closures, ghost proposal, focus corridor, hazards, developments and scenario demolitions for sim time `t`, from the store. */
 function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverlay, t: number, runId: string | null, side: string): void {
   const s = useStore.getState()
   const bundle = runId ? s.replays[runId]?.bundle ?? null : null
@@ -350,4 +351,8 @@ function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverla
   developments.set({ developments: scenario?.developments ?? [], draft, placed: s.developmentPlaced,
     ghostPosition: draft ? s.developmentPlaced ? draft.position : s.developmentHover : null, invalidDraft: !!s.developmentError && s.developmentPlaced,
     focusedId: s.selection?.kind === 'development' ? s.selection.id : null, zones: s.pack?.zones ?? [], t })
+  const hazards = [...(scenario?.hazards ?? [])]
+  const ghost = s.ghost?.hazard
+  if (ghost && !hazards.some((h) => h.track_id === ghost.track_id)) hazards.push(ghost)
+  ws.storm.setHazards(hazards)
 }

@@ -16,7 +16,7 @@ export const useDisplay = create<DisplaySettings & { set: (patch: Partial<Displa
   sharp: false,
   projection: 'perspective',
   lighting: 'afternoon',
-  swarmScale: 2.2,
+  swarmScale: 1,
   set: (patch) => set(patch),
 }))
 

@@ -6,7 +6,7 @@ import { Ray } from '@babylonjs/core/Culling/ray'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 import { PBRMaterial } from '@babylonjs/core/Materials/PBR/pbrMaterial'
 
-import { buildCity, PALETTE, Y } from './city'
+import { buildCity, HIDDEN_Y, PALETTE, Y } from './city'
 import { cityPose } from './camera'
 import { Overlay, MARK } from './overlay'
 import { RoadIndex } from './roadIndex'
@@ -54,7 +54,7 @@ describe('New-city rendering without appearance configuration', () => {
     engine.dispose()
   })
 
-  it('resolves picked faces to OSM building ids and collapses exactly the demolished ones', () => {
+  it('collapses exactly the demolished buildings and landmarks by their ids, and restores them', () => {
     const engine = new NullEngine()
     const scene = new Scene(engine)
     const world = fixture()
@@ -63,39 +63,21 @@ describe('New-city rendering without appearance configuration', () => {
     const city = buildCity(scene, world)
     const buildings = city.chunks.filter((m) => m.name.startsWith('buildings-'))
     expect(buildings.length).toBeGreaterThan(0)
-    expect(buildings.every((m) => m.isPickable)).toBe(true)
-    // Every face of every building chunk belongs to one of the fixture buildings, and the ids round-trip.
-    const seen = new Set<string>()
-    for (const mesh of buildings) {
-      const faces = (mesh.getIndices()?.length ?? 0) / 3
-      for (let f = 0; f < faces; f++) {
-        const id = city.buildingAt(mesh, f)
-        expect(id).not.toBeNull()
-        seen.add(id!)
-      }
-    }
-    expect(seen).toEqual(new Set(['office', 'house', 'unmodeled-landmark']))
-    expect(city.describeBuilding('office')).toMatchObject({ kind: 'building', category: 'office', height_m: 80, x: 4115, z: 7115 })
-    expect(city.describeBuilding('w-tower')).toMatchObject({ kind: 'landmark', name: 'CN Tower' })
+    const house = city.buildingRanges.get('osm:house')!
+    const office = city.buildingRanges.get('osm:office')!
+    expect(house.length).toBeGreaterThan(0)
+    expect(office.length).toBeGreaterThan(0)
     const landmark = city.chunks.find((m) => m.metadata?.landmarkId === 'w-tower')!
-    expect(city.buildingAt(landmark, 0)).toBe('w-tower')
-
     const before = buildings.map((m) => new Float32Array(m.getVerticesData('position')!))
+    const heights = (ranges: typeof house) => ranges.flatMap((r) => { const p = r.mesh.getVerticesData('position')!; const out: number[] = []; for (let v = r.start; v < r.end; v++) out.push(p[v * 3 + 1]); return out })
+
     city.hideBuildings(['house', 'w-tower'])
     expect(city.isHidden('house')).toBe(true)
+    expect(city.isHidden('office')).toBe(false)
     expect(landmark.isEnabled()).toBe(false)
-    let collapsed = 0, untouched = 0
-    buildings.forEach((mesh, i) => {
-      const now = mesh.getVerticesData('position')!
-      for (let f = 0; f < (mesh.getIndices()?.length ?? 0) / 3; f++) {
-        const id = city.buildingAt(mesh, f)
-        const v = mesh.getIndices()![f * 3] * 3
-        if (id !== null) { expect(now[v + 1]).toBe(before[i][v + 1]); untouched++ }
-        else { expect(now[v + 1]).toBe(Y.ground - 1); collapsed++ } // hidden buildings no longer pick
-      }
-    })
-    expect(collapsed).toBeGreaterThan(0)
-    expect(untouched).toBeGreaterThan(0)
+    expect(heights(house).every((y) => y === HIDDEN_Y)).toBe(true) // the demolished house draws nothing
+    expect(heights(office).some((y) => y > 0)).toBe(true) // its neighbour is untouched
+
     city.hideBuildings([]) // restoring puts every vertex back and re-enables the landmark
     buildings.forEach((mesh, i) => expect(Array.from(mesh.getVerticesData('position')!)).toEqual(Array.from(before[i])))
     expect(landmark.isEnabled()).toBe(true)
@@ -145,6 +127,26 @@ describe('New-city rendering without appearance configuration', () => {
     }
     const colors = city.ground.getVerticesData('color')!
     for (let i = 0; i < 3; i++) expect(colors[i]).toBeCloseTo(PALETTE.land[i])
+    city.dispose()
+    scene.dispose()
+    engine.dispose()
+  })
+
+  it('continues meadow through unclassified city land while preserving explicitly paved surfaces', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const world = fixture()
+    world.buildings = []
+    world.surfaces = {
+      ground: [{ ring: [4000, 7000, 4200, 7000, 4200, 7400, 4000, 7400] }], meadow: [],
+      pavement: [{ ring: [4200, 7000, 4400, 7000, 4400, 7400, 4200, 7400] }],
+      grass: [], asphalt: [], rail: [], sand: [],
+    }
+    const city = buildCity(scene, world)
+    expect(city.ground.material?.name).toBe('city-grass')
+    const colors = city.ground.getVerticesData('color')!
+    for (let i = 0; i < 3; i++) expect(colors[i]).toBeCloseTo(PALETTE.meadow[i])
+    expect(city.chunks.some((mesh) => mesh.material?.name === 'city-pavement')).toBe(true)
     city.dispose()
     scene.dispose()
     engine.dispose()

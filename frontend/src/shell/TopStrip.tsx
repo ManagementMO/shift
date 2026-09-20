@@ -21,6 +21,7 @@ export default function TopStrip({ onOpenScenarios, onGlobe, active = true, rend
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
   const run = useStore((s) => s.runs.find((r) => r.run_id === s.primaryRunId) ?? s.runs.find((r) => r.status === 'running' || r.status === 'queued'))
   const loading = useStore((s) => s.loadingReplay !== null)
+  const hazardPreview = useStore((s) => Boolean(s.ghost?.hazard))
   const lens = useStore((s) => s.lens)
   const setLens = useStore((s) => s.setLens)
   const primaryRunId = useStore((s) => s.primaryRunId)
@@ -56,10 +57,11 @@ export default function TopStrip({ onOpenScenarios, onGlobe, active = true, rend
       </button>
       <div className={`status ${st.cls}`}>
         <i />
-        {st.label}
+        {hazardPreview ? 'Visual hazard preview' : st.label}
       </div>
       <div className="strip-actions">
         <a className="ghostbtn" href="/live">Live city</a>
+        <a className="ghostbtn" href="/tornado" title="Tornado sandbox · visual effects, separate from measured runs">Tornado</a>
         {pack?.pack_id === 'toronto' && <a className="ghostbtn" href="/showcase">Cityscape</a>}
         <button className="ghostbtn" onClick={() => void share()} disabled={!primaryRunId}>
           {shared ? 'Exported' : 'Share'}

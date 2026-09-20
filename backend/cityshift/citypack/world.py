@@ -394,6 +394,45 @@ def compile_water(water_json: Path | None, osm: OsmData, frame: WorldFrame, clip
     return out
 
 
+FAR_REACH_M = 12000.0
+
+
+def compile_far_water(water_json: Path | None, frame: WorldFrame, clip: Polygon, near_water: list[dict],
+                      land_probes: list[Point], reach_m: float = FAR_REACH_M) -> tuple[list[dict], list[float]]:
+    """Coarse lake extent beyond the pack, for the placeholder terrain.  The full shoreline linework partitions a
+    box `reach_m` past the pack; faces are lake only when they continue the compiled in-pack water and hold no
+    city probes, so an unclosed shoreline degrades to plain land rather than flooding the countryside."""
+    x0, z0, x1, z1 = clip.bounds
+    far = box(x0 - reach_m, z0 - reach_m, x1 + reach_m, z1 + reach_m)
+    far_bounds = [q(v) for v in far.bounds]
+    lake_ways = water_json.with_name("lake_ways.json") if water_json else None
+    if not lake_ways or not lake_ways.exists() or not near_water:
+        return [], far_bounds
+    lines: list[LineString] = []
+    for e in json.loads(lake_ways.read_text())["elements"]:
+        if e["type"] != "way" or len(e.get("geometry", [])) < 2:
+            continue
+        line = LineString([frame.lonlat_to_world(p["lon"], p["lat"]) for p in e["geometry"]]).intersection(far)
+        lines.extend(g for g in getattr(line, "geoms", [line]) if isinstance(g, LineString) and not g.is_empty)
+    if not lines:
+        return [], far_bounds
+    near = unary_union([Polygon(list(zip(a["ring"][::2], a["ring"][1::2], strict=True)),
+                                [list(zip(h[::2], h[1::2], strict=True)) for h in a.get("holes", [])]).buffer(0)
+                        for a in near_water])
+    lake: list[Polygon] = []
+    for face in polygonize(unary_union([*lines, far.exterior])):
+        if face.area < 1e5 or face.intersection(near).area < 0.3 * min(face.area, near.area):
+            continue
+        probes = sum(1 for p in land_probes if face.contains(p))
+        if probes / (face.area / 1e6) > 10.0:
+            continue
+        lake.append(face)
+    if not lake:
+        return [], far_bounds
+    merged = unary_union(lake).simplify(40.0, preserve_topology=True).difference(clip)
+    return [polygon_record(p) for p in iter_polys(merged) if p.area > 1e4], far_bounds
+
+
 def compile_network(net: sumolib.net.Net, frame: WorldFrame) -> tuple[list[dict], list[dict], list[Point]]:
     roads: list[dict] = []
     probes: list[Point] = []
@@ -453,7 +492,11 @@ def compile_network(net: sumolib.net.Net, frame: WorldFrame) -> tuple[list[dict]
 
 
 def compile_surfaces(plate: Polygon, roads: list[dict], junctions: list[dict], green: list[dict],
-                     sand: list[dict], rail: list[list[float]], water: list[dict]) -> dict[str, list[dict]]:
+                     sand: list[dict], rail: list[list[float]], water: list[dict], core: Polygon | None = None,
+                     buildings: list[dict] | None = None) -> dict[str, list[dict]]:
+    """Partition the plate into non-overlapping surfaces.  With `core` (the pack bounds), bare land is `ground`
+    only inside the core and near mapped buildings; the padded ring and the unmapped margins are `meadow`, so
+    the compiled city stops where its buildings stop instead of sitting on a concrete slab."""
     def points(ring):
         return list(zip(ring[::2], ring[1::2], strict=True))
 
@@ -501,8 +544,25 @@ def compile_surfaces(plate: Polygon, roads: list[dict], junctions: list[dict], g
         surface = surface.difference(occupied)
         emit(kind, surface)
         occupied = unary_union([occupied, surface])
-    emit("ground", land.difference(occupied))
+    bare = land.difference(occupied)
+    if core is None:
+        emit("ground", bare)
+    else:
+        urban = built_up(buildings, core) if buildings is not None else core
+        emit("ground", bare.intersection(urban))
+        emit("meadow", bare.difference(urban))
     return out
+
+
+def built_up(buildings: list[dict], core: Polygon, reach_m: float = 70.0) -> Polygon:
+    """The mapped city: building footprints grown by a street's width and merged, with gaps closed and the
+    outline rounded so the concrete ends in blocks rather than in a staircase or a straight survey line."""
+    blobs = [Polygon(list(zip(b["ring"][::2], b["ring"][1::2], strict=True))).buffer(reach_m, quad_segs=3)
+             for b in buildings if len(b["ring"]) >= 6]
+    if not blobs:
+        return Polygon()
+    merged = unary_union(blobs).buffer(80.0, quad_segs=2).buffer(-60.0, quad_segs=2)
+    return merged.intersection(core)
 
 
 def compile_world(pack_id: str, out_path: Path | None = None) -> Path:
@@ -522,12 +582,15 @@ def compile_world(pack_id: str, out_path: Path | None = None) -> Path:
         r = b["ring"]
         probes.append(Point(sum(r[0::2]) / (len(r) // 2), sum(r[1::2]) / (len(r) // 2)))
     green, sand, rail = compile_areas(osm, frame, clip)
-    water = compile_water(PACK_ROOT.parent / "osm" / f"{pack_id}_water" / "lake.json", osm, frame, clip, probes)
+    water_json = PACK_ROOT.parent / "osm" / f"{pack_id}_water" / "lake.json"
+    water = compile_water(water_json, osm, frame, clip, probes)
+    far_water, far_bounds = compile_far_water(water_json, frame, clip, water, probes)
 
     x0, z0, x1, z1 = bw
     pad_x, pad_z = (x1 - x0) * 0.3, (z1 - z0) * 0.3
+    # The plate reaches past the pack; where the lake continues, the plate must not read as land.
     surfaces = compile_surfaces(box(x0 - pad_x, z0 - pad_z, x1 + pad_x, z1 + pad_z),
-                                roads, junctions, green, sand, rail, water)
+                                roads, junctions, green, sand, rail, [*water, *far_water], core=clip, buildings=buildings)
 
     stops = []
     for s in pack["stops"]:
@@ -590,6 +653,8 @@ def compile_world(pack_id: str, out_path: Path | None = None) -> Path:
         "surfaces": surfaces,
         "rail": rail,
         "water": water,
+        "far_water": far_water,
+        "far_bounds": far_bounds,
         "counts": {"roads": len(roads), "junctions": len(junctions), "buildings": len(buildings), "water": len(water), "green": len(green), "rail": len(rail)},
         "provenance": ["OpenStreetMap (ODbL) via api.openstreetmap.org tiles + Overpass shoreline", f"SUMO netconvert network {pack['network_fingerprint']}"],
     }

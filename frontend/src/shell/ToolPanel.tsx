@@ -3,8 +3,10 @@ import { api } from '../api'
 import { useStore, type ToolId } from '../store'
 import type { ServicePlan } from '../types'
 import { fmt } from '../util'
+import { currentPose, incidentPose } from '../world/camera'
+import { clock } from '../world/playback'
+import { cameraTo, leadMap } from '../world/registry'
 import { AREAS, startPick } from '../world/areaSelect'
-import { leadMap } from '../world/registry'
 import { ghostFromProposal } from './ghost'
 import ProposalCard from './ProposalCard'
 import DevelopmentTool from './DevelopmentTool'
@@ -17,7 +19,7 @@ const TITLES: Record<ToolId, string> = {
   population: 'Population',
   event: 'Event',
   development: 'New development',
-  weather: 'Moving hazard',
+  weather: 'Tornado / corridor hazard',
   road: 'Roads',
   intersection: 'Intersections',
 }
@@ -185,6 +187,18 @@ function ClosureTool() {
 function HazardTool() {
   const pack = useStore((s) => s.pack)
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
+  const ghost = useStore((s) => s.ghost?.hazard ?? null)
+  const cued = ghost ?? scenario?.hazards[0]
+  const cue = () => {
+    if (!cued?.waypoints.length) return
+    clock.pause()
+    clock.seek(Math.max(0, cued.start_s - 30))
+    clock.setSpeed(8)
+    useStore.getState().setPicking(false)
+    const map = leadMap()
+    if (map) cameraTo(incidentPose(cued.waypoints[0], cued.radius_m * 3, currentPose(map)), 'incident')
+    clock.play()
+  }
   const horizon = scenario?.constraints.horizon_s ?? 2700
   const places = useMemo(() => [{ id: 'venue', name: 'the venue' }, ...(pack?.zones.map((z) => ({ id: z.zone_id, name: z.name })) ?? [])], [pack])
   const [from, setFrom] = useState('venue')
@@ -197,7 +211,8 @@ function HazardTool() {
   const name = (id: string) => places.find((p) => p.id === id)?.name ?? id
   return (
     <div className="tool">
-      <div className="small dim">A declared moving hazard region: roads inside its footprint become unavailable while it passes. It is not a weather model.</div>
+      <div className="small dim">The backend models a timed closure of the full corridor. Tornado smoke and building damage are visual effects, not structural physics; previewing them does not change the current SUMO replay.</div>
+      <a className="ghostbtn" href="/tornado">Open tornado sandbox</a>
       <label className="small">
         from
         <select value={from} onChange={(e) => setFrom(e.target.value)}>
@@ -226,6 +241,7 @@ function HazardTool() {
       <button className="primary" disabled={busy || !to} onClick={() => void preview(`storm corridor via ${name(from)} and ${name(to)} ${radius} m from ${fmt(start)} to ${fmt(end)}`)}>
         {busy ? 'Proposing…' : 'Preview path'}
       </button>
+      {cued && <button className="ghostbtn" onClick={cue}>Cue tornado {ghost ? 'preview' : ''}</button>}
     </div>
   )
 }
