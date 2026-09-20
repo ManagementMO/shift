@@ -117,15 +117,20 @@ export const useStore = create<State>((set, get, store) => ({
 
   async boot(requestedPackId) {
     const request = ++packSelectionRequest
+    performance.mark('boot:start')
     try {
-      const [health, packs] = await Promise.all([api.health(), api.packs()])
+      // The health probe waits on storage / provider checks (an unreachable Atlas costs seconds); the city never does.
+      void api.health().then((health) => { if (request === packSelectionRequest) set({ health }) }).catch(() => {})
+      const packs = await api.packs()
       if (request !== packSelectionRequest) return
-      set({ health, packs })
+      set({ packs })
       const packId = packs.find((p) => p.pack_id === requestedPackId)?.pack_id ?? packs.find((p) => p.pack_id === 'toronto')?.pack_id ?? packs[0]?.pack_id ?? 'toronto'
       const loaded = await loadPack(packId)
       if (request !== packSelectionRequest) return
       set(loaded)
+      performance.mark('boot:pack')
       await enterCity(packId)
+      performance.mark('boot:city')
     } catch (e) {
       if (request === packSelectionRequest) set({ error: String(e) })
     }

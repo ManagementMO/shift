@@ -14,7 +14,7 @@ import type { Scene } from '@babylonjs/core/scene'
 import { TEXTURE_RECIPES } from './appearance'
 import { hex, meshFromBatch, PALETTE, vertexColorMaterial, Y } from './city'
 import { boundaryDistance, pointInRing, PlacementGrid, TREE_HEIGHT, TREE_RADIUS, type TreePlacement } from './details'
-import { Batch, bounds, mix, signedArea, type RGB } from './geometry'
+import { Batch, bounds, distanceToSegment, mix, signedArea, type RGB } from './geometry'
 import type { CityMaterials } from './materials'
 import { buildVegetation } from './vegetation'
 import type { Flat, WorldData, WorldRoad } from './worldData'
@@ -135,11 +135,58 @@ export interface TerrainShape {
   plateY: number
   water: { ring: Flat; holes: Flat[]; box: [number, number, number, number] }[]
   inWater(x: number, z: number): boolean
-  shoreDistance(x: number, z: number): number
+  /** Distance to the nearest shoreline; with `within`, polygons farther than that are skipped and `within` is returned. */
+  shoreDistance(x: number, z: number, within?: number): number
   /** placeholder ground height; hidden below the plate and the lake bed where the compiled world takes over */
   height(x: number, z: number): number
   /** height a road or tree should sit on: the plate inside the padded pack, the terrain beyond */
   surface(x: number, z: number): number
+}
+
+const SHORE_CELL_M = 250
+
+/** Shoreline segments bucketed by `SHORE_CELL_M` cells; `distance` only visits cells within the asked radius. */
+export class ShoreIndex {
+  private readonly cells = new Map<string, number[]>()
+  private readonly segments: number[] = []
+
+  constructor(rings: Flat[]) {
+    for (const ring of rings) {
+      for (let i = 0, j = ring.length - 2; i + 1 < ring.length; j = i, i += 2) {
+        const k = this.segments.length
+        this.segments.push(ring[j], ring[j + 1], ring[i], ring[i + 1])
+        const x0 = Math.min(ring[j], ring[i]), x1 = Math.max(ring[j], ring[i]), z0 = Math.min(ring[j + 1], ring[i + 1]), z1 = Math.max(ring[j + 1], ring[i + 1])
+        for (let cx = Math.floor(x0 / SHORE_CELL_M); cx <= Math.floor(x1 / SHORE_CELL_M); cx++) {
+          for (let cz = Math.floor(z0 / SHORE_CELL_M); cz <= Math.floor(z1 / SHORE_CELL_M); cz++) {
+            const key = `${cx}:${cz}`
+            const bucket = this.cells.get(key)
+            if (bucket) bucket.push(k)
+            else this.cells.set(key, [k])
+          }
+        }
+      }
+    }
+  }
+
+  /** Distance to the nearest shoreline segment, or `within` when none lies within that radius. */
+  distance(x: number, z: number, within: number): number {
+    let d = within
+    const reach = Math.ceil(within / SHORE_CELL_M)
+    const cx = Math.floor(x / SHORE_CELL_M), cz = Math.floor(z / SHORE_CELL_M)
+    const seen = new Set<number>()
+    for (let i = cx - reach; i <= cx + reach; i++) {
+      for (let j = cz - reach; j <= cz + reach; j++) {
+        const bucket = this.cells.get(`${i}:${j}`)
+        if (!bucket) continue
+        for (const k of bucket) {
+          if (seen.has(k)) continue
+          seen.add(k)
+          d = Math.min(d, distanceToSegment(x, z, this.segments[k], this.segments[k + 1], this.segments[k + 2], this.segments[k + 3]))
+        }
+      }
+    }
+    return d
+  }
 }
 
 export function terrainShape(world: Pick<WorldData, 'crs' | 'surfaces' | 'far_water' | 'far_bounds'>, opts: Partial<TerrainOptions> = {}): TerrainShape {
@@ -153,7 +200,11 @@ export function terrainShape(world: Pick<WorldData, 'crs' | 'surfaces' | 'far_wa
   const water = (world.far_water ?? []).filter((w) => w.ring.length >= 6).map((w) => ({ ring: w.ring, holes: w.holes ?? [], box: bounds(w.ring) }))
   const inWater = (x: number, z: number): boolean =>
     water.some((w) => x >= w.box[0] && x <= w.box[2] && z >= w.box[1] && z <= w.box[3] && pointInRing(x, z, w.ring) && !w.holes.some((h) => pointInRing(x, z, h)))
-  const shoreDistance = (x: number, z: number): number => {
+  // Shoreline segments in a coarse spatial hash: a bounded query touches a few cells instead of walking every
+  // segment of the lake shore (hundreds) for each of the ~100k terrain vertices.
+  const shore = new ShoreIndex(water.flatMap((w) => [w.ring, ...w.holes]))
+  const shoreDistance = (x: number, z: number, within = Infinity): number => {
+    if (Number.isFinite(within)) return shore.distance(x, z, within)
     let d = Infinity
     for (const w of water) {
       if (x < w.box[0] - d || x > w.box[2] + d || z < w.box[1] - d || z > w.box[3] + d) continue
@@ -169,7 +220,7 @@ export function terrainShape(world: Pick<WorldData, 'crs' | 'surfaces' | 'far_wa
     if (d <= 0) return d < -60 ? Y.water - 3 : Y.water - 3 + (base - (Y.water - 3)) * (1 + d / 60)
     const relief = o.hillAmplitude * (0.5 + 0.5 * rollingNoise(x, z, o.hillWavelength)) + d * o.slope
     // land grows from the plate edge and flattens again into a beach at the shore
-    const shore = smooth(shoreDistance(x, z) / 500)
+    const shore = smooth(shoreDistance(x, z, 500) / 500)
     return base + relief * smooth(d / o.hillRise) * shore
   }
   const grid = heightGrid(farBounds, plate, o.cells, (x, z) => boxDistance(plate, x, z) >= -0.001 && inWater(x, z) ? plateY : height(x, z))
@@ -234,7 +285,7 @@ export function countryTrees(shape: TerrainShape, roads: { shape: Flat; width: n
     for (let iz = Math.ceil(fz0 / spacing); iz * spacing < fz1; iz++) {
       const j1 = hash2(ix, iz), j2 = hash2(ix + 977, iz - 331), j3 = hash2(ix - 541, iz + 223)
       const x = (ix + j1 * 0.9) * spacing, z = (iz + j2 * 0.9) * spacing
-      if (boxDistance(shape.pack, x, z) < 150 || shape.inWater(x, z) || shape.shoreDistance(x, z) < 90) continue
+      if (boxDistance(shape.pack, x, z) < 150 || shape.inWater(x, z) || shape.shoreDistance(x, z, 90) < 90) continue
       if (rollingNoise(x + 5000, z - 5000, 900) < 0.12 || avoid?.(x, z, TREE_RADIUS * (1.5 + j3 * 1.1) + 0.2)) continue
       if (roads.some((r) => segmentDistance(x, z, r.shape) < r.width + 30)) continue
       out.push({ x, z, y: shape.surface(x, z), scale: 1.5 + j3 * 1.1, shade: j2, priority: Math.max(0, boxDistance(shape.pack, x, z)) + j3 * 600 })
@@ -286,7 +337,7 @@ export interface Parcel {
 
 /** Is this spot open farmland: away from the pack, the lake and the beach, and inside the farmland noise mask. */
 export function isFarmland(shape: TerrainShape, x: number, z: number): boolean {
-  return boxDistance(shape.plate, x, z) > 250 && !shape.inWater(x, z) && shape.shoreDistance(x, z) > 250 && rollingNoise(x + 2222, z - 777, 3200) > -0.05
+  return boxDistance(shape.plate, x, z) > 250 && !shape.inWater(x, z) && shape.shoreDistance(x, z, 250) >= 250 && rollingNoise(x + 2222, z - 777, 3200) > -0.05
 }
 
 /** Deterministic parcels on the concession lattice, skipping horizon roads. */
@@ -611,7 +662,8 @@ export function terrainVertexData(shape: TerrainShape, cutouts: Point2[][] = [])
     const tone = 0.5 + 0.5 * rollingNoise(x - 9000, z + 4000, 1300)
     const away = smooth(boxDistance(shape.plate, x, z) / 1500)
     let c: RGB = mix(PALETTE.meadow, mix(mix(PALETTE.green, GRASS_DRY, tone), GRASS_DEEP, smooth((shape.plateY + 12 - y) / 40) * 0.35), away)
-    const shore = shape.shoreDistance(x, z)
+    // the shore tint only reaches 140 m: beyond that the lookup stops at the polygons' bounding boxes
+    const shore = shape.shoreDistance(x, z, 140)
     if (shore < 140) c = mix(SHORE, c, smooth(shore / 140))
     return land.vertex(x, y, z, nx, ny, nz, c)
   }
@@ -653,6 +705,7 @@ export interface Terrain {
 export function buildTerrain(scene: Scene, world: WorldData, materials: CityMaterials, opts: Partial<TerrainOptions> = {}): Terrain {
   const o = { ...TERRAIN_DEFAULTS, ...opts }
   const shape = terrainShape(world, o)
+  performance.mark('terrain:shape')
   const foliage: StandardMaterial = vertexColorMaterial('country-foliage', scene, 0.015)
   const flat: StandardMaterial = vertexColorMaterial('country-flat', scene, 0.03)
   const meshes: Mesh[] = []
@@ -669,6 +722,7 @@ export function buildTerrain(scene: Scene, world: WorldData, materials: CityMate
     }
   }
 
+  performance.mark('terrain:water')
   const roads = horizonRoads(world.roads, world.crs.bounds_world, shape.farBounds, o.roadLimit)
   const add = (name: string, batch: Batch, material: Material) => {
     if (batch.isEmpty()) return
@@ -679,14 +733,17 @@ export function buildTerrain(scene: Scene, world: WorldData, materials: CityMate
   const asphalt = new Batch(TEXTURE_RECIPES.asphalt.metres)
   for (const road of roads) drapedStrip(asphalt, road.shape, road.width, shape, PALETTE.asphaltMajor, 0.4, cuts, reservations)
   add('horizon-roads', asphalt, materials.get('asphalt'))
+  performance.mark('terrain:roads')
 
   const farm = farmland(shape, roads, Math.round(o.treeLimit * 0.8), reservations)
   add('fields', farm.fields, materials.get('grass'))
   add('lanes', farm.lanes, materials.get('asphalt'))
   add('farmsteads', farm.buildings, flat)
+  performance.mark('terrain:farmland')
 
   const land = new Mesh('countryside', scene)
   terrainVertexData(shape, [...cuts, ...farm.cuts]).applyToMesh(land, false)
+  performance.mark('terrain:land')
   land.material = materials.get('grass')
   land.isPickable = false
   land.receiveShadows = false
@@ -702,6 +759,7 @@ export function buildTerrain(scene: Scene, world: WorldData, materials: CityMate
     tree.receiveShadows = false
   }
   meshes.push(...trees)
+  performance.mark('terrain:trees')
 
   return {
     meshes,

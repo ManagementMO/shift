@@ -114,14 +114,18 @@ export class WorldScene {
     fill.specular = Color3.Black()
     fill.intensity = 0.42
 
-    // --- city
+    // --- city (each pass leaves a `scene:*` performance mark so slow builds can be read from the profiler)
+    performance.mark('scene:start')
     this.city = buildCity(scene, world, balanced ? 512 : 1024)
+    performance.mark('scene:city')
     const streets = buildStreetDetails(scene, world, this.city.treePositions)
     this.city.chunks.push(...streets)
     this.city.shadowCasters.push(...streets.filter(m => m.name.startsWith('street-trees-')))
+    performance.mark('scene:streets')
     // Placeholder countryside past the pack: grassland hills, the lake carried on, main roads to the horizon.
     const reservedTrees = [...this.city.treePositions.map(t => ({ ...t, y: world.surfaces ? Y.road : Y.green })), ...streets.treePositions]
     this.terrain = buildTerrain(scene, world, this.city.materials, { cells: balanced ? 96 : 176, treeLimit: balanced ? 500 : 1500, reservedTrees })
+    performance.mark('scene:terrain')
 
     // --- camera
     const cam = new ArcRotateCamera('cam', -1.95, 0.98, 1500, new Vector3(380, 0, -520), scene)
