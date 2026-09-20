@@ -10,7 +10,20 @@ import traci
 from traci import constants as tc
 
 from cityshift.contracts import CityPack
-from cityshift.live.contracts import MAX_TRAVELERS, PopulationChange, SessionConfig, temperature_response
+from cityshift.live.contracts import (
+    MAX_TRAVELERS,
+    DevelopmentChange,
+    PopulationChange,
+    SessionConfig,
+    temperature_response,
+)
+from cityshift.live.developments import (
+    PlacedDevelopment,
+    development_id_for,
+    direction_of,
+    participants_of,
+    resolve_access,
+)
 from cityshift.live.network import LiveNetwork
 from cityshift.live.recording import COUNT_KEYS, FrameRow
 from cityshift.live.swarm import AgentMessage, Swarm, SwarmEvent
@@ -59,6 +72,7 @@ class Population:
         self.zones = {z.zone_id: z for z in pack.zones}
         self.trips: dict[str, Trip] = {}
         self.cars: dict[str, Trip] = {}
+        self.developments: dict[str, PlacedDevelopment] = {}
         self.pending: list[tuple[int, str]] = []
         self.dirty: set[str] = set()
         self.latest_people: dict = {}
@@ -108,6 +122,73 @@ class Population:
             self.entities.append({"index": trip.index, "id": entity_id, "person_id": pid, "kind": "car" if car else "person", "origin_edge": origin, "destination_edge": target, "destination_zone_id": destination.zone_id, "depart_s": depart, "walk_limit_m": walk_limit})
             heapq.heappush(self.pending, (depart, pid))
         return {"added_travelers": change.count, "destination_zone_id": destination.zone_id, "release_window_s": change.release_window_s}
+
+    def add_development(self, change: DevelopmentChange, command_id: str, t: int) -> dict:
+        """Place a building: generate its declared trips from the placement and queue them into the running city."""
+        spec = change.spec
+        access = resolve_access(self.network.net, self.pack, spec)
+        development_id = development_id_for(spec, command_id)
+        if development_id in self.developments:
+            raise ValueError("this development has already been placed")
+        participants = participants_of(spec)
+        waves = [(spec.first_wave, direction_of(spec))] + ([(spec.return_wave, direction_of(spec, returning=True))] if spec.return_wave else [])
+        if len(self.trips) + participants * len(waves) > MAX_TRAVELERS:
+            raise ValueError(f"session limit is {MAX_TRAVELERS} individually tracked travelers")
+        by_mode = {a.mode: a for a in access}
+        digest = hashlib.sha256((command_id + development_id).encode()).hexdigest()
+        prefix = "d_" + digest[:10]
+        rng = random.Random((spec.seed << 32) ^ int(digest[:16], 16))
+        zone_ids = [zid for zid, share in spec.zone_shares.items() if share > 0]
+        weights = [spec.zone_shares[zid] for zid in zone_ids]
+        placed = PlacedDevelopment(development_id, spec, access, t)
+        for w, (wave, direction) in enumerate(waves):
+            # waves are offsets from the moment of placement; the last departure must still fit inside the horizon
+            start = min(t + int(wave.start_s), self.config.horizon_s - 2)
+            end = min(t + int(wave.end_s), self.config.horizon_s - 1)
+            for i in range(participants):
+                pid = f"{prefix}_{w}{i:05d}"
+                car = rng.random() < spec.car_share and "passenger" in by_mode
+                gate_access = by_mode["passenger"] if car else by_mode["pedestrian"]
+                zone_id = rng.choices(zone_ids, weights)[0]
+                gate = gate_access.edge_id
+                counterpart = rng.choice(gate_access.zone_edges[zone_id])
+                origin, target = (gate, counterpart) if direction == "outbound" else (counterpart, gate)
+                entity_id = f"car_{pid}" if car else pid
+                depart = rng.randint(start, max(start, end))
+                length = self.network.edge(origin).getLength()
+                position = length * rng.uniform(0.08, 0.65)
+                arrival = self.network.edge(target).getLength() * 0.65
+                trip = Trip(pid, entity_id, len(self.entities), origin, target, zone_id, depart, car, position, arrival, float(spec.walk_limit_m))
+                self.trips[pid] = trip
+                if car:
+                    self.cars[entity_id] = trip
+                self.entities.append({"index": trip.index, "id": entity_id, "person_id": pid, "kind": "car" if car else "person", "origin_edge": origin, "destination_edge": target, "destination_zone_id": zone_id, "depart_s": depart, "walk_limit_m": float(spec.walk_limit_m), "development_id": development_id, "trip_direction": direction})
+                heapq.heappush(self.pending, (depart, pid))
+                placed.person_ids.append(pid)
+        self.developments[development_id] = placed
+        return {"development_id": development_id, "added_trips": len(placed.person_ids), "access": [a.model_dump(mode="json") for a in access]}
+
+    def remove_development(self, development_id: str, t: int) -> dict:
+        """Demolish a placed building: drop the travelers who have not set off yet, let the rest finish their trips."""
+        placed = self.developments.pop(development_id, None)
+        if placed is None:
+            raise ValueError("no such development stands in this city")
+        dropped = 0
+        for pid in placed.person_ids:
+            trip = self.trips.get(pid)
+            if trip is None or trip.state != 0 or trip.depart_s <= t:
+                continue
+            del self.trips[pid]
+            self.cars.pop(trip.entity_id, None)
+            self.dirty.discard(pid)
+            dropped += 1
+        if dropped:
+            self.pending = [(depart, pid) for depart, pid in self.pending if pid in self.trips]
+            heapq.heapify(self.pending)
+        return {"development_id": development_id, "dropped_travelers": dropped, "travelling": len(placed.person_ids) - dropped}
+
+    def snapshot_developments(self) -> list[dict]:
+        return [d.snapshot() for d in self.developments.values()]
 
     def add_initial(self) -> None:
         if not self.config.initial_population:

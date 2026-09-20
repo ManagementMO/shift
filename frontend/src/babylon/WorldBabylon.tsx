@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef } from 'react'
 import '@babylonjs/core/Culling/ray'
 
-import { scenarioForView } from '../development'
+import type { LiveChannel } from '../live/channel'
+import { live, liveClosuresAt } from '../live/session'
 import { useStore, type Selection } from '../store'
+import type { Restriction } from '../types'
 import { corridorPose, currentPose, districtPose } from '../world/camera'
 import DevelopmentMarkers from '../world/DevelopmentMarkers'
 import { clock } from '../world/playback'
@@ -12,6 +14,7 @@ import { DevelopmentOverlay } from './developments'
 import { BabylonSyncMap } from './mapAdapter'
 import { CORRIDOR_PICK_PX, NavLabels, NavOverlay, type NavMode, type NavTarget } from './navigation'
 import { Overlay } from './overlay'
+import { RoadIndex } from './roadIndex'
 import type { WorldScene } from './scene'
 import type { Kind } from './traffic'
 import WorldCanvas from './WorldCanvas'
@@ -28,11 +31,18 @@ function ground(t: Target): NavTarget {
   return t && t.kind !== 'bus' && t.kind !== 'car' && t.kind !== 'person' && t.kind !== 'development' ? { kind: t.kind, id: t.id, name: t.name } : null
 }
 
-/** Restrictions whose window covers sim time `t`: the closures drawn in red right now. */
-function activeRestrictions(t: number): Set<string> {
-  const s = useStore.getState()
-  const scenario = s.scenarios.find((x) => x.scenario_id === s.scenarioId)
-  return new Set((scenario?.restrictions ?? []).filter((r) => t >= r.start_s && t <= r.end_s).map((r) => r.restriction_id))
+/** The closures standing in the live city at sim time `t`, named after the street they cover when there is one. */
+function closuresAt(t: number): Restriction[] {
+  const corridors = useStore.getState().corridors
+  return liveClosuresAt(live.session, t, (edges) => Object.values(corridors).find((c) => c.edge_ids.every((e) => edges.includes(e)))?.label ?? null)
+}
+
+/** How many road segments a click on a street picks: the segment plus its opposite direction when there is one. */
+function pickedRoad(streets: RoadIndex, x: number, z: number): string[] | null {
+  const hit = streets.nearest(x, z, 24)
+  if (!hit) return null
+  const reverse = hit.road.id.startsWith('-') ? hit.road.id.slice(1) : `-${hit.road.id}`
+  return streets.byId.has(reverse) ? [hit.road.id, reverse] : [hit.road.id]
 }
 
 /** The store's selection as a ground target for the overlay (entities are marked by `Traffic`). */
@@ -66,17 +76,12 @@ function stopFollowing(map: BabylonSyncMap): void {
  * pointer input into hover marks and selections: buildings, saved developments, buses, cars, people, stops and
  * active closures.  While a development is being aimed its ghost follows the cursor and a click places it.
  */
-export default function WorldBabylon({ runId, side, active = true, onWorldReady, onWorldError }: { runId: string | null; side: 'solo' | 'left' | 'right'; /** false while the globe is shown or the city is still flying in: keyboard travel stays off */ active?: boolean; onWorldReady?: (scene: WorldScene) => void; onWorldError?: (message: string) => void }) {
+export default function WorldBabylon({ side, active = true, onWorldReady, onWorldError }: { side: 'solo' | 'left' | 'right'; /** false while the globe is shown or the city is still flying in: keyboard travel stays off */ active?: boolean; onWorldReady?: (scene: WorldScene) => void; onWorldError?: (message: string) => void }) {
   const pack = useStore((s) => s.pack)
   const sceneRef = useRef<WorldScene | null>(null)
   const labelsRef = useRef<HTMLDivElement>(null)
-  const runIdRef = useRef(runId)
   const activeRef = useRef(active)
   const syncRef = useRef<() => void>(() => {})
-  useEffect(() => {
-    runIdRef.current = runId
-    syncRef.current()
-  }, [runId])
   useEffect(() => {
     activeRef.current = active
     sceneRef.current?.keys.setEnabled(active)
@@ -92,6 +97,7 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
       const developments = new DevelopmentOverlay(ws.scene, ws.frame, ws.city)
       const buildings = ws.buildings
       const nav = new NavOverlay(ws.scene, ws.world, ws.roads, buildings)
+      const streets = new RoadIndex(ws.world, (r) => r.allow.includes('car') || r.allow.includes('bus'))
       const unregister = registerMap(side, map)
       if (side !== 'left') {
         // a development branch that loaded before any map was registered still gets its framing
@@ -136,7 +142,7 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
         const g = map.unprojectGround(sx, sy)
         if (!g) return null
         const tol = CORRIDOR_PICK_PX * map.metresPerPixel(sx, sy)
-        const incident = nav.incidentAt(g[0], g[1], tol, activeRestrictions(clock.t))
+        const incident = nav.incidentAt(g[0], g[1], tol, new Set(closuresAt(clock.t).map((r) => r.restriction_id)))
         if (incident) return incident
         if (navMode) return nav.regionAt(g[0], g[1], tol)
         // saved developments are drawn as their own meshes; base buildings come from the prism index
@@ -210,6 +216,15 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
           return
         }
         const t = targetAt(p.x, p.y)
+        if (s.tool === 'closure' && (!t || t.kind === 'building') && !live.getSnapshot().draft) {
+          // the Road closures tool is open: a click on a drivable street selects it (both directions) for closing
+          const g = map.unprojectGround(p.x, p.y)
+          const edges = g ? pickedRoad(streets, g[0], g[1]) : null
+          if (edges) {
+            s.setGhost({ edges, stops: [], hazard: null })
+            return
+          }
+        }
         applyHover(t)
         if (!t) return
         if (t.kind === 'district' || t.kind === 'corridor') {
@@ -252,28 +267,28 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
       window.addEventListener('pointercancel', onWindowUp)
       window.addEventListener('keydown', onKey)
 
-      // --- store -> scene
-      let rxKey: string | null = null
-      let restrictions: unknown = null
+      // --- store + live session -> scene
+      let attached: LiveChannel | null | undefined
+      let closureKey = ''
       let corridors: unknown = null
       const sync = (): void => {
         const s = useStore.getState()
-        const rid = runIdRef.current
-        const rx = rid ? s.replays[rid] ?? null : null
-        const key = rid && rx ? rid : null
-        if (key !== rxKey) {
-          rxKey = key
-          ws.traffic.setReplay(rx)
+        const channel = live.getSnapshot().primary
+        if (attached !== channel) {
+          attached = channel
+          // frames from another city's network would put people on the wrong streets
+          const compatible = !channel || channel.state.network_fingerprint === ws.world.network_fingerprint
+          ws.traffic.setLiveSource(compatible ? channel : null)
+          if (channel && !compatible) s.setError('This recording uses a different city network. Open its matching city pack.')
         }
         const sel = s.selection
-        // a traveler who drove is drawn as their car
-        ws.traffic.selectedId = sel && (sel.kind === 'bus' || sel.kind === 'car' || sel.kind === 'person')
-          ? sel.kind === 'person' && rx?.bundle.compile?.mode_assignment[sel.id] === 'car' ? `car_${sel.id}` : sel.id : null
+        ws.traffic.selectedId = sel && (sel.kind === 'bus' || sel.kind === 'car' || sel.kind === 'person') ? sel.id : null
         ws.traffic.dimOthers = sel?.kind === 'person'
-        const scenario = s.scenarios.find((x) => x.scenario_id === s.scenarioId)
-        if (scenario?.restrictions !== restrictions) {
-          restrictions = scenario?.restrictions
-          nav.setIncidents(scenario?.restrictions ?? [])
+        const closures = closuresAt(clock.t)
+        const key = closures.map((r) => `${r.restriction_id}:${r.edge_ids.length}`).join('|')
+        if (key !== closureKey) {
+          closureKey = key
+          nav.setIncidents(closures)
         }
         if (s.corridors !== corridors) {
           corridors = s.corridors
@@ -289,16 +304,17 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
           if (last && !raf) raf = requestAnimationFrame(refreshHover)
         }
         nav.setSelected(selectedGround(sel, nav, buildings))
-        marks(ws, overlay, developments, clock.t, runIdRef.current, side)
+        marks(ws, overlay, developments, clock.t, side)
       }
       syncRef.current = sync
       sync()
       ws.simT = clock.t
       const offFrame = clock.onFrame((t) => {
         ws.simT = t
-        marks(ws, overlay, developments, t, runIdRef.current, side)
+        marks(ws, overlay, developments, t, side)
       })
       const unsub = useStore.subscribe(sync)
+      const unsubLive = live.subscribe(sync)
 
       onWorldReady?.(ws)
       ws.scene.onDisposeObservable.addOnce(() => {
@@ -315,6 +331,7 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
         canvas.style.cursor = ''
         labels?.dispose()
         unsub()
+        unsubLive()
         offFrame()
         unregister()
         nav.dispose()
@@ -334,29 +351,27 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
     <>
       <WorldCanvas packId={pack.pack_id} onReady={onReady} onError={onWorldError} quality={side === 'solo' ? 'high' : 'balanced'} className={`world world-${side} bworld`} />
       <div ref={labelsRef} className="nav-labels" aria-hidden="true" />
-      <DevelopmentMarkers runId={runId} side={side} />
+      <DevelopmentMarkers side={side} />
     </>
   )
 }
 
-/** Active closures, ghost proposal, focus corridor, hazards, developments and scenario demolitions for sim time `t`, from the store. */
-function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverlay, t: number, runId: string | null, side: string): void {
+/** Standing closures, the tool's aim, the focused closure and the developments of the live city at sim time `t`. */
+function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverlay, t: number, side: string): void {
   const s = useStore.getState()
-  const bundle = runId ? s.replays[runId]?.bundle ?? null : null
-  const scenario = scenarioForView(s.scenarios, s.scenarioId, bundle, side)
-  ws.city.hideBuildings(scenario?.demolished ?? [])
-  const closed: string[] = []
-  for (const r of scenario?.restrictions ?? []) if (t >= r.start_s && t <= r.end_s) closed.push(...r.edge_ids)
+  const view = live.getSnapshot()
+  const closures = closuresAt(t)
+  const closed = closures.flatMap((r) => r.edge_ids)
   const focusId = s.selection?.kind === 'restriction' ? s.selection.id : null
-  const focus = focusId ? scenario?.restrictions.find((r) => r.restriction_id === focusId)?.edge_ids ?? [] : []
+  const focus = focusId ? closures.find((r) => r.restriction_id === focusId)?.edge_ids ?? [] : []
+  const change = view.draft?.intervention
+  // a previewed closure / reopening ghosts its streets; otherwise the streets picked for the Road closures tool
+  const ghost = change?.kind === 'close_road' || change?.kind === 'reopen_road' ? change.edge_ids : s.ghost?.edges ?? []
+  const access = change?.kind === 'development' ? view.draft?.access?.map((a) => a.edge_id) ?? [] : []
+  overlay.set({ closed, ghost: side === 'left' ? [] : [...ghost, ...access], focus, ghostStops: side === 'left' ? [] : s.ghost?.stops ?? [] })
   const draft = side !== 'left' ? s.developmentDraft : null
-  const access = draft && s.developmentPlaced ? s.developmentPreview?.development.access.map((a) => a.edge_id) ?? [] : []
-  overlay.set({ closed, ghost: side === 'left' ? [] : [...(s.ghost?.edges ?? []), ...access], focus, ghostStops: side === 'left' ? [] : s.ghost?.stops ?? [] })
-  developments.set({ developments: scenario?.developments ?? [], draft, placed: s.developmentPlaced,
+  developments.set({ developments: view.primary?.state.developments ?? [], draft, placed: s.developmentPlaced,
     ghostPosition: draft ? s.developmentPlaced ? draft.position : s.developmentHover : null, invalidDraft: !!s.developmentError && s.developmentPlaced,
     focusedId: s.selection?.kind === 'development' ? s.selection.id : null, zones: s.pack?.zones ?? [], t })
-  const hazards = [...(scenario?.hazards ?? [])]
-  const ghost = s.ghost?.hazard
-  if (ghost && !hazards.some((h) => h.track_id === ghost.track_id)) hazards.push(ghost)
-  ws.storm.setHazards(hazards)
+  ws.storm.setHazards(s.ghost?.hazard ? [s.ghost.hazard] : [])
 }

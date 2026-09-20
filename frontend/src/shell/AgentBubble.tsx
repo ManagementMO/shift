@@ -1,73 +1,58 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api } from '../api'
-import { isHazardRestriction, spansScenario } from '../closures'
 import { DEVELOPMENT_USES, developmentCounts, developmentLabel } from '../development'
+import { live, liveClosuresAt, useLive } from '../live/session'
 import { useStore } from '../store'
 import { clock } from '../world/playback'
-import { entitiesAt, personStateAt, lonLatAt, seriesAt, type PersonState } from '../replay'
 import { centroidOf, edgePath, fmt } from '../util'
 import { cameraTo, leadMap } from '../world/registry'
 import { agentPose, buildingPose, corridorPose, currentPose } from '../world/camera'
 import { DeleteButton } from './DeleteButton'
-import { ghostFromProposal } from './ghost'
-import ProposalCard from './ProposalCard'
+import LivePreviewCard from './LivePreviewCard'
 
 /** A closure card clicked near the top of the screen opens below its anchor instead of above it. */
 const FLIP_PX = 300
 const SIDE_PX = 170
 
-const STATE_LABEL: Record<PersonState, string> = {
-  not_departed: 'not yet departed',
-  walking: 'walking',
-  waiting: 'waiting for a shuttle',
-  riding: 'riding',
-  driving: 'driving',
-  arrived: 'arrived',
-  unroutable: 'no route found by SUMO',
-}
+/** Traveler states as the live frames encode them (mirrors backend/cityshift/live). */
+const STATE_LABEL = ['not yet departed', 'walking', 'waiting for a shuttle', 'riding', 'driving', 'arrived', 'no route found by SUMO']
+const STATE_CLASS = ['not_departed', 'walking', 'waiting', 'riding', 'driving', 'arrived', 'unroutable']
 
 /**
- * Contextual bubble for whatever was clicked: a person / bus / car, a stop, a closure, a base-city building or a
- * saved development.  Anchored to the lead map's screen projection of the thing: a moving entity is followed frame
- * by frame, the rest sit still.  Buildings and developments carry a two-step Delete that edits the scenario in place.
+ * Contextual bubble for whatever was clicked in the live city: a person / bus / car, a stop, a closure, a base-city
+ * building or a development.  Anchored to the lead map's screen projection of the thing: a moving entity is followed
+ * frame by frame, the rest sit still.  Closures reopen and developments demolish from here, as live commands.
  */
 export default function AgentBubble() {
   const selection = useStore((s) => s.selection)
   const select = useStore((s) => s.select)
-  const setLens = useStore((s) => s.setLens)
   const setTool = useStore((s) => s.setTool)
   const tool = useStore((s) => s.tool)
-  const deleting = useStore((s) => s.deleting)
-  const removeDevelopment = useStore((s) => s.removeDevelopment)
-  const demolishBuilding = useStore((s) => s.demolishBuilding)
-  const setGhost = useStore((s) => s.setGhost)
-  const setError = useStore((s) => s.setError)
-  const proposal = useStore((s) => s.ghost?.proposal ?? null)
-  const scenarioId = useStore((s) => s.scenarioId)
-  const rx = useStore((s) => (s.primaryRunId ? s.replays[s.primaryRunId] : null))
-  const travelers = useStore((s) => s.travelers)
   const pack = useStore((s) => s.pack)
   const roads = useStore((s) => s.roads)
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
+  const corridors = useStore((s) => s.corridors)
   const cameraMode = useStore((s) => s.cameraMode)
   const t = useStore((s) => s.t)
+  const { primary, draft, busy } = useLive()
+  const session = primary?.state ?? null
   const [pt, setPt] = useState<{ x: number; y: number } | null>(null)
-  const [busyRemove, setBusyRemove] = useState(false)
+  const [snapshot, setSnapshot] = useState<{ heading: number; speed: number; state: number } | null>(null)
 
   const kind = selection?.kind ?? null
   const selId = selection?.id ?? null
   const id = selection && (selection.kind === 'bus' || selection.kind === 'car' || selection.kind === 'person') ? selection.id : null
-  const restriction = kind === 'restriction' ? scenario?.restrictions.find((r) => r.restriction_id === selId) ?? null : null
+  const closures = useMemo(() => liveClosuresAt(session, t, (edges) => Object.values(corridors).find((c) => c.edge_ids.every((e) => edges.includes(e)))?.label ?? null), [session, t, corridors])
+  const restriction = kind === 'restriction' ? closures.find((r) => r.restriction_id === selId) ?? null : null
   const clickedAt = selection?.kind === 'restriction' ? selection.at ?? null : null
   const stopSel = kind === 'stop' ? pack?.stops.find((s) => s.stop_id === selId) ?? null : null
   const building = useMemo(() => (kind === 'building' && selId ? leadMap()?.buildingFacts?.(selId) ?? null : null), [kind, selId])
   // The development panel already shows a development's details while it is open (e.g. right after confirming).
-  const development = kind === 'development' && tool !== 'development' ? scenario?.developments?.find((d) => d.development_id === selId) ?? null : null
+  const development = kind === 'development' && tool !== 'development' ? session?.developments?.find((d) => d.development_id === selId) ?? null : null
+  const meta = id ? primary?.metadata.entities.find((e) => e.id === id) ?? null : null
   const roofHeight = building ? building.height : development ? development.spec.height_m : null
 
   // Keep the bubble on its anchor (per frame, off the React tree except for the final set when it moves).
   useEffect(() => {
-    if (!selId || (id && !rx)) return
+    if (!selId) return
     // A closure can run for blocks: pin its bubble where it was clicked, else to the closed segment nearest the middle of the view.
     const path = restriction ? edgePath(roads, restriction.edge_ids) : []
     const still = (lead: ReturnType<typeof leadMap>): [number, number] | null => {
@@ -81,12 +66,18 @@ export default function AgentBubble() {
     }
     let last = ''
     let lastFollow = 0
-    const update = (tt: number, follow: boolean) => {
+    let lastInfo = ''
+    const update = (follow: boolean) => {
       const lead = leadMap()
-      // a traveler who drove is tracked as their car
-      const ix = id && rx ? rx.tracks[id] ?? rx.tracks[`car_${id}`] : undefined
-      const stop = id && rx ? pack?.stops.find((s) => s.stop_id === waitingStop(rx.personEvents[id], tt)) : undefined
-      const pos: [number, number] | null = still(lead) ?? (ix ? lonLatAt(ix, tt) : stop ? [stop.lon, stop.lat] : null)
+      const ent = id ? lead?.entityAt?.(id) ?? null : null
+      const pos: [number, number] | null = still(lead) ?? ent?.lonLat ?? null
+      if (ent) {
+        const info = `${ent.state}:${Math.round(ent.speed * 3.6)}`
+        if (info !== lastInfo) {
+          lastInfo = info
+          setSnapshot({ heading: ent.heading, speed: ent.speed, state: ent.state })
+        }
+      }
       if (!lead || !pos) {
         if (last !== 'none') {
           last = 'none'
@@ -114,22 +105,26 @@ export default function AgentBubble() {
       }
     }
     // Re-project while paused too: the camera may move under a still clock.
-    const onMove = () => update(clock.t, false)
+    const onMove = () => update(false)
     const lead = leadMap()
     lead?.on('move', onMove)
-    update(clock.t, true)
-    const off = clock.onFrame((tt) => update(tt, true))
+    update(true)
+    const off = clock.onFrame(() => update(true))
     return () => {
       off()
       lead?.off('move', onMove)
     }
-  }, [id, selId, rx, pack, roads, restriction, clickedAt, stopSel, building, development, roofHeight, cameraMode])
+  }, [id, selId, roads, restriction, clickedAt, stopSel, building, development, roofHeight, cameraMode])
 
   if (!selection) return null
   const style = pt ? { left: pt.x, top: pt.y } : undefined
   const cls = `bubble ${pt ? '' : 'docked'}`
   const locked = leadMap()?.cameraLocked
-  const busy = deleting === selId
+  const close = (
+    <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
+      ✕
+    </button>
+  )
 
   if (building) {
     const b = building
@@ -144,9 +139,7 @@ export default function AgentBubble() {
         <div className="bubble-head">
           <b>{b.name ?? (b.kind === 'landmark' ? 'Landmark' : 'Building')}</b>
           <span className="pill">{b.cat && b.cat !== 'generic' ? b.cat : 'building'}</span>
-          <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
-            ✕
-          </button>
+          {close}
         </div>
         <div className="small">
           {Math.round(b.height)} m tall{floors ? ` · about ${floors} floor${floors === 1 ? '' : 's'}` : ''} · {Math.round(b.area).toLocaleString()} m² footprint
@@ -161,9 +154,6 @@ export default function AgentBubble() {
               Frame
             </button>
           )}
-          {scenario && (
-            <DeleteButton label="Delete" busy={busy} prompt="Remove this building from the scenario? It generates no trips, so only the map changes." onConfirm={() => void demolishBuilding(b.id)} />
-          )}
         </div>
       </div>
     )
@@ -172,225 +162,158 @@ export default function AgentBubble() {
   if (development) {
     const { spec } = development
     const counts = developmentCounts(spec)
+    const removing = draft?.intervention.kind === 'remove_development' && draft.intervention.development_id === development.development_id
     return (
       <div className={`${cls} building-card`} style={style} role="dialog" aria-label={`${spec.name}, development`}>
         <div className="bubble-head">
           <b>{spec.name}</b>
           <span className="pill">{developmentLabel(spec).toLowerCase()}</span>
-          <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
-            ✕
-          </button>
+          {close}
         </div>
         <div className="small dim">
-          {spec.capacity.toLocaleString()} {DEVELOPMENT_USES[spec.land_use].unit} · {counts.trips.toLocaleString()} one-way trips · saved in this scenario
+          {spec.capacity.toLocaleString()} {DEVELOPMENT_USES[spec.land_use].unit} · {counts.trips.toLocaleString()} one-way trips · standing in the city
         </div>
-        <div className="row">
-          <DeleteButton label="Delete" busy={busy} prompt={`Remove ${spec.name} and its ${counts.trips.toLocaleString()} trips from this scenario?`} onConfirm={() => void removeDevelopment(development.development_id)} />
-          <button
-            className="ghostbtn"
-            onClick={() => {
-              setTool('development')
-              select({ kind: 'development', id: development.development_id })
-            }}
-          >
-            Details
-          </button>
-        </div>
+        {removing ? (
+          <LivePreviewCard applyLabel="Demolish & play" onApplied={() => select(null)} />
+        ) : (
+          <div className="row">
+            <DeleteButton label="Delete" busy={!!busy} prompt={`Demolish ${spec.name}? Travelers who have not set off yet are dropped; the rest finish their trips.`} onConfirm={() => void live.preview({ kind: 'remove_development', development_id: development.development_id })} />
+            <button
+              className="ghostbtn"
+              onClick={() => {
+                setTool('development')
+                select({ kind: 'development', id: development.development_id })
+              }}
+            >
+              Details
+            </button>
+          </div>
+        )}
       </div>
     )
   }
 
   if (restriction) {
-    // A street closure has no time window: it stays until removed here.  Removing previews the reopen as a ghost
-    // proposal and confirms through the same branch flow as every other edit; hazard footprints follow their track.
+    // A street closure has no timer: it stays until it is reopened here, as a live command previewed by SUMO first.
     const r = restriction
-    const hazard = isHazardRestriction(r)
-    const untimed = spansScenario(r, scenario?.constraints.horizon_s ?? 0)
-    const active = t >= r.start_s && t <= r.end_s
-    const status = untimed ? 'closed' : t < r.start_s ? `starts in ${fmt(r.start_s - t)}` : t > r.end_s ? 'over' : 'in effect now'
-    const removing = proposal?.kind === 'reopen_edge' && r.edge_ids.every((e) => proposal.edge_ids.includes(e))
+    const reopening = draft?.intervention.kind === 'reopen_road' && r.edge_ids.every((e) => (draft.intervention as { edge_ids: string[] }).edge_ids.includes(e))
     const frame = () => {
       const lead = leadMap()
       const pts = edgePath(roads, r.edge_ids)
       if (lead && pts.length >= 2) cameraTo(corridorPose(pts, currentPose(lead)), 'incident')
     }
-    const remove = async () => {
-      if (!scenarioId) return
-      setBusyRemove(true)
-      try {
-        if (tool) setTool(null)
-        setGhost(ghostFromProposal(await api.previewEdit(scenarioId, `remove closure ${r.restriction_id}`), pack))
-      } catch (e) {
-        setError(String(e))
-      } finally {
-        setBusyRemove(false)
-      }
-    }
     // keep the wider card on screen: flip below a high anchor, hold it off the side edges
     const placed = pt ? { left: Math.max(SIDE_PX, Math.min(window.innerWidth - SIDE_PX, pt.x)), top: pt.y } : undefined
     return (
-      <div className={`${cls} closure ${pt && pt.y < FLIP_PX ? 'below' : ''}`} style={placed} role="dialog" aria-label={hazard ? 'Hazard footprint' : 'Street closure'}>
+      <div className={`${cls} closure ${pt && pt.y < FLIP_PX ? 'below' : ''}`} style={placed} role="dialog" aria-label="Street closure">
         <div className="bubble-head">
-          <b>{hazard ? 'Hazard footprint' : 'Street closure'}</b>
-          <span className={`pill closure ${active ? '' : 'off'}`}>{status}</span>
-          <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
-            ✕
-          </button>
+          <b>Street closure</b>
+          <span className="pill closure">closed</span>
+          {close}
         </div>
         <div className="small">{r.label}</div>
         <div className="small dim">
-          {r.edge_ids.length} segments · {r.modes.join(', ')} · {untimed ? 'closed until you remove it' : `+${fmt(r.start_s)}–+${fmt(r.end_s)}`}
+          {r.edge_ids.length} segment{r.edge_ids.length === 1 ? '' : 's'} · cars and buses · since +{fmt(r.start_s)} · closed until you reopen it
         </div>
-        <div className="small dim">source: {r.source_claim_id ?? 'scenario fixture, no evidence claim'}</div>
-        {removing && !tool ? (
-          <ProposalCard />
+        {reopening && !tool ? (
+          <LivePreviewCard applyLabel="Reopen & play" onApplied={() => select(null)} />
         ) : (
           <div className="row">
-            {!hazard && (
-              <button className="primary" onClick={() => void remove()} disabled={busyRemove || !scenarioId}>
-                {busyRemove ? 'Checking…' : 'Remove closure'}
-              </button>
-            )}
+            <button className="primary" onClick={() => void live.preview({ kind: 'reopen_road', edge_ids: r.edge_ids })} disabled={!!busy || !session}>
+              {busy ? 'Checking…' : 'Reopen street'}
+            </button>
             {!locked && (
               <button className="ghostbtn" onClick={frame}>
                 Frame
               </button>
             )}
-            <button className="ghostbtn" onClick={() => setLens('transport')}>
-              Details
-            </button>
           </div>
         )}
-        {hazard && <div className="small dim">Hazard footprints follow their storm track; change the hazard instead of removing this.</div>}
       </div>
     )
   }
 
   if (stopSel) {
     const s = stopSel
-    const waiting = rx ? seriesAt(rx.stopQueue[s.stop_id], t) ?? 0 : null
-    const duties = rx?.bundle.compile?.duties.filter((d) => d.stop_sequence.includes(s.stop_id)) ?? []
-    const allowed = scenario?.constraints.allowed_stop_ids.includes(s.stop_id)
+    const waiting = session?.metrics?.stop_queues?.[s.stop_id] ?? null
+    const lines = primary?.metadata.routes.filter((r) => r.stop_ids.includes(s.stop_id)).map((r) => r.bus_id.replace('_', ' ')) ?? []
     return (
       <div className={cls} style={style}>
         <div className="bubble-head">
           <b>{s.name}</b>
           <span className="pill">stop</span>
-          <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
-            ✕
-          </button>
+          {close}
         </div>
-        <div className="small">{waiting === null ? 'no replay loaded' : `${waiting} waiting now`}</div>
-        <div className="small dim">
-          {allowed ? 'in the scenario’s allowed set' : 'not in the allowed set'}
-          {duties.length > 0 && ` · served by ${duties.map((d) => d.vehicle_id.replace('_', ' ')).filter((v, i, a) => a.indexOf(v) === i).join(', ')}`}
-        </div>
-        <div className="row">
-          <button className="ghostbtn" onClick={() => setLens('transport')}>
-            Details
-          </button>
-        </div>
+        <div className="small">{waiting === null ? 'no queue recorded yet' : `${waiting} waiting now`}</div>
+        <div className="small dim">{lines.length ? `served by ${lines.filter((v, i, a) => a.indexOf(v) === i).join(', ')}` : 'no shuttle serves this stop'}</div>
       </div>
     )
   }
 
-  if (!id || !rx) return null
-  const ent = entitiesAt(rx, t).find((e) => e.id === id || e.id === `car_${id}`)
-
+  if (!id) return null
   const follow = () => {
     const lead = leadMap()
-    const ix = rx.tracks[id] ?? rx.tracks[`car_${id}`]
-    const pos = ix ? lonLatAt(ix, t) : null
-    if (lead && pos) cameraTo(agentPose([pos[0], pos[1]], ent?.angle ?? null, currentPose(lead)), 'agent')
+    const ent = lead?.entityAt?.(id)
+    if (lead && ent) cameraTo(agentPose(ent.lonLat, ent.heading, currentPose(lead)), 'agent')
   }
+  const speed = snapshot ? `${(snapshot.speed * 3.6).toFixed(0)} km/h` : null
+  const followButton = !locked && (
+    <button className="ghostbtn" onClick={follow}>
+      Follow
+    </button>
+  )
 
   if (selection.kind === 'person') {
-    const ev = rx.personEvents[id]
-    const state = personStateAt(ev, t, travelers[id]?.has_car ? 'car' : undefined)
-    const trav = travelers[id]
-    const zone = pack?.zones.find((z) => z.zone_id === trav?.dest_zone)
-    const development = scenario?.developments?.find((d) => d.development_id === trav?.development_id)
-    const destination = scenario?.developments?.find((d) => d.development_id === trav?.dest_zone)
-    const wait = waitedSoFar(ev, t)
+    const state = snapshot?.state ?? -1
+    const zone = pack?.zones.find((z) => z.zone_id === meta?.destination_zone_id)
     const num = Number(id.replace(/\D/g, ''))
     return (
       <div className={cls} style={style}>
         <div className="bubble-head">
-          <b>{development ? `${development.spec.name} · ${trav?.trip_direction} trip` : `Traveler ${Number.isFinite(num) ? num : id}`}</b>
-          <span className={`pill ${state}`}>{STATE_LABEL[state]}</span>
-          <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
-            ✕
-          </button>
+          <b>Traveler {Number.isFinite(num) ? num : id}</b>
+          {state >= 0 && <span className={`pill ${STATE_CLASS[state] ?? ''}`}>{STATE_LABEL[state] ?? 'on the move'}</span>}
+          {close}
         </div>
-        <div className="small">heading to {zone?.name ?? destination?.spec.name ?? trav?.dest_zone ?? 'unknown'}</div>
+        <div className="small">heading to {zone?.name ?? meta?.destination_zone_id ?? 'their destination'}</div>
         <div className="small dim">
-          {trav?.has_car ? 'car trip' : 'no car'} · leaves at +{fmt(trav?.depart_s ?? 0)}
-          {wait > 0 && ` · waited ${fmt(wait)}`}
-          {ent?.speed !== undefined && state !== 'waiting' && ` · ${(ent.speed * 3.6).toFixed(0)} km/h`}
+          {meta ? `set off at +${fmt(meta.depart_s)}` : 'live traveler'}
+          {speed && state !== 2 && ` · ${speed}`}
         </div>
-        <div className="row">
-          {!leadMap()?.cameraLocked && (
-            <button className="ghostbtn" onClick={follow}>
-              Follow
-            </button>
-          )}
-          <button className="ghostbtn" onClick={() => setLens('people')}>
-            Why?
-          </button>
-        </div>
-        <div className="small dim">synthetic traveler · positions are recorded SUMO samples</div>
+        <div className="row">{followButton}</div>
+        <div className="small dim">synthetic traveler · position is SUMO's, live</div>
       </div>
     )
   }
 
   if (selection.kind === 'bus') {
-    const occ = seriesAt(rx.occupancy[id], t)
-    const cap = scenario?.constraints.fleet.find((f) => f.vehicle_id === id)?.capacity
-    const riders = Object.entries(rx.personEvents).filter(([, ev]) => onboard(ev, t, id)).length
     return (
       <div className={cls} style={style}>
         <div className="bubble-head">
           <b>{id.replace('_', ' ').toUpperCase()}</b>
           <span className="pill bus">shuttle</span>
-          <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
-            ✕
-          </button>
+          {close}
         </div>
         <div className="small">
-          {occ ?? riders} aboard{cap ? ` / ${cap} seats` : ''}
-          {ent ? ` · ${(ent.speed * 3.6).toFixed(0)} km/h` : ' · not on the road right now'}
+          {meta?.capacity ? `${meta.capacity} seats` : 'shuttle'}
+          {meta?.line ? ` · ${meta.line}` : ''}
+          {speed ? ` · ${speed}` : ' · not on the road right now'}
         </div>
-        <div className="row">
-          {!leadMap()?.cameraLocked && (
-            <button className="ghostbtn" onClick={follow}>
-              Follow
-            </button>
-          )}
-          <button className="ghostbtn" onClick={() => setLens('transport')}>
-            Why?
-          </button>
-        </div>
+        <div className="row">{followButton}</div>
       </div>
     )
   }
 
-  const owner = id.startsWith('car_') ? id.slice(4) : null
+  const owner = meta?.person_id ?? (id.startsWith('car_p') ? id.slice(4) : null)
   return (
     <div className={cls} style={style}>
       <div className="bubble-head">
-        <b>{owner ? 'Cohort car trip' : 'Background car'}</b>
+        <b>{owner ? `Traveler ${Number(owner.replace(/\D/g, ''))}'s car` : 'Background car'}</b>
         <span className="pill car">car</span>
-        <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
-          ✕
-        </button>
+        {close}
       </div>
-      <div className="small dim">{ent ? `${(ent.speed * 3.6).toFixed(0)} km/h` : 'not on the road right now'}</div>
+      <div className="small dim">{speed ?? 'not on the road right now'}</div>
       <div className="row">
-        {!leadMap()?.cameraLocked && (
-          <button className="ghostbtn" onClick={follow}>
-            Follow
-          </button>
-        )}
+        {followButton}
         {owner && (
           <button className="ghostbtn" onClick={() => select({ kind: 'person', id: owner })}>
             Traveler
@@ -413,41 +336,4 @@ function nearestPoint(pts: [number, number][], to: [number, number]): [number, n
     }
   }
   return best
-}
-
-function waitingStop(ev: { t: number; event: string; stop_id: string | null }[] | undefined, t: number): string | null {
-  if (!ev) return null
-  let stop: string | null = null
-  for (const e of ev) {
-    if (e.t > t) break
-    if (e.event === 'wait_start') stop = e.stop_id
-    else if (e.event === 'board' || e.event === 'arrive') stop = null
-  }
-  return stop
-}
-
-function waitedSoFar(ev: { t: number; event: string }[] | undefined, t: number): number {
-  if (!ev) return 0
-  let total = 0
-  let since: number | null = null
-  for (const e of ev) {
-    if (e.t > t) break
-    if (e.event === 'wait_start') since = e.t
-    else if (e.event === 'board' && since !== null) {
-      total += e.t - since
-      since = null
-    }
-  }
-  if (since !== null) total += t - since
-  return Math.max(0, Math.round(total))
-}
-
-function onboard(ev: { t: number; event: string; vehicle_id: string | null }[], t: number, bus: string): boolean {
-  let on = false
-  for (const e of ev) {
-    if (e.t > t) break
-    if (e.event === 'board' && e.vehicle_id === bus) on = true
-    else if (e.event === 'alight' || e.event === 'arrive') on = false
-  }
-  return on
 }

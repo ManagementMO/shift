@@ -19,7 +19,7 @@ export interface LiveViewState {
 const ready = (channel: LiveChannel) => !['starting', 'restoring', 'failed'].includes(channel.state.status)
 
 export class LiveController {
-  readonly clock = new PlaybackClock()
+  readonly clock: PlaybackClock
   private primary: LiveChannel | null = null
   private baseline: LiveChannel | null = null
   private listeners = new Set<() => void>()
@@ -37,7 +37,14 @@ export class LiveController {
   private seekVersion = 0
   private view: LiveViewState = { primary: null, baseline: null, t: 0, playing: false, followLive: true, busy: null, error: null, draft: null, loading: false, buffering: false }
 
-  constructor() { this.clock.onUi(() => this.emit()) }
+  /** The city shares one playback clock with the shell (dock, bubbles); tests may pass their own. */
+  constructor(clock: PlaybackClock = new PlaybackClock()) {
+    this.clock = clock
+    this.clock.onUi(() => this.emit())
+  }
+
+  /** The session being watched, if any. */
+  get session(): LiveSession | null { return this.primary?.state ?? null }
 
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   getSnapshot = () => this.view

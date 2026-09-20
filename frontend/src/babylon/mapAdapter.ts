@@ -207,6 +207,13 @@ export class BabylonSyncMap implements SyncMap {
     return this.projectWorld(x, height, z)
   }
 
+  entityAt(id: string): { lonLat: [number, number]; heading: number; speed: number; state: number } | null {
+    const pose = this.ws.traffic.poseOf(id)
+    if (!pose) return null
+    // yaw is the Babylon rotation about +y (clockwise from north seen from above), i.e. a compass heading
+    return { lonLat: this.ws.frame.worldToLonLat(pose.x, pose.z), heading: (pose.yaw * 180) / Math.PI, speed: pose.speed ?? 0, state: pose.state ?? -1 }
+  }
+
   buildingFacts(id: string): BuildingFacts | null {
     const b = this.ws.buildings.building(id)
     if (!b) return null

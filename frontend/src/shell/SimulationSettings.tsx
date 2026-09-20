@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../api'
+import { DEFAULT_LIVE_CONFIG, newCity, useLive } from '../live/session'
 import { useStore } from '../store'
 import { usePreferences } from '../preferences'
 import { useDisplay } from '../babylon/display'
@@ -28,6 +29,10 @@ export function SettingsPanel({ city = false, showCityAppearance = true, appeara
   const { preferences, update, reset } = usePreferences()
   const display = useDisplay()
   const health = useStore((s) => s.health)
+  const pack = useStore((s) => s.pack)
+  const { busy, primary } = useLive()
+  const [travelers, setTravelers] = useState(primary?.state.config.initial_population ?? DEFAULT_LIVE_CONFIG.initial_population)
+  const [buses, setBuses] = useState(primary?.state.config.fleet_size ?? DEFAULT_LIVE_CONFIG.fleet_size)
 
   useEffect(() => {
     if (health || !docked) return
@@ -49,6 +54,13 @@ export function SettingsPanel({ city = false, showCityAppearance = true, appeara
   return (
     <aside ref={panelRef} className={`sim-settings ${docked ? 'sim-settings-docked' : ''}`} role={docked ? 'region' : 'dialog'} aria-labelledby={titleId}>
       <header><div><h2 id={titleId}>Settings</h2><p>Set the limits. Explore the consequences.</p></div>{onClose && <button className="settings-close" aria-label="Close settings" onClick={onClose}><Icon name="close" /></button>}</header>
+      {city && pack && <section className="settings-section">
+        <h3><Icon name="swarm" /><span>New city</span><small>{primary ? `${primary.state.config.initial_population.toLocaleString()} travelers now` : 'starting…'}</small></h3>
+        <div className="settings-row"><label htmlFor={`${titleId}-travelers`}>Initial travelers</label><input id={`${titleId}-travelers`} type="number" min={0} max={10000} step={100} value={travelers} onChange={(e) => setTravelers(Number(e.target.value))} /></div>
+        <div className="settings-row"><label htmlFor={`${titleId}-buses`}>Shuttle buses</label><input id={`${titleId}-buses`} type="number" min={0} max={32} step={1} value={buses} onChange={(e) => setBuses(Number(e.target.value))} /></div>
+        <div className="settings-provider"><button disabled={!!busy} onClick={() => { void newCity(pack.pack_id, { initial_population: travelers, fleet_size: buses }); onClose?.() }}>{busy ? 'Working…' : 'Start a fresh city'}</button></div>
+        <p className="settings-hint">Restarts SUMO from the beginning with this crowd. The current city stays saved and listed on the globe.</p>
+      </section>}
       <section className="settings-section">
         <h3><Icon name="swarm" /><span>Swarm</span><small>{preferences.aiEnabled ? '3 specialists' : 'Local planning'}</small></h3>
         <div className="settings-role-list"><span>Evidence</span><span>Demand</span><span>Planning</span></div>
@@ -75,7 +87,7 @@ export function SettingsPanel({ city = false, showCityAppearance = true, appeara
         <label className="settings-check"><span>City textures</span><input type="checkbox" checked={display.textures} onChange={(e) => display.set({ textures: e.target.checked })} /></label>
         <label className="settings-check"><span>City high resolution</span><input type="checkbox" checked={display.sharp} onChange={(e) => display.set({ sharp: e.target.checked })} /></label></>}
       </details>}
-      <footer><p>Saved on this browser. Applies to new investigations and edit requests; running jobs are unchanged.</p><div><button onClick={reset}>Reset preferences</button>{city && <button onClick={() => { useStore.getState().setLens('diagnostics'); onClose?.() }}>Diagnostics</button>}</div></footer>
+      <footer><p>Saved on this browser. Applies to new investigations and edit requests; running jobs are unchanged.</p><div><button onClick={reset}>Reset preferences</button></div></footer>
     </aside>
   )
 }

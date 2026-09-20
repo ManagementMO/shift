@@ -1,4 +1,5 @@
 import type { Kind } from '../babylon/traffic'
+import type { Development, DevelopmentSpec } from '../types'
 import type { LiveCounts } from './frames'
 
 export interface LiveConfig {
@@ -26,6 +27,10 @@ export type Intervention =
   | { kind: 'temperature'; temperature_c: number }
   | { kind: 'population'; count: number; destination_zone_id: string; origin_zone_id?: string | null; release_window_s: number }
   | { kind: 'incident'; hazard: Hazard; lon: number; lat: number; radius_m: number; duration_s?: number | null; label?: string | null }
+  /** A building placed in the running city: its trips are generated from the placement and inserted live. */
+  | { kind: 'development'; spec: DevelopmentSpec }
+  /** Demolish a placed development: its travelers that have not set off yet are dropped, the rest finish their trips. */
+  | { kind: 'remove_development'; development_id: string }
 
 export interface LiveIncident {
   event_id: string
@@ -111,6 +116,8 @@ export interface LiveSession {
   fleet?: FleetEntry[]
   closed_edge_ids?: string[]
   incidents?: LiveIncident[]
+  /** Developments standing in the city (placed by `development` commands and not removed). */
+  developments?: Development[]
   error: string | null
 }
 
@@ -128,4 +135,9 @@ export interface LivePreview {
   duration_s?: number
   blocks?: string[]
   mobility?: { walk_speed_factor: number; walk_tolerance_factor: number; road_speed_factor: number; model_version: string }
+  /** development previews: the trips the building will add and how it reaches the street */
+  added_trips?: number
+  inbound_trips?: number
+  outbound_trips?: number
+  access?: Development['access']
 }
