@@ -11,8 +11,8 @@ infeasible plans; SUMO decides what actually happens; the UI replays the recorde
 ```
 frontend/   React + TypeScript + Vite; default Babylon.js 3D city, optional Mapbox Standard
             renderer with deck.gl simulation layers; shared Zustand state and replay controls
-backend/    FastAPI + Pydantic, SUMO/TraCI runner, plan compiler + validators,
-            openJiuwen agents, Elasticsearch evidence, replay export
+backend/    FastAPI + Pydantic, MongoDB Atlas metadata, SUMO/TraCI runner,
+            plan compiler + validators, openJiuwen agents, Elasticsearch evidence, replay export
 docs/       ledger: decisions, progress, blockers, capability manifest
 ```
 
@@ -21,6 +21,21 @@ See `docs/DECISIONS.md` for architectural choices and the fallback policy when s
 credentials are absent.
 
 ## Quick start
+
+MongoDB Atlas is the primary metadata store. Before starting the API, create an ignored
+`backend/.env` with `MONGODB_URI` set to your complete Atlas connection string and
+`MONGODB_DATABASE=cityshift` (or your chosen application database). Replace the password
+placeholder locally and percent-encode reserved characters in credentials. Give the database
+user read/write access to that application database and allow the backend's IP in Atlas;
+keep TLS verification enabled. Never put the URI in frontend environment variables.
+
+There is no automatic JSON fallback or migration. Existing JSON records remain untouched.
+Scenarios and their demand cohorts are stored together atomically; plans and validations are
+also stored together. Runs, evidence bundles, and investigations use MongoDB metadata.
+City packs, SUMO input/output, and large replay/export files remain local, so retain the generated
+artifact directories alongside the API. This storage change does not make replay files shared
+between multiple API servers. `/api/health` reports database availability without revealing the URI.
+The backend tests use an isolated MongoDB test double and do not need Atlas credentials.
 
 ```sh
 # backend (Python 3.12; SUMO ships inside the eclipse-sumo wheel)

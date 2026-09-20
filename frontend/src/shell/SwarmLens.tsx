@@ -248,6 +248,9 @@ function DiagnosticsLens({ renderer }: { renderer: Renderer }) {
         <b>{health?.schema_version ?? '—'}</b>
         <span>SUMO</span>
         <b>{health?.sumo ?? '—'}</b>
+        <span>metadata</span>
+        <b>{health?.storage ? `${health.storage.backend}${health.storage.database ? ` · ${health.storage.database}` : ''} · ${health.storage.available ? 'connected' : health.storage.configured ? 'unavailable' : 'not configured'}` : '—'}</b>
+        {health?.storage?.message && <><span>storage status</span><b>{health.storage.message}</b></>}
         <span>model</span>
         <b>
           {health ? `${health.providers.llm.model} via ${health.providers.llm.provider}${health.providers.llm.sponsor ? '' : ' (local fallback)'}` : '—'}

@@ -20,6 +20,7 @@ export default function App({ renderer = 'babylon', active = true, onGlobe, onWo
   const error = useStore((s) => s.error)
   const setError = useStore((s) => s.setError)
   const building = useStore((s) => s.building)
+  const pendingHazardRemoval = useStore((s) => s.pendingHazardRemoval)
   const primaryRunId = useStore((s) => s.primaryRunId)
   const runs = useStore((s) => s.runs)
   const refreshRuns = useStore((s) => s.refreshRuns)
@@ -72,7 +73,8 @@ export default function App({ renderer = 'babylon', active = true, onGlobe, onWo
         </div>
       )}
 
-      {building && (
+      {pendingHazardRemoval && <div className="toast" role="status" style={{ top: 64, zIndex: 30 }}>Saving event removal…</div>}
+      {building && !pendingHazardRemoval && (
         <div className="building">
           <div className="building-card">
             <i />

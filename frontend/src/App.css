@@ -148,6 +148,7 @@ button:disabled {
   align-items: center;
   gap: 14px;
   height: 56px;
+  max-width: calc(100vw - 28px);
   padding: 0 16px;
   background: var(--glass);
   backdrop-filter: none;
@@ -375,6 +376,116 @@ button:disabled {
   gap: 3px;
   color: var(--ink-2);
 }
+.hazard-status,
+.hazard-existing {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: rgba(34, 184, 207, 0.08);
+  border: 1px solid rgba(34, 184, 207, 0.22);
+}
+.hazard-tool details > summary,
+.proposal details > summary {
+  cursor: pointer;
+  padding: 4px 0;
+}
+.hazard-tool details > .row,
+.hazard-existing {
+  margin-top: 7px;
+}
+.hazard-tool .row > label,
+.hazard-tool .row > input {
+  min-width: 0;
+  flex: 1;
+}
+.hazard-coordinates,
+.hazard-edge-list {
+  max-height: 120px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.hazard-edge-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px;
+  background: rgba(22, 32, 44, 0.04);
+}
+.hazard-map-labels {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  overflow: hidden;
+}
+.hazard-map-remove {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  border-radius: 50%;
+  background: rgba(15, 15, 15, 0.94);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.25);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.hazard-map-remove:hover {
+  background: #792f2b;
+  border-color: #ffb3a8;
+}
+.hazard-map-remove:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+.hazard-map-remove:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.weather-kinds button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+.hazard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.hazard-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+.hazard-row.moving {
+  background: rgba(34, 184, 207, 0.1);
+}
+.hazard-row .linkish {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ghostbtn.danger {
+  color: var(--bad);
+}
+.ghostbtn.danger:hover:not(:disabled) {
+  background: rgba(215, 38, 61, 0.1);
+  color: var(--bad);
+}
 .seg {
   display: inline-flex;
   background: rgba(255, 255, 255, 0.07);
@@ -450,6 +561,7 @@ button.primary:active:not(:disabled) {
   transform: translateY(1px);
 }
 input[type='text'],
+input[type='number'],
 input:not([type]),
 select,
 textarea {

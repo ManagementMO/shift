@@ -21,6 +21,7 @@ from cityshift.contracts import (
     ServicePlan,
     StopCandidate,
 )
+from cityshift.domain.hazards import validate_scenario_restrictions
 from cityshift.domain.network import closed_edges_during, load_net, route, walk_distance_m
 from cityshift.transport.sumo_xml import (
     BusStopDef,
@@ -33,6 +34,7 @@ from cityshift.transport.sumo_xml import (
     write_sumocfg,
 )
 
+COMPILER_VERSION = "static-hazards-1"
 DWELL_DROP_S = 25
 VENUE_MIN_DWELL_S = 30
 HOLD_BEFORE_DEPART_S = 180  # bus line is switched to the duty this long before scheduled departure
@@ -126,6 +128,9 @@ def schedule_duties(pack: CityPack, plan: ServicePlan, scenario: ScenarioSpec) -
             seq = [stops[s] for s in d.stop_sequence]
             horizon_guess = d.depart_s + 3600
             closed = closed_edges_during(scenario.restrictions, d.depart_s - HOLD_BEFORE_DEPART_S, horizon_guess, "bus")
+            if any(s.edge_id in closed for s in seq):
+                errors.append(f"{d.duty_id}: a scheduled stop is on a bus-restricted edge during the duty window")
+                continue
             segments: list[list[str]] = []
             arrivals: list[int] = []
             t = d.depart_s
@@ -178,6 +183,10 @@ def compile_scenario(
 ) -> CompileResult:
     net = load_net(pack.pack_id)
     stops = stops_by_id(pack)
+    try:
+        validate_scenario_restrictions(pack, scenario)
+    except ValueError as exc:
+        return CompileResult(False, None, [], {}, {}, {}, {}, [], [], {}, errors=[str(exc)])
     out_dir.mkdir(parents=True, exist_ok=True)
     horizon = scenario.constraints.horizon_s
     schedules, errors = schedule_duties(pack, plan, scenario)
@@ -225,6 +234,7 @@ def compile_scenario(
     unroutable: dict[str, str] = {}
     mode: dict[str, str] = {}
     walk_cache: dict[str, float | None] = {}
+    car_reachable: dict[tuple[str, frozenset[str]], bool] = {}
     window_end = scenario.constraints.service_window_s[1]
     for tr in demand.travelers:
         cohort_ids.append(tr.person_id)
@@ -233,6 +243,15 @@ def compile_scenario(
             dest_car_edge = _nearest_allowed_edge_to_edge(net, tr.dest_edge, "passenger")
             if dest_car_edge is None:
                 unroutable[tr.person_id] = "no drivable edge near destination"
+                mode[tr.person_id] = "unroutable"
+                continue
+            closed = closed_edges_during(scenario.restrictions, tr.depart_s, tr.depart_s + 1, "passenger")
+            car_key = (dest_car_edge, frozenset(closed))
+            if car_key not in car_reachable:
+                path, _ = route(net, venue_car_edge, dest_car_edge, "passenger", closed)
+                car_reachable[car_key] = path is not None
+            if not car_reachable[car_key]:
+                unroutable[tr.person_id] = "no car route avoiding restrictions active at departure (no deferred departure assumed)"
                 mode[tr.person_id] = "unroutable"
                 continue
             vid = f"car_{tr.person_id}"
@@ -264,9 +283,10 @@ def compile_scenario(
 
     # --- background traffic -------------------------------------------------------------------
     rng = random.Random(seed * 7919 + 17)
-    ever_closed = {eid for r in scenario.restrictions for eid in r.edge_ids}
+    ever_closed = {eid for r in scenario.restrictions if "passenger" in r.modes for eid in r.edge_ids}
     drivable = [e for e in net.getEdges() if e.allows("passenger") and not e.isSpecial() and e.getLength() > 30 and e.getID() not in ever_closed]
-    for i in range(demand.background_vehicles):
+    background_count = demand.background_vehicles if drivable else 0
+    for i in range(background_count):
         a, b = rng.choice(drivable), rng.choice(drivable)
         cars.append(CarTrip(f"bg_{i:04d}", a.getID(), b.getID(), rng.randint(0, max(1, horizon - 600))))
 
@@ -281,7 +301,7 @@ def compile_scenario(
                         notify.add(inc.getID())
             except KeyError:
                 pass
-        closures.append(EdgeClosure(r.restriction_id, sorted(notify), r.start_s, r.end_s, [m for m in r.modes if m != "pedestrian"]))
+        closures.append(EdgeClosure(r.restriction_id, r.edge_ids, r.start_s, r.end_s, list(r.modes), sorted(notify)))
     used_stop_ids = sorted({sid for d in plan.duties for sid in d.stop_sequence})
     pickup_ids = {d.stop_sequence[0] for d in plan.duties if d.stop_sequence}
     stop_defs = [BusStopDef(s.stop_id, f"{s.edge_id}_{s.lane_index}", s.start_pos, s.end_pos, s.name, person_capacity=400 if s.stop_id in pickup_ids else 80)
@@ -295,9 +315,14 @@ def compile_scenario(
     write_sumocfg(cfg, Path(pack.net_file), rou, [add], horizon, seed, out_dir / "tripinfo.xml")
     notes = [
         f"{len(persons)} persons inserted ({sum(1 for m in mode.values() if m == 'ride')} ride, {sum(1 for m in mode.values() if m == 'walk')} walk)",
-        f"{len(cohort_vehicles)} cohort cars, {demand.background_vehicles} background cars",
+        f"{len(cohort_vehicles)} cohort cars, {background_count} background cars",
         f"{len(unroutable)} travelers unroutable at compile time (kept in the cohort accounting)",
     ]
+    if background_count != demand.background_vehicles:
+        notes.append(f"{demand.background_vehicles - background_count} background cars omitted: no unrestricted origin/destination edges")
+    if scenario.hazards:
+        notes.append("Static hazard footprints apply for their full [start, end) windows; pedestrians are unaffected, not protected.")
+        notes.append("Car feasibility is checked at declared departure; no delayed departure is assumed. Bus plans conservatively avoid closures overlapping each estimated duty window.")
     return CompileResult(True, cfg, cohort_ids, desired, cohort_vehicles, unroutable, line_schedule, used_stop_ids, schedules, mode, notes=notes)
 
 

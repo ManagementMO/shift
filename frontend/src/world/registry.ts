@@ -3,6 +3,7 @@ import { moveTo, type CameraMode, type CameraPose, type MapCamera } from './came
 
 export type SyncMap = MapCamera & {
   cameraLocked?: boolean
+  hazardAnchor?: (trackId: string) => { x: number; y: number } | null
   setCameraPreset?: (pose: CameraPose, mode: CameraMode) => void
   jumpTo: (o: CameraPose) => unknown
   isMoving: () => boolean
@@ -11,6 +12,8 @@ export type SyncMap = MapCamera & {
   /** Renderer-native framings (Babylon world): opening city hero and the venue egress scene. */
   cityHero?: () => void
   egress?: () => boolean
+  /** Whether `egress` can actually frame anything for the current city pack and replay. */
+  egressAvailable?: () => boolean
   setCameraMode?: (mode: CameraMode) => void
   syncFrom?: (source: SyncMap) => boolean
 }
@@ -35,6 +38,10 @@ export function registerMap(side: string, map: SyncMap): () => void {
     map.off('move', onMove)
     maps.delete(side)
   }
+}
+
+export function mapForSide(side: string): SyncMap | null {
+  return maps.get(side) ?? null
 }
 
 export function leadMap(): SyncMap | null {

@@ -4,6 +4,7 @@ export type Health = {
   ok: boolean
   schema_version: string
   sumo: string
+  storage?: { backend: 'mongodb' | 'json'; configured: boolean; available: boolean; database?: string; message?: string }
   providers: {
     llm: { provider: string; model: string; available: boolean; sponsor: boolean }
     evidence: { provider: string; available: boolean; sponsor: boolean }
@@ -79,14 +80,26 @@ export type Restriction = {
   label: string
 }
 
-export type HazardTrack = {
-  track_id: string
+export type HazardMode = 'passenger' | 'bus'
+export type HazardKind = 'rain' | 'fire' | 'storm' | 'flood'
+/** buffer: waypoints widened by radius_m (point or corridor); polygon: waypoints are the corners of the area. */
+export type HazardShape = 'buffer' | 'polygon'
+
+export type HazardDraft = {
   waypoints: [number, number][]
   radius_m: number
   start_s: number
   end_s: number
-  modes: string[]
+  modes: HazardMode[]
+  /** Illustrative visual style only; restrictions and measured effects are identical for all kinds. */
+  kind: HazardKind
+  shape?: HazardShape
   label: string
+}
+
+export type HazardTrack = HazardDraft & {
+  track_id: string
+  footprint: [number, number][][]
 }
 
 export type FleetVehicle = { vehicle_id: string; capacity: number; depot_edge: string; available_from_s: number }
@@ -213,7 +226,7 @@ export type RunBundle = {
 
 export type InterventionProposal = {
   proposal_id: string
-  kind: 'close_edge' | 'reopen_edge' | 'move_stop' | 'set_fleet' | 'storm' | 'unsupported'
+  kind: 'close_edge' | 'reopen_edge' | 'move_stop' | 'set_fleet' | 'storm' | 'remove_hazard' | 'replace_hazard' | 'unsupported'
   text: string
   edge_ids: string[]
   stop_id: string | null
@@ -222,6 +235,8 @@ export type InterventionProposal = {
   start_s: number | null
   end_s: number | null
   hazard: HazardTrack | null
+  replaces_track_id?: string | null
+  network_fingerprint: string | null
   warnings: string[]
   base_scenario_id: string
   ambiguous: boolean

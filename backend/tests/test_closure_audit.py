@@ -49,3 +49,55 @@ def test_route_distribution_uses_the_driven_route(tmp_path):
         "</routeDistribution></vehicle>"
     )
     assert closure_violations(_write(tmp_path, body), _scenario()) == {}
+
+
+def test_audit_respects_vehicle_modes(tmp_path):
+    scenario = _scenario()
+    scenario.restrictions[0].modes = ["bus"]
+    body = (
+        '<vehicle id="car" type="car" depart="0" arrival="500"><route edges="A B C" exitTimes="120 150 500"/></vehicle>'
+        '<vehicle id="bus" type="shuttle_bus" depart="0" arrival="500"><route edges="A B C" exitTimes="120 150 500"/></vehicle>'
+    )
+    assert closure_violations(_write(tmp_path, body), scenario) == {"bus": "entered"}
+
+
+def test_closure_window_is_start_inclusive_end_exclusive(tmp_path):
+    body = (
+        '<vehicle id="start" depart="0" arrival="500"><route edges="A B C" exitTimes="100 150 500"/></vehicle>'
+        '<vehicle id="end" depart="0" arrival="500"><route edges="A B C" exitTimes="200 250 500"/></vehicle>'
+        '<vehicle id="left" depart="0" arrival="500"><route edges="A B C" exitTimes="50 100 500"/></vehicle>'
+    )
+    assert closure_violations(_write(tmp_path, body), _scenario()) == {"start": "entered"}
+
+
+def test_unfinished_route_audits_current_edge_but_not_unvisited_edges(tmp_path):
+    body = (
+        '<vehicle id="inside" depart="0" arrival="-1"><route edges="A B C" exitTimes="120 -1 -1"/></vehicle>'
+        '<vehicle id="upstream" depart="0" arrival="-1"><route edges="A B C" exitTimes="-1 -1 -1"/></vehicle>'
+    )
+    assert closure_violations(_write(tmp_path, body), _scenario()) == {"inside": "entered"}
+
+
+def test_integrity_violation_cannot_also_report_all_clear(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cityshift.contracts import SimulationRun, ValidationReport
+    from cityshift.domain import runs
+    from cityshift.domain.compiler import CompileResult, baseline_plan
+    from cityshift.transport.runner import RunRecord
+
+    scenario = _scenario()
+    record = RunRecord(tracks={}, events=[], occupancy={}, stop_queue={}, teleports=0, end_time=1000)
+    compiled = CompileResult(True, tmp_path / "cfg", [], {}, {}, {}, {}, [], [], {})
+    monkeypatch.setattr(runs, "RUN_ROOT", tmp_path)
+    monkeypatch.setattr(runs, "validate_plan", lambda *args: ValidationReport(plan_id="baseline", valid=True))
+    monkeypatch.setattr(runs, "compile_scenario", lambda *args: compiled)
+    monkeypatch.setattr(runs, "runner_for", lambda *args: SimpleNamespace(run=lambda *args, **kwargs: record))
+    monkeypatch.setattr(runs, "closure_violations", lambda *args: {"illegal": "entered"})
+    pack = SimpleNamespace(pack_id="p", network_fingerprint="n")
+    demand = SimpleNamespace(demand_id="d")
+    run = SimulationRun(run_id="audit", scenario_id=scenario.scenario_id, plan_id="baseline", seed=1)
+    result = runs.execute_run(run, pack, scenario, demand, baseline_plan(), persist=lambda _: None)
+    assert result.metrics is not None
+    assert any("RESTRICTION INTEGRITY" in w for w in result.warnings)
+    assert not any("no vehicle route" in w for w in result.warnings)

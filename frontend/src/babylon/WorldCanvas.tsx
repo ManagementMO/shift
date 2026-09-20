@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { WorldScene } from './scene'
 import { useDisplay } from './display'
@@ -11,13 +11,14 @@ export interface WorldCanvasProps {
   className?: string
   fixedCamera?: boolean
   quality?: 'high' | 'balanced'
+  children?: ReactNode
 }
 
 /**
  * Mounts one Babylon engine on one canvas.  React owns nothing inside the scene; it only reports lifecycle
  * (loading / ready / error) and hands the imperative `WorldScene` to the parent through `onReady`.
  */
-export default function WorldCanvas({ packId, onReady, onError, className, fixedCamera = false, quality = 'high' }: WorldCanvasProps) {
+export default function WorldCanvas({ packId, onReady, onError, className, fixedCamera = false, quality = 'high', children }: WorldCanvasProps) {
   const ref = useRef<HTMLCanvasElement>(null)
   const [state, setState] = useState<{ phase: 'loading' | 'building' | 'ready' | 'error'; detail?: string }>({ phase: 'loading' })
 
@@ -74,6 +75,7 @@ export default function WorldCanvas({ packId, onReady, onError, className, fixed
   return (
     <div className={className ?? 'bworld'}>
       <canvas ref={ref} className="bworld-canvas" />
+      {state.phase === 'ready' && children}
       {state.phase !== 'ready' && (
         <div className={`bworld-veil ${state.phase}`}>
           <div className="bworld-veil-card">

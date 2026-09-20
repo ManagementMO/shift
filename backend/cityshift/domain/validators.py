@@ -14,6 +14,7 @@ from cityshift.contracts import (
     ValidationReport,
 )
 from cityshift.domain.compiler import schedule_duties, stops_by_id, zone_for_stop
+from cityshift.domain.hazards import validate_scenario_restrictions
 
 
 def validate_plan(pack: CityPack, scenario: ScenarioSpec, plan: ServicePlan, demand: DemandSet | None = None) -> ValidationReport:
@@ -22,6 +23,10 @@ def validate_plan(pack: CityPack, scenario: ScenarioSpec, plan: ServicePlan, dem
     cons = scenario.constraints
     fleet_ids = {f.vehicle_id for f in cons.fleet}
     win_start, win_end = cons.service_window_s
+    try:
+        validate_scenario_restrictions(pack, scenario)
+    except ValueError as exc:
+        issues.append(ValidationIssue(code="restriction.invalid", severity="hard", message=str(exc)))
 
     used_vehicles = {d.vehicle_id for d in plan.duties}
     for vid in sorted(used_vehicles - fleet_ids):

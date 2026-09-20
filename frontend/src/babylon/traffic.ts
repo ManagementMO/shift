@@ -36,6 +36,7 @@ const CAR_PALETTE: RGB[] = [
 const BUS_RED: RGB = [0.8, 0.09, 0.16]
 const PULSE_COLOR: RGB = [1.0, 0.62, 0.2]
 const HALO_COLOR: RGB = [0.18, 0.77, 0.91]
+const HOVER_COLOR: RGB = [1, 1, 1]
 const HALO_RADIUS: Record<Kind, number> = { bus: 8.5, car: 3.6, person: 1.6 }
 /** Screen-space pick tolerance (CSS px). */
 export const PICK_PX = 22
@@ -226,6 +227,8 @@ export class Traffic {
   stats: TrafficStats = { buses: 0, cars: 0, people: 0, released: 0 }
   /** Selected entity id: drawn at full detail with a ground halo; with `dimOthers`, everyone else fades. */
   selectedId: string | null = null
+  /** Entity under the pointer: outlined with a white ring so it reads as clickable. */
+  hoverId: string | null = null
   dimOthers = false
 
   private readonly pathY: number
@@ -277,7 +280,7 @@ export class Traffic {
       pulse: new InstanceSet(scene, 'release-pulse', (b) => ring(b, 1, 0.12, 0.05, SKIN), null, null),
       halo: new InstanceSet(scene, 'selection-halo', (b) => ring(b, 1, 0.22, 0.05, SKIN), null, null),
     }
-    this.sets.halo.reserve(1)
+    this.sets.halo.reserve(2)
   }
 
   setReplay(rx: ReplayIndex | null): void {
@@ -329,6 +332,7 @@ export class Traffic {
     const modes = rx.bundle.compile?.mode_assignment ?? {}
     const s = this.scratch
     const sel = this.selectedId
+    const hov = this.hoverId
     const dim = this.dimOthers && sel !== null
     let people = 0
     for (const e of this.entities) {
@@ -364,13 +368,15 @@ export class Traffic {
       e.pz = z
       e.seen = true
       const isSel = e.id === sel
+      const isHov = !isSel && e.id === hov
       let set: SetKind = e.kind
       if (e.kind === 'person') {
         people++
         const d = Math.hypot(x - view.x, view.y, z - view.z)
-        if (!isSel && lodFor(d, view.radius) === 'marker') set = 'marker'
+        if (!isSel && !isHov && lodFor(d, view.radius) === 'marker') set = 'marker'
       }
       if (isSel) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, HALO_RADIUS[e.kind])
+      else if (isHov) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HOVER_COLOR, HALO_RADIUS[e.kind] * 1.25)
       else if (dim) color = mix(color, PALETTE.pavement, 0.72)
       this.sets[set].set(n[set]++, x, y, z, e.yaw, color)
     }

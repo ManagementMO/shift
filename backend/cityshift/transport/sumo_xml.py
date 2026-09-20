@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 from xml.sax.saxutils import quoteattr as q
 
@@ -56,6 +57,26 @@ class EdgeClosure:
     start_s: int
     end_s: int
     modes: list[str] = field(default_factory=lambda: ["passenger", "bus"])
+    notify_edge_ids: list[str] | None = None
+
+
+def closure_intervals(closures: list[EdgeClosure]) -> list[tuple[int, int, dict[str, tuple[str, ...]]]]:
+    bounds = sorted({t for c in closures for t in (c.start_s, c.end_s)})
+    intervals: list[tuple[int, int, dict[str, tuple[str, ...]]]] = []
+    for start, end in pairwise(bounds):
+        active: dict[str, set[str]] = {}
+        for c in closures:
+            if c.start_s < end and c.end_s > start:
+                for eid in c.edge_ids:
+                    active.setdefault(eid, set()).update(c.modes)
+        footprint = {eid: tuple(sorted(modes)) for eid, modes in sorted(active.items())}
+        if not footprint:
+            continue
+        if intervals and intervals[-1][1] == start and intervals[-1][2] == footprint:
+            intervals[-1] = (intervals[-1][0], end, footprint)
+        else:
+            intervals.append((start, end, footprint))
+    return intervals
 
 
 VTYPES = """
@@ -72,15 +93,18 @@ def write_additional(path: Path, stops: list[BusStopDef], closures: list[EdgeClo
             f'    <busStop id={q(s.stop_id)} lane={q(s.lane)} startPos="{s.start_pos:.2f}" endPos="{s.end_pos:.2f}" personCapacity="{s.person_capacity}"'
             f' name={q(s.name or s.stop_id)} friendlyPos="true"/>'
         )
-    for c in closures or []:
+    if closures:
         # Rerouter closingReroute closes an edge for the given vClasses during the interval.
         # Vehicles that already hold a route through the edge are rerouted when they reach the rerouter edge.
-        edges = " ".join(c.edge_ids)
-        lines.append(f'    <rerouter id={q(c.closure_id)} edges={q(edges)} vTypes="car shuttle_bus">')
-        lines.append(f'        <interval begin="{c.start_s}" end="{c.end_s}">')
-        for e in c.edge_ids:
-            lines.append(f'            <closingReroute id={q(e)} disallow={q(" ".join(c.modes))}/>')
-        lines.append("        </interval>")
+        if any(not c.edge_ids or not c.modes or not (0 <= c.start_s < c.end_s) for c in closures):
+            raise ValueError("closures require edges, modes, and a valid time window")
+        edges = " ".join(sorted({e for c in closures for e in [*c.edge_ids, *(c.notify_edge_ids or [])]}))
+        lines.append(f'    <rerouter id="scenario-restrictions" edges={q(edges)} vTypes="car shuttle_bus">')
+        for start, end, footprint in closure_intervals(closures):
+            lines.append(f'        <interval begin="{start}" end="{end}">')
+            for eid, modes in footprint.items():
+                lines.append(f'            <closingReroute id={q(eid)} disallow={q(" ".join(modes))}/>')
+            lines.append("        </interval>")
         lines.append("    </rerouter>")
     lines.append("</additional>")
     path.write_text("\n".join(lines) + "\n")

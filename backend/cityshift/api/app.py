@@ -2,23 +2,34 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+from pymongo.errors import PyMongoError
 
-from cityshift.api.service import get_service
+from cityshift.api.service import close_service, get_service
 from cityshift.contracts import SCHEMA_VERSION, DemandSet, ScenarioSpec, ServicePlan
 from cityshift.domain.network import pack_dir
 from cityshift.domain.runs import RUN_ROOT
+from cityshift.store import MongoStore, StorageConfigurationError, StoreConflictError
 from cityshift.transport.sumo_env import sumo_version
 
-app = FastAPI(title="Concrete Consequences", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await asyncio.to_thread(close_service)
+
+
+app = FastAPI(title="Concrete Consequences", version="0.1.0", lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=2048)
 app.add_middleware(
     CORSMiddleware,
@@ -46,16 +57,43 @@ def _not_found(what: str) -> HTTPException:
     return HTTPException(status_code=404, detail=f"{what} not found")
 
 
+@app.exception_handler(StorageConfigurationError)
+async def storage_configuration_error(request: Request, exc: StorageConfigurationError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(StoreConflictError)
+async def storage_conflict(request: Request, exc: StoreConflictError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(PyMongoError)
+async def storage_unavailable(request: Request, exc: PyMongoError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": "MongoDB is unavailable. Check server credentials, network access, and the Atlas IP allowlist."})
+
+
 # --- health / providers -----------------------------------------------------------------------
 @app.get("/api/health")
 def health() -> dict:
     from cityshift.providers import provider_status
 
+    storage: dict = {"backend": "mongodb", "configured": True, "available": False}
+    try:
+        store = get_service().store
+        store.ping()
+        storage.update({"backend": "mongodb" if isinstance(store, MongoStore) else "json", "available": True})
+        if isinstance(store, MongoStore):
+            storage["database"] = store.database.name
+    except StorageConfigurationError as exc:
+        storage.update({"configured": False, "message": str(exc)})
+    except PyMongoError:
+        storage["message"] = "MongoDB is unavailable. Check server credentials, network access, and the Atlas IP allowlist."
     return {
-        "ok": True,
+        "ok": storage["available"],
         "schema_version": SCHEMA_VERSION,
         "sumo": sumo_version(),
         "providers": provider_status(),
+        "storage": storage,
         "pid": os.getpid(),
     }
 
@@ -116,7 +154,10 @@ class ScenarioCreate(BaseModel):
 
 @app.post("/api/scenarios")
 def create_scenario(req: ScenarioCreate) -> dict:
-    return get_service().register_scenario(req.scenario, req.demand).model_dump(mode="json")
+    try:
+        return get_service().register_scenario(req.scenario, req.demand).model_dump(mode="json")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @app.get("/api/scenarios")
@@ -259,6 +300,13 @@ _include_optional_routers()
 
 STATIC_DIR = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 if STATIC_DIR.exists():
-    from fastapi.staticfiles import StaticFiles
 
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+    @app.get("/{path:path}", include_in_schema=False)
+    def spa(path: str) -> FileResponse:
+        """Serve the built frontend; client-side routes (/world, /mapbox, /showcase) fall back to index.html."""
+        if path.startswith("api/"):
+            raise _not_found("route")
+        candidate = (STATIC_DIR / path).resolve()
+        if path and candidate.is_file() and candidate.is_relative_to(STATIC_DIR.resolve()):
+            return FileResponse(candidate)
+        return FileResponse(STATIC_DIR / "index.html")

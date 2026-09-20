@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from cityshift.api.service import get_service
-from cityshift.contracts import InterventionProposal
+from cityshift.contracts import HazardDraft, InterventionProposal
 
 router = APIRouter(prefix="/api/scenarios", tags=["edit"])
 
@@ -22,6 +22,38 @@ def preview_edit(sid: str, req: EditPrompt) -> dict:
         return get_service().preview_edit(sid, req.prompt, req.use_ai).model_dump(mode="json")
     except KeyError:
         raise HTTPException(404, f"scenario {sid} not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.post("/{sid}/hazards/preview")
+def preview_hazard(sid: str, draft: HazardDraft) -> dict:
+    try:
+        return get_service().preview_hazard(sid, draft).model_dump(mode="json")
+    except KeyError:
+        raise HTTPException(404, f"scenario {sid} not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.post("/{sid}/hazards/{track_id}/remove/preview")
+def preview_hazard_removal(sid: str, track_id: str) -> dict:
+    try:
+        return get_service().preview_hazard_removal(sid, track_id).model_dump(mode="json")
+    except KeyError:
+        raise HTTPException(404, f"scenario {sid} not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.post("/{sid}/hazards/{track_id}/replace/preview")
+def preview_hazard_replacement(sid: str, track_id: str, draft: HazardDraft) -> dict:
+    try:
+        return get_service().preview_hazard_replacement(sid, track_id, draft).model_dump(mode="json")
+    except KeyError:
+        raise HTTPException(404, f"scenario {sid} not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @router.post("/{sid}/edit/apply")

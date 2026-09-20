@@ -18,7 +18,7 @@ from cityshift.contracts import (
     content_hash,
     utcnow,
 )
-from cityshift.domain.compiler import compile_scenario
+from cityshift.domain.compiler import COMPILER_VERSION, compile_scenario
 from cityshift.domain.validators import validate_plan
 from cityshift.transport.runner import SumoRunner, compute_metrics, parse_tripinfo, save_record
 from cityshift.transport.sumo_env import sumo_version
@@ -39,15 +39,23 @@ def closure_violations(vehroutes: Path, scenario: ScenarioSpec) -> dict[str, str
         return {}
     import xml.etree.ElementTree as ET
 
-    closed: dict[str, list[tuple[int, int]]] = {}
+    closed: dict[tuple[str, str], list[tuple[int, int]]] = {}
     for r in scenario.restrictions:
         for eid in r.edge_ids:
-            closed.setdefault(eid, []).append((r.start_s, r.end_s))
+            for mode in r.modes:
+                closed.setdefault((eid, mode), []).append((r.start_s, r.end_s))
 
+    fleet = {f.vehicle_id for f in scenario.constraints.fleet}
     bad: dict[str, str] = {}
     for veh in ET.parse(vehroutes).getroot().iter("vehicle"):
         depart = float(veh.get("depart", "0"))
+        if depart < 0:
+            continue
         arrival = float(veh.get("arrival") or scenario.constraints.horizon_s)
+        if arrival < 0:
+            arrival = scenario.constraints.horizon_s
+        vid = veh.get("id", "?")
+        mode = "bus" if veh.get("type") == "shuttle_bus" or vid in fleet else "passenger"
         route_el = veh.find("route")
         if route_el is None:
             route_el = veh.find("routeDistribution/route[last()]")
@@ -59,14 +67,15 @@ def closure_violations(vehroutes: Path, scenario: ScenarioSpec) -> dict[str, str
         if len(exits) == len(edges):
             prev = depart
             for eid, ex in zip(edges, exits, strict=True):
-                windows.append((eid, prev, ex))
+                windows.append((eid, prev, ex if ex >= 0 else arrival))
+                if ex < 0:
+                    break
                 prev = ex
         else:
             windows = [(eid, depart, arrival) for eid in edges]
-        vid = veh.get("id", "?")
         precise = len(exits) == len(edges)
         for eid, a, b in windows:
-            for start, end in closed.get(eid, ()):
+            for start, end in closed.get((eid, mode), ()):
                 if not (a < end and b > start):
                     continue
                 if a >= start or not precise:
@@ -88,7 +97,10 @@ def runner_for(pack: CityPack) -> SumoRunner:
 
 def run_id_for(scenario: ScenarioSpec, plan: ServicePlan, seed: int) -> str:
     """Deterministic: same scenario + plan + seed => same run id (duplicate submissions are idempotent)."""
-    return "run-" + content_hash({"s": scenario.model_dump(mode="json"), "p": plan.model_dump(mode="json"), "seed": seed})[:12]
+    return "run-" + content_hash({
+        "s": scenario.model_dump(mode="json", exclude={"created_at"}), "p": plan.model_dump(mode="json"),
+        "seed": seed, "compiler": COMPILER_VERSION,
+    })[:12]
 
 
 def execute_run(
@@ -151,8 +163,8 @@ def execute_run(
                 f"(SUMO teleports jump along the route; their trails are broken, not drawn): {entered[:5]}"
             )
         if caught:
-            metrics.warnings.append(f"{len(caught)} vehicle(s) were already on an edge when it closed and finished leaving it: {caught[:5]}")
-        else:
+            metrics.warnings.append(f"{len(caught)} vehicle(s) were already on an edge when it closed (caught inside, not illegal entry): {caught[:5]}")
+        if not entered and not caught:
             metrics.warnings.append("restriction integrity: no vehicle route used a closed edge during its closure (vehroute audit)")
         save_record(rec, metrics, run_dir)
         (run_dir / "tripinfo_summary.json").write_text(json.dumps({k: len(v) for k, v in parse_tripinfo(run_dir / "tripinfo.xml").items()}))
@@ -164,6 +176,7 @@ def execute_run(
         manifest = {
             "run_id": run.run_id, "scenario_id": scenario.scenario_id, "plan_id": plan.plan_id, "seed": run.seed,
             "pack": pack.pack_id, "network_fingerprint": pack.network_fingerprint, "engine": run.engine_version,
+            "compiler_version": COMPILER_VERSION,
             "evidence_hash": scenario.evidence_hash, "demand_id": demand.demand_id,
         }
         run.manifest_hash = content_hash(manifest)

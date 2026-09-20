@@ -9,6 +9,7 @@ from cityshift.agents.orchestrator import InvestigationRunner, new_investigation
 from cityshift.contracts import (
     CityPack,
     DemandSet,
+    HazardDraft,
     InterventionProposal,
     Investigation,
     InvestigationOptions,
@@ -20,17 +21,18 @@ from cityshift.contracts import (
 )
 from cityshift.domain import edits
 from cityshift.domain.compiler import baseline_plan, heuristic_plans
+from cityshift.domain.hazards import validate_scenario_restrictions
 from cityshift.domain.network import PACK_ROOT, load_pack
 from cityshift.domain.runs import execute_run, run_id_for
 from cityshift.domain.scenarios import flagship_scenario
 from cityshift.domain.validators import validate_plan
 from cityshift.providers import LLMClient
-from cityshift.store import Store
+from cityshift.store import MongoStore, Store
 
 
 class Service:
     def __init__(self, store: Store | None = None, workers: int = 2):
-        self.store = store or Store()
+        self.store = store if store is not None else MongoStore.from_env()
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="sumo")
         self.agent_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agents")
         self.cancel_flags: dict[str, threading.Event] = {}
@@ -59,11 +61,14 @@ class Service:
         return scenario
 
     def register_scenario(self, scenario: ScenarioSpec, demand: DemandSet) -> ScenarioSpec:
+        pack = self.pack(scenario.pack_id)
+        validate_scenario_restrictions(pack, scenario)
         existing = self.store.get_scenario(scenario.scenario_id)
         if existing is not None:
+            if existing.model_dump(exclude={"created_at"}) != scenario.model_dump(exclude={"created_at"}):
+                raise ValueError("scenario_id already exists with different content; scenarios are immutable")
             return existing
         self.store.put_scenario(scenario, demand)
-        pack = self.pack(scenario.pack_id)
         for plan in [baseline_plan(), *heuristic_plans(pack, scenario, demand)]:
             self.register_plan(scenario, plan)
         return scenario
@@ -112,8 +117,10 @@ class Service:
             self.cancel_flags[rid] = flag
 
         def job() -> None:
-            execute_run(run, pack, scenario, demand, plan, persist=self.store.put_run, cancel=flag.is_set)
-            self.cancel_flags.pop(rid, None)
+            try:
+                execute_run(run, pack, scenario, demand, plan, persist=self.store.put_run, cancel=flag.is_set)
+            finally:
+                self.cancel_flags.pop(rid, None)
 
         self.pool.submit(job)
         return run
@@ -136,10 +143,26 @@ class Service:
         scenario = self.scenario(sid)
         return edits.preview(self.pack(scenario.pack_id), scenario, prompt, llm=LLMClient() if use_ai else None)
 
+    def preview_hazard(self, sid: str, draft: HazardDraft) -> InterventionProposal:
+        scenario = self.scenario(sid)
+        return edits.preview_hazard(self.pack(scenario.pack_id), scenario, draft)
+
+    def preview_hazard_removal(self, sid: str, track_id: str) -> InterventionProposal:
+        scenario = self.scenario(sid)
+        return edits.preview_hazard_removal(self.pack(scenario.pack_id), scenario, track_id)
+
+    def preview_hazard_replacement(self, sid: str, track_id: str, draft: HazardDraft) -> InterventionProposal:
+        scenario = self.scenario(sid)
+        return edits.preview_hazard_replacement(self.pack(scenario.pack_id), scenario, track_id, draft)
+
     def apply_edit(self, sid: str, proposal: InterventionProposal) -> ScenarioSpec:
         scenario = self.scenario(sid)
         child = edits.apply(self.pack(scenario.pack_id), scenario, proposal)
-        return self.register_scenario(child, self.demand(sid))
+        child = self.register_scenario(child, self.demand(sid))
+        for plan in self.store.list_plans(sid):
+            if self.store.get_plan(child.scenario_id, plan.plan_id) is None:
+                self.register_plan(child, plan.model_copy(deep=True))
+        return child
 
     # agents --------------------------------------------------------------------------------------
     def investigate(self, sid: str, problem: str, constraint: str, options: InvestigationOptions | None = None) -> Investigation:
@@ -158,12 +181,27 @@ class Service:
             raise KeyError(iid)
         return inv
 
+    def close(self) -> None:
+        self.pool.shutdown(wait=True)
+        self.agent_pool.shutdown(wait=True)
+        self.store.close()
+
 
 _service: Service | None = None
+_service_lock = threading.Lock()
 
 
 def get_service() -> Service:
     global _service
-    if _service is None:
-        _service = Service()
-    return _service
+    with _service_lock:
+        if _service is None:
+            _service = Service()
+        return _service
+
+
+def close_service() -> None:
+    global _service
+    with _service_lock:
+        if _service is not None:
+            _service.close()
+            _service = None

@@ -16,25 +16,33 @@ from functools import partial
 from cityshift.contracts import (
     CityPack,
     FleetVehicle,
-    HazardTrack,
+    HazardDraft,
+    HazardKind,
     InterventionProposal,
     Restriction,
     ScenarioSpec,
+    content_hash,
+    utcnow,
 )
-from cityshift.domain.hazards import hazard_restriction
+from cityshift.domain.hazards import resolve_hazard, validate_scenario_restrictions
 from cityshift.domain.network import load_corridors
 from cityshift.providers import LLMClient
 
 ProposalFactory = partial[InterventionProposal]
 
-_TIME = re.compile(r"(\d{1,2}):(\d{2})")
+_TIME = re.compile(r"([+-]?\d+):(\d+)")
 _NUM = re.compile(r"\b(\d+)\b")
 _WORDNUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
 
 
 def _window(text: str, default: tuple[int, int]) -> tuple[int, int, bool]:
-    ts = [int(m.group(1)) * 60 + int(m.group(2)) for m in _TIME.finditer(text)]
-    if len(ts) >= 2:
+    matches = list(_TIME.finditer(text))
+    if matches and (len(matches) != 2 or any(m.group(1).startswith("-") or len(m.group(2)) != 2 or int(m.group(2)) >= 60 for m in matches)):
+        raise ValueError("provide exactly two valid mm:ss times for the window")
+    ts = [int(m.group(1)) * 60 + int(m.group(2)) for m in matches]
+    if ts:
+        if not (0 <= ts[0] < ts[1] <= default[1]):
+            raise ValueError("window must satisfy 0 <= start < end <= scenario horizon")
         return ts[0], ts[1], True
     return default[0], default[1], False
 
@@ -81,6 +89,78 @@ def _proposal_id(sid: str, text: str) -> str:
     return "ip-" + hashlib.sha1(f"{sid}|{text}|{datetime.now(UTC).isoformat()}".encode()).hexdigest()[:10]
 
 
+def preview_hazard(pack: CityPack, scenario: ScenarioSpec, draft: HazardDraft, text: str = "") -> InterventionProposal:
+    if pack.pack_id != scenario.pack_id:
+        raise ValueError("scenario and city pack do not match")
+    draft = HazardDraft.model_validate(draft.model_dump(include=set(HazardDraft.model_fields)))
+    key = content_hash({"base": scenario.scenario_id, "network": pack.network_fingerprint, "hazard": draft.model_dump()})
+    hazard, restriction = resolve_hazard(pack, draft, f"zone-{key}", scenario.constraints.horizon_s)
+    warnings = [
+        "Static exclusion: the entire highlighted edge set is restricted for the full window [start, end).",
+        "Passenger cars and/or buses only; pedestrians are not restricted or protected. No evacuation demand is generated.",
+        "Declared assumptions, not a weather, fire-spread, or casualty forecast; the rain/fire/storm visual is illustrative.",
+    ]
+    west, south, east, north = pack.bbox
+    if any(not (west <= lon <= east and south <= lat <= north) for ring in hazard.footprint for lon, lat in ring):
+        warnings.append("Buffer extends beyond the city pack; only roads in this pack are evaluated.")
+    overlap = {eid for r in scenario.restrictions if r.start_s < hazard.end_s and r.end_s > hazard.start_s
+               and set(r.modes) & set(hazard.modes) for eid in r.edge_ids} & set(restriction.edge_ids)
+    if overlap:
+        warnings.append(f"{len(overlap)} affected edges also have overlapping restrictions; each restriction keeps its own ownership.")
+    if not restriction.edge_ids:
+        warnings.append("No supported vehicle edges intersect this footprint: the event is visual only and restricts nothing.")
+    return InterventionProposal(
+        proposal_id=f"ip-{key}", kind="storm", text=text or draft.label, base_scenario_id=scenario.scenario_id,
+        hazard=hazard, edge_ids=restriction.edge_ids, start_s=hazard.start_s, end_s=hazard.end_s,
+        network_fingerprint=pack.network_fingerprint, warnings=warnings,
+        reason=(f"Visual-only {hazard.kind}: no roads inside the footprint, so routes are unchanged." if not restriction.edge_ids else
+                f"Static hazard zone closes {len(restriction.edge_ids)} edges for {', '.join(hazard.modes)} during {hazard.start_s}–{hazard.end_s}s."),
+    )
+
+
+def preview_hazard_removal(pack: CityPack, scenario: ScenarioSpec, track_id: str) -> InterventionProposal:
+    validate_scenario_restrictions(pack, scenario)
+    hazard = next((h for h in scenario.hazards if h.track_id == track_id), None)
+    if hazard is None:
+        raise ValueError("hazard does not exist in this scenario")
+    owner = f"hazard:{track_id}"
+    owned_edges = [eid for r in scenario.restrictions if r.source_claim_id == owner for eid in r.edge_ids]
+    remaining = {eid for r in scenario.restrictions if r.source_claim_id != owner
+                 and r.start_s < hazard.end_s and r.end_s > hazard.start_s and set(r.modes) & set(hazard.modes)
+                 for eid in r.edge_ids} & set(owned_edges)
+    return InterventionProposal(
+        proposal_id=f"ip-{content_hash({'base': scenario.scenario_id, 'remove': track_id})}", kind="remove_hazard",
+        text=f"remove hazard {track_id}", base_scenario_id=scenario.scenario_id, hazard=hazard.model_copy(deep=True),
+        edge_ids=owned_edges, start_s=hazard.start_s, end_s=hazard.end_s,
+        network_fingerprint=pack.network_fingerprint, reason=f"Remove hazard zone {track_id} from a new child scenario.",
+        warnings=(["This event restricts no roads; removing it only changes the visual."] if not owned_edges else
+                  ["Only this hazard and its owned restriction are removed; all independent restrictions stay in place.",
+                   f"{len(remaining)} affected edges retain overlapping restrictions for at least part of this window."]),
+    )
+
+
+def _without_hazard(scenario: ScenarioSpec, track_id: str) -> ScenarioSpec:
+    if not any(h.track_id == track_id for h in scenario.hazards):
+        raise ValueError("hazard does not exist in this scenario")
+    return scenario.model_copy(deep=True, update={
+        "hazards": [h for h in scenario.hazards if h.track_id != track_id],
+        "restrictions": [r for r in scenario.restrictions if r.source_claim_id != f"hazard:{track_id}"],
+    })
+
+
+def preview_hazard_replacement(pack: CityPack, scenario: ScenarioSpec, track_id: str, draft: HazardDraft) -> InterventionProposal:
+    """Move/resize an existing hazard: one edit removes it and adds the new footprint, so a drag is one branch."""
+    validate_scenario_restrictions(pack, scenario)
+    proposal = preview_hazard(pack, _without_hazard(scenario, track_id), draft)
+    proposal.kind = "replace_hazard"
+    proposal.replaces_track_id = track_id
+    proposal.text = f"move weather event {track_id}"
+    proposal.reason = (f"Move weather event: no roads inside the new footprint (visual only); {track_id} is removed." if not proposal.edge_ids
+                       else f"Move weather event: {len(proposal.edge_ids)} edges restricted at the new footprint; {track_id} is removed.")
+    proposal.warnings = ["The previous footprint and its owned restriction are removed in the same edit."] + proposal.warnings
+    return proposal
+
+
 def preview(pack: CityPack, scenario: ScenarioSpec, text: str, llm: LLMClient | None = None) -> InterventionProposal:
     corridors = load_corridors(pack.pack_id)
     t = text.lower()
@@ -96,29 +176,33 @@ def preview(pack: CityPack, scenario: ScenarioSpec, text: str, llm: LLMClient | 
     if re.search(r"\b(bus|buses|fleet|vehicles?)\b", t) and re.search(r"\b(set|use|only|add|with|to)\b", t):
         m = _NUM.search(re.sub(_TIME.pattern, "", t))
         n = int(m.group(1)) if m else next((v for k, v in _WORDNUM.items() if re.search(rf"\b{k}\b", t)), None)
-        if n is not None and ("close" not in t and "reopen" not in t and "storm" not in t):
+        if n is not None and not any(word in t for word in ("close", "reopen", "storm", "hazard", "fire", "rain", "weather")):
             if "add" in t:
                 n = len(scenario.constraints.fleet) + n
             if n > scenario.constraints.hard_max_fleet:
                 warnings.append(f"raises hard_max_fleet from {scenario.constraints.hard_max_fleet} to {n}; this is a scenario constraint change")
             return base(kind="set_fleet", fleet_count=n, warnings=warnings, reason=f"fleet size -> {n} persistent buses")
 
-    # ---- storm
-    if "storm" in t or "hazard" in t or "flood" in t:
+    # ---- weather event (rain / fire / storm)
+    if re.search(r"\b(storm|hazard|fire|rain|weather)\b", t):
+        if re.search(r"\b(remove|lift|clear)\b", t):
+            matches = [h for h in scenario.hazards if h.track_id in text]
+            if len(matches) != 1:
+                return base(kind="remove_hazard", ambiguous=True, reason="select exactly one existing hazard id to remove", warnings=warnings)
+            return preview_hazard_removal(pack, scenario, matches[0].track_id)
         pts = _match_place(text, pack, corridors)
-        if len(pts) < 1:
-            return base(kind="storm", ambiguous=True, reason="name at least one place (venue, a zone name) for the storm corridor", warnings=warnings)
-        rm = re.search(r"(\d+)\s*m\b", t)
+        if not pts:
+            return base(kind="storm", ambiguous=True, reason="name a place or use the hazard tool for explicit coordinates", warnings=warnings)
+        rm = re.search(r"([^\s]+)\s*m\b", t)
         radius = float(rm.group(1)) if rm else 250.0
-        wps = [p[1] for p in pts]
-        if len(wps) == 1:
-            wps = [wps[0], (wps[0][0] + 0.006, wps[0][1] + 0.004)]
-            warnings.append("single place named; corridor extended ~600 m north-east")
-        hz = HazardTrack(track_id=f"storm-{pid[3:]}", waypoints=wps, radius_m=radius, start_s=start, end_s=end,
-                         label=f"assumed storm corridor via {', '.join(p[0] for p in pts)} (user-defined, not a forecast)")
-        r = hazard_restriction(pack.pack_id, hz)
-        return base(kind="storm", hazard=hz, edge_ids=r.edge_ids, start_s=start, end_s=end, warnings=warnings,
-                                    reason=f"modeled storm corridor closes {len(r.edge_ids)} edges within {radius:.0f} m for {start}-{end}s")
+        if rm is None:
+            warnings.append("no radius given; assuming 250 m")
+        kind: HazardKind = "fire" if re.search(r"\bfire\b", t) else "rain" if re.search(r"\brain\b", t) else "storm"
+        draft = HazardDraft(waypoints=[p[1] for p in pts], radius_m=radius, start_s=start, end_s=end, kind=kind,
+                            label=f"{kind.capitalize()} via {', '.join(p[0] for p in pts)} (user-defined, not a forecast)")
+        proposal = preview_hazard(pack, scenario, draft, text)
+        proposal.warnings = warnings + proposal.warnings
+        return proposal
 
     # ---- move stop
     if "move" in t and "stop" in t:
@@ -139,9 +223,12 @@ def preview(pack: CityPack, scenario: ScenarioSpec, text: str, llm: LLMClient | 
                                         reason="no known corridor named; known: " + ", ".join(c["label"] for c in corridors.values()))
         edges = sorted({e for k in keys for e in corridors[k]["edge_ids"]})
         if reopen:
-            already = {e for r in scenario.restrictions for e in r.edge_ids}
+            protected = {e for r in scenario.restrictions if (r.source_claim_id or "").startswith("hazard:") for e in r.edge_ids}
+            already = {e for r in scenario.restrictions if not (r.source_claim_id or "").startswith("hazard:") for e in r.edge_ids}
+            if set(edges) & protected:
+                warnings.append("hazard-owned restrictions are preserved; remove the hazard explicitly to lift its exclusion")
             if not (set(edges) & already):
-                warnings.append("none of these edges is currently restricted; reopening is a no-op")
+                warnings.append("none of these edges has a non-hazard restriction; reopening is a no-op")
             return base(kind="reopen_edge", edge_ids=edges, start_s=start, end_s=end, warnings=warnings,
                                         reason=f"reopen {', '.join(corridors[k]['label'] for k in keys)}")
         return base(kind="close_edge", edge_ids=edges, start_s=start, end_s=end, warnings=warnings,
@@ -184,6 +271,18 @@ def apply(pack: CityPack, scenario: ScenarioSpec, p: InterventionProposal) -> Sc
         raise ValueError("proposal was previewed against a different scenario")
     if p.kind == "unsupported" or p.ambiguous:
         raise ValueError("proposal is ambiguous/unsupported; refine the prompt")
+    validate_scenario_restrictions(pack, scenario)
+    hazard = None
+    hazard_closure = None
+    if p.kind in ("storm", "remove_hazard", "replace_hazard"):
+        if p.hazard is None:
+            raise ValueError("hazard geometry is required; preview the hazard again")
+        if p.network_fingerprint != pack.network_fingerprint:
+            raise ValueError("network changed since preview; preview the hazard again")
+        hazard, hazard_closure = resolve_hazard(pack, p.hazard, p.hazard.track_id, scenario.constraints.horizon_s)
+        if (p.hazard != hazard or p.edge_ids != hazard_closure.edge_ids
+                or (p.start_s, p.end_s) != (hazard.start_s, hazard.end_s)):
+            raise ValueError("hazard footprint, edges, or timing differ from the preview")
     restrictions = [r.model_copy(deep=True) for r in scenario.restrictions]
     hazards = [h.model_copy(deep=True) for h in scenario.hazards]
     cons = scenario.constraints.model_copy(deep=True)
@@ -198,6 +297,9 @@ def apply(pack: CityPack, scenario: ScenarioSpec, p: InterventionProposal) -> Sc
         drop = set(p.edge_ids)
         kept = []
         for r in restrictions:
+            if (r.source_claim_id or "").startswith("hazard:"):
+                kept.append(r)
+                continue
             remaining = [e for e in r.edge_ids if e not in drop]
             if remaining:
                 kept.append(r.model_copy(update={"edge_ids": remaining}))
@@ -216,21 +318,44 @@ def apply(pack: CityPack, scenario: ScenarioSpec, p: InterventionProposal) -> Sc
         if p.stop_id in cons.allowed_stop_ids and p.stop_id:
             cons.allowed_stop_ids = [s for s in cons.allowed_stop_ids if s != p.stop_id]
         change.append(f"stop {p.stop_id} withdrawn from allowed stops; use {p.target_stop_id}")
-    elif p.kind == "storm" and p.hazard:
-        hazards.append(p.hazard)
-        restrictions.append(hazard_restriction(pack.pack_id, p.hazard))
-        change.append(f"storm corridor {p.hazard.track_id}: {len(p.edge_ids)} edges {p.start_s}-{p.end_s}s")
-    child_id = f"{scenario.scenario_id.split('-v')[0]}-v{hashlib.sha1(('|'.join(change) + scenario.scenario_id).encode()).hexdigest()[:6]}"
-    return ScenarioSpec(
-        scenario_id=child_id,
-        pack_id=scenario.pack_id,
-        demand_id=scenario.demand_id,
-        evidence_bundle_id=scenario.evidence_bundle_id,
-        evidence_hash=scenario.evidence_hash,
-        restrictions=restrictions,
-        hazards=hazards,
-        constraints=cons,
-        parent_scenario_id=scenario.scenario_id,
-        change_set=scenario.change_set + change,
-        label=f"{scenario.label} · edit: {p.reason}",
-    )
+    elif p.kind == "storm" and hazard is not None and hazard_closure is not None:
+        if any(h.track_id == hazard.track_id for h in hazards):
+            raise ValueError("hazard already exists in this scenario")
+        hazards.append(hazard)
+        # Only footprints that touch supported roads own a restriction; SUMO never sees an empty closure.
+        if hazard_closure.edge_ids:
+            restrictions.append(hazard_closure)
+        change.append(f"static hazard zone {hazard.track_id}: {len(p.edge_ids)} edges {hazard.start_s}-{hazard.end_s}s"
+                      + ("" if p.edge_ids else " (visual only)"))
+    elif p.kind == "remove_hazard" and hazard is not None:
+        if hazard not in hazards:
+            raise ValueError("hazard removal does not match an existing hazard; preview again")
+        hazards = [h for h in hazards if h.track_id != hazard.track_id]
+        restrictions = [r for r in restrictions if r.source_claim_id != f"hazard:{hazard.track_id}"]
+        change.append(f"removed hazard zone {hazard.track_id}" + (" and its owned restriction" if p.edge_ids else " (visual only)"))
+    elif p.kind == "replace_hazard" and hazard is not None and hazard_closure is not None:
+        old = p.replaces_track_id
+        if not old or not any(h.track_id == old for h in hazards):
+            raise ValueError("the hazard being moved no longer exists in this scenario; preview again")
+        hazards = [h for h in hazards if h.track_id != old]
+        restrictions = [r for r in restrictions if r.source_claim_id != f"hazard:{old}"]
+        if any(h.track_id == hazard.track_id for h in hazards):
+            raise ValueError("hazard already exists in this scenario")
+        hazards.append(hazard)
+        if hazard_closure.edge_ids:
+            restrictions.append(hazard_closure)
+        change.append(f"moved weather event {old} -> {hazard.track_id}: {len(p.edge_ids)} edges {hazard.start_s}-{hazard.end_s}s"
+                      + ("" if p.edge_ids else " (visual only)"))
+    key = content_hash({
+        "parent": scenario.scenario_id, "network": pack.network_fingerprint,
+        "restrictions": [r.model_dump() for r in restrictions], "hazards": [h.model_dump() for h in hazards],
+        "constraints": cons.model_dump(),
+    })
+    child = scenario.model_copy(deep=True, update={
+        "scenario_id": f"{scenario.scenario_id.split('-v')[0]}-v{key[:12]}",
+        "restrictions": restrictions, "hazards": hazards, "constraints": cons,
+        "parent_scenario_id": scenario.scenario_id, "change_set": scenario.change_set + change,
+        "label": f"{scenario.label} · edit: {p.reason}", "created_at": utcnow(),
+    })
+    validate_scenario_restrictions(pack, child)
+    return child

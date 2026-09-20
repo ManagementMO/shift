@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
-import { useStore, type ToolId } from '../store'
-import type { Corridor, ServicePlan } from '../types'
+import { HAZARD_KIND_LABEL, newHazardSketch, sketchForKind, useStore, type ToolId } from '../store'
+import type { Corridor, HazardDraft, HazardKind, ServicePlan } from '../types'
 import { fmt } from '../util'
 import { ghostFromProposal } from './ghost'
 import ProposalCard from './ProposalCard'
@@ -12,7 +12,7 @@ const TITLES: Record<ToolId, string> = {
   stop: 'Bus stops',
   population: 'Population',
   event: 'Event',
-  weather: 'Moving hazard',
+  weather: 'Weather events',
   road: 'Roads',
   intersection: 'Intersections',
 }
@@ -36,7 +36,7 @@ export default function ToolPanel() {
       {tool === 'population' && <PopulationTool />}
       {tool === 'event' && <EventTool />}
       {(tool === 'road' || tool === 'intersection') && <StructuralTool kind={tool} />}
-      <ProposalCard />
+      {tool !== 'weather' && <ProposalCard />}
     </aside>
   )
 }
@@ -141,50 +141,101 @@ function ClosureTool() {
   )
 }
 
+const KIND_GLYPH: Record<HazardKind, string> = { rain: '☂', fire: '', storm: '⚡', flood: '≈' }
+
 function HazardTool() {
   const pack = useStore((s) => s.pack)
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
+  const sketch = useStore((s) => s.hazardSketch)
+  const ghost = useStore((s) => s.ghost)
+  const building = useStore((s) => s.building)
+  const setSketch = useStore((s) => s.setHazardSketch)
+  const setGhost = useStore((s) => s.setGhost)
+  const setError = useStore((s) => s.setError)
+  const applyGhost = useStore((s) => s.applyGhost)
+  const setHazardInfo = useStore((s) => s.setHazardInfo)
   const horizon = scenario?.constraints.horizon_s ?? 2700
-  const places = useMemo(() => [{ id: 'venue', name: 'the venue' }, ...(pack?.zones.map((z) => ({ id: z.zone_id, name: z.name })) ?? [])], [pack])
-  const [from, setFrom] = useState('venue')
-  const [toChoice, setTo] = useState('')
-  const to = toChoice || places[1]?.id || ''
-  const [radius, setRadius] = useState(250)
-  const [start, setStart] = useState(Math.round(horizon * 0.3))
-  const [end, setEnd] = useState(Math.round(horizon * 0.7))
-  const { preview, busy } = usePreview()
-  const name = (id: string) => places.find((p) => p.id === id)?.name ?? id
+  const sid = scenario?.scenario_id
+  const [busy, setBusy] = useState(false)
+  const lastKind = useRef<HazardKind>('storm')
+  const kindNow = sketch?.draft.kind
+  useEffect(() => {
+    if (kindNow) lastKind.current = kindNow
+  }, [kindNow])
+
+  useEffect(() => {
+    if (sid) setSketch(newHazardSketch(horizon, lastKind.current))
+  }, [sid, horizon, setSketch])
+
+  const draft = sketch?.draft
+  const corners = draft?.waypoints.length ?? 0
+  const center = draft?.waypoints[0]
+  const invalid = !draft ? null
+    : !Number.isFinite(draft.radius_m) || draft.radius_m < 0 || (draft.radius_m === 0 && draft.shape !== 'polygon') || draft.radius_m > 10000 ? 'Radius must be between 1 and 10,000 m.'
+      : null
+
+  // Auto-preview: whenever the placed event changes (drag, radius, type), resolve the exact roads after a short pause.
+  useEffect(() => {
+    if (!sid || !sketch || !center || invalid) return
+    const snapshot = sketch
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      setBusy(true)
+      try {
+        const p = snapshot.replaces
+          ? await api.previewHazardReplacement(sid, snapshot.replaces, snapshot.draft)
+          : await api.previewHazard(sid, snapshot.draft)
+        const cur = useStore.getState()
+        if (!cancelled && cur.scenarioId === sid && cur.hazardSketch === snapshot && cur.tool === 'weather') setGhost(ghostFromProposal(p, pack))
+      } catch (e) {
+        if (!cancelled && useStore.getState().scenarioId === sid) setError(String(e))
+      } finally {
+        if (!cancelled) setBusy(false)
+      }
+    }, 250)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [sid, sketch, center, invalid, pack, setGhost, setError])
+
+  if (!scenario || !pack) return <div className="small dim">Create or select a scenario before adding a weather event.</div>
+  if (!sketch || !draft) return <button className="primary" onClick={() => setSketch(newHazardSketch(horizon, lastKind.current))}>Add a weather event</button>
+  const update = (patch: Partial<HazardDraft>) => setSketch({ ...sketch, draft: { ...draft, ...patch } })
+  const setKind = (kind: HazardKind) => setSketch(sketchForKind(sketch, kind))
+  const proposal = ghost?.proposal && ghost.hazard && ghost.proposal.base_scenario_id === sid ? ghost.proposal : null
+  const canApply = !!proposal && !proposal.ambiguous && !busy && !building
+  const reset = () => setSketch(newHazardSketch(horizon, draft.kind))
+  const edgesFor = (trackId: string) => scenario.restrictions.find((r) => r.source_claim_id === `hazard:${trackId}`)?.edge_ids.length ?? 0
+  const sizeOf = (h: { shape?: string; radius_m: number; waypoints: [number, number][] }) => (h.shape === 'polygon' ? `${h.waypoints.length}-corner area` : `${Math.round(h.radius_m)} m`)
+
   return (
-    <div className="tool">
-      <div className="small dim">A declared moving hazard region: roads inside its footprint become unavailable while it passes. It is not a weather model.</div>
+    <div className="tool hazard-tool">
+      <div className="seg weather-kinds" aria-label="Weather event type">
+        {(['rain', 'storm'] as HazardKind[]).map((kind) => (
+          <button key={kind} className={draft.kind === kind ? 'on' : ''} onClick={() => setKind(kind)}>
+            <span aria-hidden="true">{KIND_GLYPH[kind]}</span> {HAZARD_KIND_LABEL[kind]}
+          </button>
+        ))}
+      </div>
       <label className="small">
-        from
-        <select value={from} onChange={(e) => setFrom(e.target.value)}>
-          {places.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
+        <span className="row between">Radius <b>{Math.round(draft.radius_m)} m</b></span>
+        <input type="range" aria-label="Radius" min={20} max={1000} step={10} value={Math.min(1000, Math.max(20, draft.radius_m))} onChange={(e) => update({ radius_m: Number(e.target.value) })} />
+      </label>
+      {invalid && <div className="small dim">{invalid}</div>}
+      <div className="row">
+        <button className="primary" disabled={!canApply} onClick={() => void applyGhost()}>{building ? 'Applying…' : sketch.replaces ? 'Apply move' : 'Apply'}</button>
+        <button className="ghostbtn" disabled={!!building || (!corners && !sketch.replaces)} onClick={reset}>Cancel</button>
+      </div>
+      {!!scenario.hazards.length && (
+        <div className="small hazard-list">
+          <div className="dim">Events in this scenario</div>
+          {scenario.hazards.map((h) => (
+            <div key={h.track_id} className={`hazard-row ${sketch.replaces === h.track_id ? 'moving' : ''}`}>
+              <button className="linkish" onClick={() => setHazardInfo(h.track_id)} title="Select event and show its remove control">
+                <span aria-hidden="true">{KIND_GLYPH[h.kind ?? 'storm']}</span> {HAZARD_KIND_LABEL[h.kind ?? 'storm']} · {sizeOf(h)} · +{fmt(h.start_s)}–+{fmt(h.end_s)} · {edgesFor(h.track_id)} roads
+              </button>
+            </div>
           ))}
-        </select>
-      </label>
-      <label className="small">
-        towards
-        <select value={to} onChange={(e) => setTo(e.target.value)}>
-          {places.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="small">
-        radius {radius} m
-        <input type="range" min={100} max={600} step={25} value={radius} onChange={(e) => setRadius(Number(e.target.value))} />
-      </label>
-      <WindowPicker start={start} end={end} setStart={setStart} setEnd={setEnd} horizon={horizon} />
-      <button className="primary" disabled={busy || !to} onClick={() => void preview(`storm corridor via ${name(from)} and ${name(to)} ${radius} m from ${fmt(start)} to ${fmt(end)}`)}>
-        {busy ? 'Proposing…' : 'Preview path'}
-      </button>
+        </div>
+      )}
     </div>
   )
 }

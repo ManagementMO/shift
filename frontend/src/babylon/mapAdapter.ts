@@ -26,6 +26,7 @@ export function radiusToZoom(radius: number, lat: number): number {
 }
 
 export class BabylonSyncMap implements SyncMap {
+  hazardAnchor?: (trackId: string) => { x: number; y: number } | null
   private readonly ws: WorldScene
   private readonly listeners = new Set<MoveCb>()
   private observer: Observer<Camera> | null = null
@@ -162,6 +163,12 @@ export class BabylonSyncMap implements SyncMap {
   /** Renderer-native hero framings the shell may offer when this map leads. */
   cityHero(): void {
     this.ws.camera.city()
+  }
+
+  /** True only when this city has Rogers Centre and the loaded replay recorded travellers leaving it. */
+  egressAvailable(): boolean {
+    const ws = this.ws
+    return ws.world.landmarks.some((x) => x.kind === 'rogers_centre') && ws.traffic.releaseQuantile(0.1) !== null && !!ws.traffic.releaseCentroid()
   }
 
   /**

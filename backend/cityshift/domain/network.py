@@ -64,7 +64,7 @@ def route(net, from_edge_id: str, to_edge_id: str, vclass: str, closed: set[str]
     If from == to the route is a loop through the network back to the same edge."""
     src = net.getEdge(from_edge_id)
     dst = net.getEdge(to_edge_id)
-    if not src.allows(vclass) or not dst.allows(vclass):
+    if from_edge_id in closed or to_edge_id in closed or not src.allows(vclass) or not dst.allows(vclass):
         return None, math.inf
 
     def cost(e) -> float:

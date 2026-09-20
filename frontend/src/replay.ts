@@ -1,7 +1,7 @@
 // Replay indexing: every rendered position comes from a stored TraCI sample; gaps are never interpolated
 // across a recorded break (teleport) or beyond MAX_GAP_S.
 
-import type { EntityTrack, HazardTrack, PersonEvent, RunBundle } from './types'
+import type { EntityTrack, HazardTrack, PersonEvent, RunBundle, ScenarioSpec } from './types'
 
 export const MAX_GAP_S = 3
 const ACTIVITY_START_FRACTION = 0.25
@@ -184,25 +184,58 @@ export const STATE_COLORS: Record<PersonState, [number, number, number]> = {
   driving: [180, 180, 255],
 }
 
-function circle(lon: number, lat: number, radiusM: number, n = 32): number[][] {
-  const out: number[][] = []
-  const dLat = radiusM / 111320
-  const dLon = radiusM / (111320 * Math.cos((lat * Math.PI) / 180))
-  for (let i = 0; i <= n; i++) {
-    const a = (i / n) * Math.PI * 2
-    out.push([lon + dLon * Math.cos(a), lat + dLat * Math.sin(a)])
-  }
-  return out
+export function fireSpreadProgress(h: Pick<HazardTrack, 'start_s' | 'end_s'>, t: number, preview = false, fraction = 0.6): number {
+  if (preview) return 1
+  if (!Number.isFinite(t) || t < h.start_s || t >= h.end_s) return 0
+  const progress = Math.min(1, (t - h.start_s) / Math.max(1, (h.end_s - h.start_s) * fraction))
+  return 0.08 + 0.92 * (1 - (1 - progress) ** 2)
 }
 
-export function hazardFootprint(h: HazardTrack, t: number): { center: [number, number]; ring: number[][] } | null {
-  if (t < h.start_s || t > h.end_s || h.waypoints.length === 0) return null
-  const f = h.waypoints.length === 1 ? 0 : ((t - h.start_s) / Math.max(1, h.end_s - h.start_s)) * (h.waypoints.length - 1)
-  const i = Math.min(h.waypoints.length - 2, Math.floor(f))
-  const a = h.waypoints[i]
-  const b = h.waypoints[Math.min(h.waypoints.length - 1, i + 1)]
-  const k = f - i
-  const c: [number, number] = [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k]
-  return { center: c, ring: circle(c[0], c[1], h.radius_m) }
+type HazardFootprint = { center: [number, number]; rings: [number, number][][]; span_m: number }
+const hazardCache = new WeakMap<HazardTrack, HazardFootprint>()
+
+export function hazardFootprint(h: HazardTrack, t: number, preview = false): HazardFootprint | null {
+  if ((!preview && (t < h.start_s || t >= h.end_s)) || !h.footprint?.[0]?.length) return null
+  let footprint = hazardCache.get(h)
+  if (!footprint) {
+    const lon = h.footprint[0].map((p) => p[0])
+    const lat = h.footprint[0].map((p) => p[1])
+    const west = Math.min(...lon), east = Math.max(...lon), south = Math.min(...lat), north = Math.max(...lat)
+    const center: [number, number] = [(west + east) / 2, (south + north) / 2]
+    const span_m = Math.hypot((east - west) * 111320 * Math.cos(center[1] * Math.PI / 180), (north - south) * 110574)
+    footprint = { center, rings: h.footprint, span_m }
+    hazardCache.set(h, footprint)
+  }
+  return footprint
+}
+
+export function scenarioForReplay(scenarios: ScenarioSpec[], selectedId: string | null, replay: ReplayIndex | null): ScenarioSpec | null {
+  const id = replay?.bundle.run.scenario_id ?? selectedId
+  return scenarios.find((s) => s.scenario_id === id) ?? null
+}
+
+export function parentForComparison(scenarios: ScenarioSpec[], selectedId: string | null): ScenarioSpec | null {
+  const scenario = scenarios.find((s) => s.scenario_id === selectedId)
+  if (!scenario?.parent_scenario_id) return null
+  const parent = scenarios.find((s) => s.scenario_id === scenario.parent_scenario_id)
+  return parent && parent.scenario_id !== scenario.scenario_id && parent.pack_id === scenario.pack_id && parent.demand_id === scenario.demand_id ? parent : null
+}
+
+export function canEditScenario(scenario: ScenarioSpec | null, selectedId: string | null, side: string): boolean {
+  return (side === 'solo' || side === 'right') && !!scenario && scenario.scenario_id === selectedId
+}
+
+/** Even-odd test of a lon/lat point against a ring (closed or not). */
+export function pointInRing(ring: [number, number][], point: [number, number]): boolean {
+  let hit = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i], b = ring[j]
+    if ((a[1] > point[1]) !== (b[1] > point[1]) && point[0] < (b[0] - a[0]) * (point[1] - a[1]) / (b[1] - a[1]) + a[0]) hit = !hit
+  }
+  return hit
+}
+
+export function containsHazardPoint(h: HazardTrack, point: [number, number]): boolean {
+  return !!h.footprint?.length && pointInRing(h.footprint[0], point) && !h.footprint.slice(1).some((ring) => pointInRing(ring, point))
 }
 

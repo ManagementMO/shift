@@ -1,9 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { IControl } from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { AmbientLight, DirectionalLight, LightingEffect } from '@deck.gl/core'
 import { useStore } from '../store'
+import { canEditScenario, containsHazardPoint, scenarioForReplay } from '../replay'
+import HazardMapLabels from './HazardMapLabels'
 import { clock } from './playback'
 import { buildWorldLayers, SLOT_NAMES, slotAnchorId } from './layers'
 import { cityPose, type CameraPose } from './camera'
@@ -87,6 +89,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
   const mapRef = useRef<MapLike | null>(null)
   const runIdRef = useRef(runId)
   const redrawRef = useRef<() => void>(() => {})
+  const [ready, setReady] = useState(false)
   useEffect(() => {
     runIdRef.current = runId
     redrawRef.current()
@@ -174,6 +177,16 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
 
       map.addControl(overlay as unknown as IControl)
       unregister = registerMap(side, map)
+      setReady(true)
+      m.on('click', (event) => {
+        const s = useStore.getState(), rid = runIdRef.current
+        const scenario = scenarioForReplay(s.scenarios, s.scenarioId, rid ? s.replays[rid] ?? null : null)
+        const point: [number, number] = [event.lngLat.lng, event.lngLat.lat]
+        const hazard = scenario?.hazards.find((h) => clock.t >= h.start_s && clock.t < h.end_s && containsHazardPoint(h, point))
+        s.setHazardInfo(hazard?.track_id ?? null)
+        if (hazard) return
+        if (canEditScenario(scenario, s.scenarioId, side) && s.tool === 'weather' && s.hazardSketch?.placing && s.hazardSketch.draft.kind !== 'fire') s.placeHazardPoint(point)
+      })
 
       let dirty = true
       const redraw = () => {
@@ -186,20 +199,31 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
         renderStats.layerRebuilds++
         const s = useStore.getState()
         const rid = runIdRef.current
-        const focusEdges = s.selection?.kind === 'restriction' ? s.scenarios.find((x) => x.scenario_id === s.scenarioId)?.restrictions.find((r) => r.restriction_id === s.selection?.id)?.edge_ids : undefined
+        const replay = rid ? s.replays[rid] ?? null : null
+        const scenario = scenarioForReplay(s.scenarios, s.scenarioId, replay)
+        const editing = canEditScenario(scenario, s.scenarioId, side)
+        const ghost = editing ? s.ghost : null
+        const placing = editing && s.tool === 'weather' && s.hazardSketch?.placing
+        map.getCanvas().style.cursor = placing ? 'crosshair' : 'default'
+        if (placing) m.doubleClickZoom.disable()
+        else m.doubleClickZoom.enable()
+        const focusEdges = s.selection?.kind === 'restriction' ? scenario?.restrictions.find((r) => r.restriction_id === s.selection?.id)?.edge_ids : undefined
         overlay.setProps({
           layers: buildWorldLayers({
             pack: s.pack,
             roads: s.roads,
-            scenario: s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null,
-            replay: rid ? s.replays[rid] ?? null : null,
+            scenario,
+            replay,
             t: clock.t,
             zoom: map.getZoom(),
             selection: s.selection,
-            select: s.select,
-            ghostEdges: s.ghost?.edges,
-            ghostStops: s.ghost?.stops,
-            ghostHazard: s.ghost?.hazard,
+            select: placing ? () => {} : s.select,
+            ghostEdges: ghost?.edges,
+            ghostStops: ghost?.stops,
+            ghostHazard: ghost?.hazard,
+            hazardSketch: editing && !ghost?.hazard ? s.hazardSketch?.draft : null,
+            selectHazard: s.setHazardInfo,
+            hiddenHazardId: s.pendingHazardRemoval?.scenarioId === scenario?.scenario_id ? s.pendingHazardRemoval?.trackId : null,
             focusCorridorEdges: focusEdges,
             dimOthers: s.selection?.kind === 'person',
             side: side === 'solo' ? undefined : side,
@@ -239,6 +263,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
 
   return (
     <div ref={containerRef} className={`world world-${side}`}>
+      {ready && <HazardMapLabels runId={runId} side={side} />}
       {!MAPBOX_TOKEN && (
         <div className="map-notice glass" role="status">
           <b>Connect Mapbox to load the 3D city</b>

@@ -6,7 +6,8 @@ export function ghostFromProposal(p: InterventionProposal, pack: CityPack | null
   const stops = p.target_stop_id ? pack?.stops.filter((s) => s.stop_id === p.target_stop_id) ?? [] : []
   return {
     proposal: p,
-    edges: p.kind === 'reopen_edge' ? [] : p.edge_ids,
+    edges: p.kind === 'reopen_edge' || p.kind === 'remove_hazard' ? [] : p.edge_ids,
+    replaces: p.kind === 'replace_hazard' ? p.replaces_track_id ?? null : null,
     stops,
     hazard: p.hazard,
   }
@@ -23,7 +24,11 @@ export function proposalTitle(p: InterventionProposal): string {
     case 'move_stop':
       return `Move boarding to ${p.target_stop_id}`
     case 'storm':
-      return `Moving hazard · ${p.hazard?.radius_m ?? 0} m radius`
+      return `Weather event · ${p.edge_ids.length} affected edges`
+    case 'replace_hazard':
+      return `Move weather event · ${p.edge_ids.length} affected edges`
+    case 'remove_hazard':
+      return 'Remove this weather event'
     default:
       return 'Not understood'
   }

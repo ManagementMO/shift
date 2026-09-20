@@ -1,15 +1,16 @@
 // deck.gl layer factory for the world. Pure: (pack, scenario, replay, t, view) -> layers.
-// Every moving thing here is a stored TraCI sample; decoration (trails fading, tornado column, debris) is
-// derived from those records or from the declared hazard track and is never fed back into the metrics.
+// Every moving entity here is a stored TraCI sample; static hazard buffers and exact affected roads are
+// returned by the backend. Placement guides never determine simulation restrictions or metrics.
 
 import { GeoJsonLayer, PathLayer, PolygonLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers'
 import { SimpleMeshLayer } from '@deck.gl/mesh-layers'
 import { TripsLayer } from '@deck.gl/geo-layers'
-import { ConeGeometry, CubeGeometry, CylinderGeometry } from '@luma.gl/engine'
+import { CubeGeometry, CylinderGeometry } from '@luma.gl/engine'
 import type { Layer, PickingInfo } from '@deck.gl/core'
 import type { Selection } from '../store'
-import type { CityPack, HazardTrack, ScenarioSpec, StopCandidate } from '../types'
-import { entitiesAt, hazardFootprint, MAX_GAP_S, type EntityAt, type PersonState, type ReplayIndex, type TrackIndex } from '../replay'
+import { distanceToStroke, strokeSamples } from '../hazardGeometry'
+import type { CityPack, HazardDraft, HazardKind, HazardTrack, ScenarioSpec, StopCandidate } from '../types'
+import { entitiesAt, fireSpreadProgress, hazardFootprint, pointInRing, MAX_GAP_S, type EntityAt, type PersonState, type ReplayIndex, type TrackIndex } from '../replay'
 
 export type RGBA = [number, number, number, number]
 
@@ -56,7 +57,6 @@ export const PERSON_COLORS: Record<PersonState, RGBA> = {
 const BUS_MESH = new CubeGeometry()
 const CAR_MESH = new CubeGeometry()
 const PERSON_MESH = new CylinderGeometry({ radius: 1, height: 1, nradial: 8, topCap: true, bottomCap: true })
-const CONE_MESH = new ConeGeometry({ radius: 1, height: 1, nradial: 14, cap: false })
 
 export type Trip = { id: string; path: [number, number][]; timestamps: number[] }
 
@@ -105,6 +105,10 @@ export type WorldInputs = {
   ghostStops?: StopCandidate[]
   ghostEdges?: string[]
   ghostHazard?: HazardTrack | null
+  hazardSketch?: HazardDraft | null
+  /** Select an incident to expose its explicit on-map removal control. */
+  selectHazard?: (trackId: string) => void
+  hiddenHazardId?: string | null
   focusCorridorEdges?: string[]
   dimOthers?: boolean
   side?: string
@@ -124,6 +128,50 @@ function presentational(realM: number, minPx: number, zoom: number): number {
   return Math.max(realM, minPx * metresPerPixel(zoom))
 }
 
+const HAZARD_TINT: Record<HazardKind, RGBA> = {
+  rain: [122, 140, 164, 255],
+  fire: [228, 96, 32, 255],
+  flood: [70, 128, 168, 255],
+  storm: [84, 92, 110, 255],
+}
+
+const markCache = new WeakMap<object, { p: [number, number]; r: number }[]>()
+
+/** Deterministic points inside the footprint bounding box that fall within its exterior ring. */
+function hazardMarks(fp: { center: [number, number]; rings: [number, number][][]; span_m: number }, seed: string, kind: HazardKind): { p: [number, number]; r: number }[] {
+  const cached = markCache.get(fp)
+  if (cached) return cached
+  const ring = fp.rings[0]
+  const lon = ring.map((c) => c[0]), lat = ring.map((c) => c[1])
+  const west = Math.min(...lon), east = Math.max(...lon), south = Math.min(...lat), north = Math.max(...lat)
+  const inside = (x: number, y: number) => {
+    let hit = false
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const a = ring[i], b = ring[j]
+      if (a[1] > y !== b[1] > y && x < ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]) + a[0]) hit = !hit
+    }
+    return hit
+  }
+  const count = Math.max(12, Math.min(400, Math.round(fp.span_m * (kind === 'storm' ? 0.6 : 0.3))))
+  const out: { p: [number, number]; r: number }[] = []
+  for (let i = 0; i < count * 6 && out.length < count; i++) {
+    const x = west + hash01(`${seed}:x:${i}`) * (east - west)
+    const y = south + hash01(`${seed}:y:${i}`) * (north - south)
+    if (inside(x, y) && !fp.rings.slice(1).some((hole) => pointInRing(hole, [x, y]))) out.push({ p: [x, y], r: kind === 'fire' ? 4 : kind === 'storm' ? 1 : 0.7 })
+  }
+  markCache.set(fp, out)
+  return out
+}
+
+function hash01(s: string): number {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return ((h >>> 0) % 10000) / 10000
+}
+
 function busColor(occ: number, cap: number): RGBA {
   const f = occ / Math.max(1, cap)
   if (f >= 0.9) return withA(PALETTE.coral, 255)
@@ -140,7 +188,7 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
 
   // --- closures & focus corridors (ground, below buildings) ---
   const closedNow = new Set<string>()
-  for (const r of scenario?.restrictions ?? []) if (t >= r.start_s && t <= r.end_s) r.edge_ids.forEach((e) => closedNow.add(e))
+  for (const r of scenario?.restrictions ?? []) if (t >= r.start_s && t < r.end_s && (!w.hiddenHazardId || r.source_claim_id !== `hazard:${w.hiddenHazardId}`)) r.edge_ids.forEach((e) => closedNow.add(e))
   const ghostEdges = new Set(w.ghostEdges ?? [])
   const focus = new Set(w.focusCorridorEdges ?? [])
   if (roads && (closedNow.size || ghostEdges.size || focus.size)) {
@@ -158,7 +206,7 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
           data: { type: 'FeatureCollection', features: glowFeats },
           stroked: true,
           filled: false,
-          getLineColor: (f) => (closedNow.has(String(f.properties?.id)) ? withA(PALETTE.coral, 70) : withA(PALETTE.intervention, 60)),
+          getLineColor: (f) => (ghostEdges.has(String(f.properties?.id)) ? withA(PALETTE.intervention, 60) : withA(PALETTE.coral, 70)),
           getLineWidth: 26,
           lineWidthUnits: 'meters',
           lineWidthMinPixels: 10,
@@ -178,8 +226,8 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
         filled: false,
         getLineColor: (f) => {
           const id = String(f.properties?.id)
-          if (closedNow.has(id)) return withA(PALETTE.coral, 245)
           if (ghostEdges.has(id)) return withA(PALETTE.intervention, 230)
+          if (closedNow.has(id)) return withA(PALETTE.coral, 245)
           return withA(PALETTE.gold, 150)
         },
         getLineWidth: (f) => (closedNow.has(String(f.properties?.id)) || ghostEdges.has(String(f.properties?.id)) ? 9 : 5),
@@ -190,7 +238,7 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
         pickable: closedNow.size > 0,
         onClick: (info: PickingInfo) => {
           const id = String(info.object?.properties?.id)
-          const r = scenario?.restrictions.find((x) => x.edge_ids.includes(id))
+          const r = scenario?.restrictions.find((x) => t >= x.start_s && t < x.end_s && x.edge_ids.includes(id))
           if (r) select({ kind: 'restriction', id: r.restriction_id })
         },
         updateTriggers: { getLineColor: [closedNow.size, ghostEdges.size, focus.size], getLineWidth: [closedNow.size, ghostEdges.size] },
@@ -199,95 +247,118 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
     )
   }
 
-  // --- hazard: declared moving region (footprint + column + debris) ---
-  const hazards: HazardTrack[] = [...(scenario?.hazards ?? [])]
+  // --- hazard: declared static region (full-window footprint) ---
+  const hazards: HazardTrack[] = (scenario?.hazards ?? []).filter((h) => h.track_id !== w.ghostHazard?.track_id && h.track_id !== w.hiddenHazardId)
   if (w.ghostHazard) hazards.push(w.ghostHazard)
   for (const h of hazards) {
-    const isGhost = w.ghostHazard?.track_id === h.track_id && !scenario?.hazards.some((x) => x.track_id === h.track_id)
-    out.push(
-      new PathLayer({
-        ...SLOT.middle,
-        id: `hazard-path-${h.track_id}${sfx}`,
-        data: [{ path: h.waypoints }],
-        getPath: (d) => d.path,
-        getColor: withA(PALETTE.hazard, isGhost ? 120 : 90),
-        getWidth: 14,
-        widthUnits: 'meters',
-        widthMinPixels: 2,
-        capRounded: true,
-        jointRounded: true,
-      }),
-    )
-    const fp = hazardFootprint(h, t)
+    const isGhost = w.ghostHazard?.track_id === h.track_id
+    const fp = hazardFootprint(h, t, isGhost)
     if (!fp) continue
+    const kind = h.kind ?? 'storm'
+    const tint = HAZARD_TINT[kind]
+    const color = isGhost ? PALETTE.intervention : tint
     out.push(
       new PolygonLayer({
-        ...SLOT.middle,
-        id: `hazard-shadow-${h.track_id}${sfx}`,
+        ...SLOT.top,
+        id: `hazard-zone-${h.track_id}${sfx}`,
         data: [fp],
-        getPolygon: (d) => d.ring,
-        getFillColor: [30, 32, 40, isGhost ? 40 : 70],
-        getLineColor: withA(PALETTE.amber, 160),
-        getLineWidth: 4,
+        getPolygon: (d) => d.rings,
+        getFillColor: withA(color, kind === 'fire' ? isGhost ? 20 : 0 : kind === 'flood' ? 120 : 45),
+        getLineColor: withA(color, 220),
+        getLineWidth: 3.5,
         lineWidthUnits: 'meters',
-        lineWidthMinPixels: 1,
-        stroked: true,
+        lineWidthMinPixels: 2,
+        // Only the unconfirmed preview is outlined; applied events are just their weather.
+        stroked: isGhost,
         filled: true,
+        pickable: !isGhost,
+        onClick: () => {
+          // Clicking selects the event; removal requires its separate cross button.
+          if (w.selectHazard) w.selectHazard(h.track_id)
+          else {
+            const r = scenario?.restrictions.find((r) => r.source_claim_id === `hazard:${h.track_id}`)
+            if (r) select({ kind: 'restriction', id: r.restriction_id })
+          }
+        },
+        parameters: { depthCompare: 'always', depthWriteEnabled: false },
       }),
     )
-    if (isGhost) continue
-    const spin = (t * 140) % 360
-    const height = Math.max(320, h.radius_m * 1.6)
-    // Funnel: a dense core plus translucent, slightly offset shells so the column reads as a rotating vortex
-    // rather than a solid monolith.  Purely presentational — the modeled hazard is the footprint above.
-    const shells = [
-      { k: 0.16, a: 120, dx: 0, tilt: 0 },
-      { k: 0.3, a: 60, dx: 0.06, tilt: 6 },
-      { k: 0.42, a: 34, dx: -0.05, tilt: -4 },
-      { k: 0.55, a: 20, dx: 0.09, tilt: 8 },
-    ]
-    shells.forEach((s, i) => {
-      const off = h.radius_m * s.dx * Math.sin(t * 0.9 + i)
-      const dLat = off / 111320
-      const dLon = off / (111320 * Math.cos((fp.center[1] * Math.PI) / 180))
+    // The entire server-projected buffer stays fixed for the full restriction window.
+    // Only backend edge ids determine road closures; the outline is a declared spatial assumption.
+    out.push(
+      new PathLayer({
+        ...SLOT.top,
+        id: `hazard-path-${h.track_id}${sfx}`,
+        data: h.waypoints.length > 1 ? [h.waypoints] : [],
+        getPath: (d) => d,
+        getColor: withA(color, 130),
+        getWidth: 2,
+        widthUnits: 'meters',
+        widthMinPixels: 1,
+        capRounded: true,
+        jointRounded: true,
+        parameters: { depthCompare: 'always', depthWriteEnabled: false },
+      }),
+    )
+    // Illustrative decoration only: rain drops or flame dots at deterministic points inside the footprint.
+    if (kind !== 'flood') {
+      let marks = hazardMarks(fp, h.track_id, kind)
+      if (kind === 'fire') {
+        const source = h.waypoints[0] ?? fp.center
+        const kx = 111320 * Math.cos(source[1] * Math.PI / 180)
+        const local = (p: [number, number]): [number, number] => [(p[0] - source[0]) * kx, (p[1] - source[1]) * 110574]
+        const path = (h.shape === 'polygon' ? [source] : h.waypoints).map(local)
+        const distance = (p: [number, number]) => distanceToStroke(local(p), path)
+        const reach = Math.max(1, ...fp.rings[0].map(distance))
+        const front = fireSpreadProgress(h, isGhost ? Math.max(h.start_s, Math.min(h.end_s - 0.01, t)) : t) * reach
+        marks = marks.filter((m) => distance(m.p) <= front)
+        const ignition = strokeSamples(path, Math.max(3, reach * 0.08)).map(([x, y]) => [source[0] + x / kx, source[1] + y / 110574] as [number, number])
+          .filter((p) => pointInRing(fp.rings[0], p) && !fp.rings.slice(1).some((ring) => pointInRing(ring, p)))
+        marks = [...ignition.map((p) => ({ p, r: 4 })), ...marks]
+      }
       out.push(
-        new SimpleMeshLayer({
+        new ScatterplotLayer<{ p: [number, number]; r: number }>({
           ...SLOT.top,
-          id: `hazard-column-${i}-${h.track_id}${sfx}`,
-          data: [{ p: fp.center }],
-          mesh: CONE_MESH,
-          getPosition: (d) => [d.p[0] + dLon, d.p[1] + dLat, height / 2],
-          getOrientation: [s.tilt, (spin * (1 + i * 0.15)) % 360, 180],
-          getScale: [h.radius_m * s.k, h.radius_m * s.k, height * (1 + i * 0.08)],
-          getColor: [150, 152, 162, s.a],
-          material: { ambient: 0.7, diffuse: 0.35, shininess: 4, specularColor: [30, 30, 30] },
-          parameters: { cullMode: 'none', depthWriteEnabled: false },
+          id: `hazard-${kind}-marks-${h.track_id}${sfx}`,
+          data: marks,
+          getPosition: (d) => [d.p[0], d.p[1], kind === 'fire' ? 3 : 60],
+          getRadius: (d) => d.r,
+          radiusUnits: 'meters',
+          radiusMinPixels: 1.5,
+          getFillColor: kind === 'fire' ? withA([255, 170, 40, 255], isGhost ? 120 : 230) : withA(PALETTE.cohortCar, isGhost ? 90 : kind === 'storm' ? 200 : 140),
+          parameters: { depthCompare: 'always', depthWriteEnabled: false },
         }),
       )
-    })
-    const debris: { p: [number, number, number]; r: number }[] = []
-    const n = 220
-    for (let i = 0; i < n; i++) {
-      const phase = (i / n) * Math.PI * 2
-      const ang = phase + t * 1.6 + i * 0.37
-      const frac = (i % 11) / 11
-      const rad = h.radius_m * (0.15 + 0.9 * frac) * (0.8 + 0.4 * Math.sin(t * 0.7 + i))
-      const z = frac * height * 0.9 * (0.6 + 0.4 * Math.sin(t * 1.1 + phase))
-      const dLat = rad / 111320
-      const dLon = rad / (111320 * Math.cos((fp.center[1] * Math.PI) / 180))
-      debris.push({ p: [fp.center[0] + dLon * Math.cos(ang), fp.center[1] + dLat * Math.sin(ang), z], r: 1.2 + (i % 4) })
     }
+  }
+  const sketch = w.hazardSketch
+  if (sketch?.shape === 'polygon' && sketch.waypoints.length) {
+    const closed = sketch.waypoints.length >= 3 ? [...sketch.waypoints, sketch.waypoints[0]] : sketch.waypoints
     out.push(
+      new PathLayer({
+        ...SLOT.top, id: `hazard-sketch-area${sfx}`, data: closed.length > 1 ? [closed] : [], getPath: (d) => d,
+        getWidth: 2.5, widthUnits: 'meters', widthMinPixels: 2, getColor: withA(PALETTE.intervention, 220),
+        capRounded: true, jointRounded: true, parameters: { depthCompare: 'always', depthWriteEnabled: false },
+      }),
       new ScatterplotLayer({
-        ...SLOT.top,
-        id: `hazard-debris-${h.track_id}${sfx}`,
-        data: debris,
-        getPosition: (d) => d.p,
-        getRadius: (d) => d.r,
-        radiusUnits: 'meters',
-        radiusMinPixels: 1,
-        getFillColor: [120, 112, 100, 200],
-        billboard: true,
+        ...SLOT.top, id: `hazard-sketch-corners${sfx}`, data: sketch.waypoints.length >= 3 ? [] : sketch.waypoints, getPosition: (d) => d,
+        getRadius: 4, radiusUnits: 'meters', radiusMinPixels: 4, getFillColor: withA(PALETTE.intervention, 230),
+        parameters: { depthCompare: 'always', depthWriteEnabled: false },
+      }),
+    )
+  } else if (sketch?.waypoints.length && Number.isFinite(sketch.radius_m) && sketch.radius_m > 0) {
+    out.push(
+      new PathLayer({
+        ...SLOT.top, id: `hazard-sketch-corridor${sfx}`,
+        data: sketch.waypoints.length > 1 ? [sketch.waypoints] : [], getPath: (d) => d,
+        getWidth: sketch.radius_m * 2, widthUnits: 'meters', getColor: withA(PALETTE.intervention, 30),
+        capRounded: true, jointRounded: true, parameters: { depthCompare: 'always', depthWriteEnabled: false },
+      }),
+      new ScatterplotLayer({
+        ...SLOT.top, id: `hazard-sketch-points${sfx}`, data: sketch.waypoints, getPosition: (d) => d,
+        getRadius: sketch.radius_m, radiusUnits: 'meters', getFillColor: withA(PALETTE.intervention, 30),
+        getLineColor: withA(PALETTE.intervention, 200), stroked: true, lineWidthMinPixels: 1.5,
+        parameters: { depthCompare: 'always', depthWriteEnabled: false },
       }),
     )
   }

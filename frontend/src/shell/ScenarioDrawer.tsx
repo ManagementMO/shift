@@ -1,4 +1,4 @@
-import { useStore } from '../store'
+import { HAZARD_KIND_LABEL, useStore } from '../store'
 import type { SimulationRun } from '../types'
 import { fmt } from '../util'
 
@@ -29,6 +29,7 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
   const cancelRun = useStore((s) => s.cancelRun)
   const openRun = useStore((s) => s.openRun)
   const select = useStore((s) => s.select)
+  const setHazardInfo = useStore((s) => s.setHazardInfo)
 
   const samePack = scenarios.filter((s) => s.pack_id === (pack?.pack_id ?? s.pack_id))
   const runsFor = (pid: string) => runs.filter((r) => r.plan_id === pid)
@@ -71,8 +72,10 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
             </button>
           ))}
           {scenario.hazards.map((h) => (
-            <div key={h.track_id} className="warn">
-              🌪 {h.label} — r {h.radius_m} m, +{fmt(h.start_s)}–+{fmt(h.end_s)}
+            <div key={h.track_id} className="hazard-row">
+              <button className="linkish" onClick={() => { setHazardInfo(h.track_id); onClose() }}>
+                ☂ {HAZARD_KIND_LABEL[h.kind ?? 'storm']} · {Math.round(h.radius_m)} m · {scenario.restrictions.find((r) => r.source_claim_id === `hazard:${h.track_id}`)?.edge_ids.length ?? 0} roads
+              </button>
             </div>
           ))}
         </div>

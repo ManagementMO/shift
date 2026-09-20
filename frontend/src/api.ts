@@ -5,6 +5,7 @@ import type {
   DemandSet,
   EntityTrack,
   EvidenceBundle,
+  HazardDraft,
   Health,
   InterventionProposal,
   Investigation,
@@ -70,6 +71,12 @@ export const api = {
   // prompt-to-edit
   previewEdit: (sid: string, prompt: string) =>
     post<InterventionProposal>(`/api/scenarios/${sid}/edit/preview`, { prompt, use_ai: usePreferences.getState().preferences.aiEnabled }),
+  previewHazard: (sid: string, draft: HazardDraft) =>
+    post<InterventionProposal>(`/api/scenarios/${sid}/hazards/preview`, draft),
+  previewHazardRemoval: (sid: string, trackId: string) =>
+    post<InterventionProposal>(`/api/scenarios/${sid}/hazards/${encodeURIComponent(trackId)}/remove/preview`, {}),
+  previewHazardReplacement: (sid: string, trackId: string, draft: HazardDraft) =>
+    post<InterventionProposal>(`/api/scenarios/${sid}/hazards/${encodeURIComponent(trackId)}/replace/preview`, draft),
   applyEdit: (sid: string, proposal: InterventionProposal) =>
     post<ScenarioSpec>(`/api/scenarios/${sid}/edit/apply`, proposal),
   // agents

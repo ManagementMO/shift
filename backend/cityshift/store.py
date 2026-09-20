@@ -1,12 +1,17 @@
-"""Append-only JSON store. Every object is written once under its id; runs get their own immutable directory."""
+"""Metadata persistence: primary MongoDB store and an explicit legacy JSON store for artifacts and tests."""
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import TypeVar
 
+from dotenv import load_dotenv
 from pydantic import BaseModel
+from pymongo import MongoClient
+from pymongo.database import Database
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from cityshift.contracts import (
     DemandSet,
@@ -20,6 +25,15 @@ from cityshift.contracts import (
 
 STORE_ROOT = Path(__file__).resolve().parents[2] / "var" / "store"
 T = TypeVar("T", bound=BaseModel)
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+
+class StorageConfigurationError(RuntimeError):
+    pass
+
+
+class StoreConflictError(ValueError):
+    pass
 
 
 class Store:
@@ -51,7 +65,7 @@ class Store:
     # scenarios ------------------------------------------------------------------------------
     def put_scenario(self, s: ScenarioSpec, demand: DemandSet) -> None:
         if self.get_scenario(s.scenario_id) is not None:
-            raise ValueError(f"scenario {s.scenario_id} already exists (immutable)")
+            raise StoreConflictError(f"scenario {s.scenario_id} already exists (immutable)")
         self._write("scenarios", s.scenario_id, s)
         self._write("demand", s.scenario_id, demand)
 
@@ -113,3 +127,119 @@ class Store:
         if sid:
             runs = [r for r in runs if r.scenario_id == sid]
         return sorted(runs, key=lambda r: r.created_at)
+
+    def ping(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+class MongoStore(Store):
+    def __init__(self, database: Database):
+        self.database = database
+        self.lock = threading.RLock()
+        self._indexes_ready = False
+
+    @classmethod
+    def from_env(cls) -> MongoStore:
+        uri = os.environ.get("MONGODB_URI", "").strip()
+        name = os.environ.get("MONGODB_DATABASE", "cityshift").strip()
+        if not uri or not uri.startswith(("mongodb://", "mongodb+srv://")) or "<" in uri or ">" in uri:
+            raise StorageConfigurationError("Set MONGODB_URI to a complete MongoDB connection string in backend/.env or the server environment; no JSON fallback is used.")
+        if not name or name in {"admin", "config", "local"}:
+            raise StorageConfigurationError("Set MONGODB_DATABASE to an application database name (default: cityshift).")
+        client: MongoClient | None = None
+        try:
+            client = MongoClient(uri, tz_aware=True, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000, connect=False)
+            return cls(client.get_database(name))
+        except (PyMongoError, ValueError):
+            if client is not None:
+                client.close()
+            raise StorageConfigurationError("MongoDB configuration could not be initialized. Check MONGODB_URI, MONGODB_DATABASE, and DNS access.") from None
+
+    def _ensure_indexes(self) -> None:
+        with self.lock:
+            if self._indexes_ready:
+                return
+            self.database.scenarios.create_index("data.created_at")
+            self.database.plans.create_index([("_id.scenario_id", 1), ("_id.plan_id", 1)])
+            for name in ("runs", "investigations"):
+                self.database[name].create_index([("data.scenario_id", 1), ("data.created_at", 1)])
+            self._indexes_ready = True
+
+    def _write(self, sub: str, key: str, obj: BaseModel) -> None:
+        self._ensure_indexes()
+        self.database[sub].replace_one({"_id": key}, {"_id": key, "schema_version": 1, "data": obj.model_dump(mode="json")}, upsert=True)
+
+    def _read(self, sub: str, key: str, cls: type[T]) -> T | None:
+        doc = self.database[sub].find_one({"_id": key})
+        return cls.model_validate(doc["data"]) if doc is not None else None
+
+    def _list(self, sub: str, cls: type[T], query: dict | None = None) -> list[T]:
+        return [cls.model_validate(doc["data"]) for doc in self.database[sub].find(query or {})]
+
+    def put_scenario(self, s: ScenarioSpec, demand: DemandSet) -> None:
+        if s.demand_id != demand.demand_id:
+            raise ValueError("scenario demand_id must match its demand set")
+        self._ensure_indexes()
+        doc = {"_id": s.scenario_id, "schema_version": 1, "data": s.model_dump(mode="json"), "demand": demand.model_dump(mode="json")}
+        try:
+            self.database.scenarios.insert_one(doc)
+        except DuplicateKeyError:
+            raise StoreConflictError(f"scenario {s.scenario_id} already exists (immutable)") from None
+
+    def get_demand(self, sid: str) -> DemandSet | None:
+        doc = self.database.scenarios.find_one({"_id": sid}, {"demand": 1})
+        return DemandSet.model_validate(doc["demand"]) if doc is not None else None
+
+    def put_plan(self, sid: str, plan: ServicePlan, report: ValidationReport) -> None:
+        if report.plan_id != plan.plan_id:
+            raise ValueError("plan and validation ids must match")
+        self._ensure_indexes()
+        key = {"scenario_id": sid, "plan_id": plan.plan_id}
+        doc = {"_id": key, "schema_version": 1, "data": plan.model_dump(mode="json"), "validation": report.model_dump(mode="json")}
+        try:
+            self.database.plans.insert_one(doc)
+        except DuplicateKeyError:
+            existing = self.database.plans.find_one({"_id": key})
+            if existing != doc:
+                raise StoreConflictError(f"plan {plan.plan_id} already exists in scenario {sid} (immutable)") from None
+
+    def get_plan(self, sid: str, pid: str) -> ServicePlan | None:
+        doc = self.database.plans.find_one({"_id": {"scenario_id": sid, "plan_id": pid}})
+        return ServicePlan.model_validate(doc["data"]) if doc is not None else None
+
+    def get_validation(self, sid: str, pid: str) -> ValidationReport | None:
+        doc = self.database.plans.find_one({"_id": {"scenario_id": sid, "plan_id": pid}}, {"validation": 1})
+        return ValidationReport.model_validate(doc["validation"]) if doc is not None else None
+
+    def list_plans(self, sid: str) -> list[ServicePlan]:
+        return sorted(self._list("plans", ServicePlan, {"_id.scenario_id": sid}), key=lambda p: p.plan_id)
+
+    def put_bundle(self, b: EvidenceBundle) -> None:
+        self._ensure_indexes()
+        self.database.evidence.update_one({"_id": b.bundle_id}, {"$setOnInsert": {"schema_version": 1, "data": b.model_dump(mode="json")}}, upsert=True)
+
+    def list_investigations(self, sid: str | None = None) -> list[Investigation]:
+        query = {"data.scenario_id": sid} if sid is not None else {}
+        return sorted(self._list("investigations", Investigation, query), key=lambda inv: inv.created_at)
+
+    def put_run(self, r: SimulationRun) -> None:
+        self._ensure_indexes()
+        doc = {"_id": r.run_id, "schema_version": 1, "data": r.model_dump(mode="json")}
+        try:
+            self.database.runs.replace_one({"_id": r.run_id, "data.status": {"$nin": ["completed", "invalid"]}}, doc, upsert=True)
+        except DuplicateKeyError:
+            if self.get_run(r.run_id) != r:
+                raise StoreConflictError(f"run {r.run_id} already has an immutable terminal result") from None
+
+    def list_runs(self, sid: str | None = None) -> list[SimulationRun]:
+        query = {"data.scenario_id": sid} if sid is not None else {}
+        return sorted(self._list("runs", SimulationRun, query), key=lambda r: r.created_at)
+
+    def ping(self) -> None:
+        self.database.command("ping")
+
+    def close(self) -> None:
+        self.database.client.close()

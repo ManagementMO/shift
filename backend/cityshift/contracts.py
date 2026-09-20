@@ -6,9 +6,9 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SCHEMA_VERSION = "0.1"
 
@@ -145,14 +145,46 @@ class Restriction(BaseModel):
     label: str = ""
 
 
-class HazardTrack(BaseModel):
-    track_id: str
-    waypoints: list[tuple[float, float]] = Field(description="lon/lat path")
-    radius_m: float
-    start_s: int
-    end_s: int
-    modes: list[str] = ["passenger", "bus", "pedestrian"]
-    label: str = "assumed storm corridor (user-defined, not a forecast)"
+LonLat = tuple[
+    Annotated[float, Field(ge=-180, le=180, allow_inf_nan=False, strict=True)],
+    Annotated[float, Field(ge=-90, le=90, allow_inf_nan=False, strict=True)],
+]
+HazardMode = Literal["passenger", "bus"]
+HazardKind = Literal["rain", "fire", "storm", "flood"]
+HazardShape = Literal["buffer", "polygon"]
+
+
+class HazardDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    waypoints: list[LonLat] = Field(min_length=1, max_length=64, description="Explicit lon/lat point, corridor, or polygon corners")
+    radius_m: float = Field(ge=0, le=10000, allow_inf_nan=False, strict=True, description="Buffer around the waypoints; polygons may use 0")
+    start_s: int = Field(ge=0, strict=True)
+    end_s: int = Field(gt=0, strict=True)
+    modes: list[HazardMode] = Field(default=["passenger", "bus"], min_length=1, max_length=2)
+    kind: HazardKind = Field(default="storm", description="Weather event type; illustrative visual only, restrictions are identical for all kinds")
+    shape: HazardShape = Field(default="buffer", description="buffer: waypoints widened by radius_m; polygon: waypoints are the area's corners")
+    label: str = Field(default="declared weather event (user-defined, not a forecast)", min_length=1, max_length=240)
+
+    @field_validator("modes")
+    @classmethod
+    def unique_modes(cls, modes: list[HazardMode]) -> list[HazardMode]:
+        return sorted(set(modes))
+
+    @model_validator(mode="after")
+    def ordered_window(self) -> HazardDraft:
+        if self.end_s <= self.start_s:
+            raise ValueError("hazard end_s must be greater than start_s")
+        if self.shape == "buffer" and self.radius_m <= 0:
+            raise ValueError("buffer hazards need a radius greater than 0 m")
+        if self.shape == "polygon" and len(self.waypoints) < 3:
+            raise ValueError("polygon hazards need at least three corners")
+        return self
+
+
+class HazardTrack(HazardDraft):
+    track_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
+    footprint: list[list[LonLat]] = Field(default_factory=list, description="Server-projected static buffer: exterior ring, then holes")
 
 
 # ---------------------------------------------------------------- plans
@@ -325,7 +357,7 @@ class Investigation(BaseModel):
 
 class InterventionProposal(BaseModel):
     proposal_id: str
-    kind: Literal["close_edge", "reopen_edge", "move_stop", "set_fleet", "storm", "unsupported"]
+    kind: Literal["close_edge", "reopen_edge", "move_stop", "set_fleet", "storm", "remove_hazard", "replace_hazard", "unsupported"]
     text: str
     edge_ids: list[str] = []
     stop_id: str | None = None
@@ -334,6 +366,8 @@ class InterventionProposal(BaseModel):
     start_s: int | None = None
     end_s: int | None = None
     hazard: HazardTrack | None = None
+    replaces_track_id: str | None = Field(default=None, description="replace_hazard: the existing hazard removed in the same edit")
+    network_fingerprint: str | None = None
     warnings: list[str] = []
     base_scenario_id: str
     ambiguous: bool = False

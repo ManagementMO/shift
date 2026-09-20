@@ -23,12 +23,12 @@ export default function CameraModes({ active = true }: { active?: boolean }) {
 
   useEffect(() => watchCameraMode(setCameraMode), [setCameraMode])
 
-  // The Babylon world offers the Blue Jays egress framing once a replay with recorded releases is loaded.
+  // The Babylon world offers the Blue Jays egress framing once a Toronto replay with recorded releases is loaded.
   useEffect(() => {
     const update = () => {
       const lead = leadMap()
       setReady(Boolean(lead && (!lead.cameraLocked || lead.setCameraPreset)))
-      setHero(Boolean(lead?.egress) && !lead?.cameraLocked)
+      setHero(Boolean(lead?.egressAvailable ? lead.egressAvailable() : lead?.egress) && !lead?.cameraLocked)
     }
     update()
     const id = setInterval(update, 500)
@@ -59,7 +59,7 @@ export default function CameraModes({ active = true }: { active?: boolean }) {
         </button>
       ))}
       {hero && (
-        <button className="hero" onClick={egress} title="Egress (6) — rewind to the first travellers leaving the Blue Jays game">
+        <button className="hero" onClick={egress} title="Egress (6) — frame Rogers Centre and rewind to the first travellers leaving the Blue Jays game">
           Egress
         </button>
       )}
@@ -115,8 +115,8 @@ function go(mode: CameraMode) {
     }
     case 'incident': {
       const h = scenario?.hazards[0]
-      const fp = h ? hazardFootprint(h, Math.max(h.start_s, Math.min(s.t, h.end_s))) : null
-      if (fp && h) cameraTo(incidentPose(fp.center, h.radius_m * 3, base), 'incident')
+      const fp = h ? hazardFootprint(h, s.t, true) : null
+      if (fp) cameraTo(incidentPose(fp.center, fp.span_m, base), 'incident')
       else if (venue) cameraTo(incidentPose(venue, 400, base), 'incident')
       return
     }
