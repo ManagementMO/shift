@@ -280,7 +280,10 @@ def test_native_epoch_batches_and_budget_pause_without_model_calls(tmp_path, mon
         def decide(self, packets):
             batches.append([row["resident_id"] for row in packets])
             ids = batches[-1]
-            return dict.fromkeys(ids), {}, dict.fromkeys(ids, "explicit local test failure"), {}
+            # Simulated provider usage exercises isolated unsuccessful turns, not
+            # the all-pre-dispatch-failure pause guard. No actual model is invoked.
+            return (dict.fromkeys(ids), {}, dict.fromkeys(ids, "explicit local test failure"),
+                    {rid: {"reported_model_calls": 1} for rid in ids})
 
         def close(self):
             pass

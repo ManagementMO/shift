@@ -217,10 +217,28 @@ def execute_population_run(run: SimulationRun, pack: CityPack, population: Popul
                             actual = {key: submitted.model_dump(mode="json")[key] for key in expected}
                             if expected != actual:
                                 rejections[rid] = "structured decision differs from the actor's staged proposal"
-                        world.commit_decisions(results, source="jiuwenswarm", bindings=bindings, failures=failures,
-                                               usage=usage, staged_messages=[i for i in staged if i.action == "message"],
-                                               rejections=rejections, staged_intents=staged)
+                        records = world.commit_decisions(
+                            results, source="jiuwenswarm", bindings=bindings, failures=failures,
+                            usage=usage, staged_messages=[i for i in staged if i.action == "message"],
+                            rejections=rejections, staged_intents=staged,
+                        )
                         atomic_json(out_dir / "native_tools.json", prior_audit + bridge.audit())
+                        reported_calls = [record.usage.get("reported_model_calls", 0) for record in records]
+                        if (all(record.source == "fallback" for record in records)
+                                and not any(isinstance(value, (int, float)) and not isinstance(value, bool)
+                                            and value > 0 for value in reported_calls)):
+                            # A running SDK can still reject every model request before
+                            # dispatch. Keep this failed boundary inspectable, but never
+                            # turn it into a whole simulated day of automatic fallback waits.
+                            saved = save_checkpoint(out_dir, attempt, world, mobility, client, time.monotonic() - started,
+                                                    prior_audit + bridge.audit())
+                            run.checkpoint_id = saved["checkpoint_id"]
+                            run.checkpoint_available = True
+                            run.status = RunStatus.paused
+                            run.error = ("Native decision batch produced only fallback records and no reported provider "
+                                         "model calls. Execution paused before advancing city time; inspect model-request "
+                                         "validation and provider errors before resuming.")
+                            break
                     else:
                         choices: dict[str, ResidentDecision | None] = {
                             packet["resident_id"]: baseline_decision(packet) for packet in packets
