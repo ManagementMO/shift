@@ -121,18 +121,56 @@
 .god-chrome .god-chrome__submit { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; min-height: 0; padding: 6px; border: 0; border-radius: 50%; color: #29415b; background: #f7fbff; box-shadow: none; }
 .god-chrome .god-chrome__submit:disabled { opacity: .65; }
 
+/* playback dock: play / pause, speed, live status and the cohort counters, beside the command bar */
+.god-chrome .god-chrome__dock {
+  position: absolute;
+  bottom: var(--gp-edge);
+  left: var(--gp-edge);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 6px 12px 6px 8px;
+  border: 1px solid #dcf1ff70;
+  border-radius: 15px;
+  background: linear-gradient(145deg, #779cbc66, #183e598c);
+  box-shadow: inset 0 1px 1px #f0f9ff33, 0 5px 20px #0f2e4826;
+  backdrop-filter: blur(18px) saturate(1.2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.god-chrome .god-chrome__play { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; min-height: 0; padding: 6px; border: 0; border-radius: 50%; color: #29415b; background: #f7fbff; box-shadow: none; }
+.god-chrome .god-chrome__play:disabled { opacity: .65; }
+.god-chrome .god-chrome__speeds { display: flex; gap: 2px; padding: 2px; border-radius: 12px; background: #10305033; }
+.god-chrome .god-chrome__speed { min-width: 0; min-height: 0; padding: 4px 8px; border: 0; border-radius: 10px; color: #e7f2fc; background: transparent; box-shadow: none; font-size: 12px; }
+.god-chrome .god-chrome__speed[aria-pressed='true'] { color: #1d2b44; background: #fbfdff; font-weight: 600; }
+.god-chrome .god-chrome__status { padding-left: 10px; border-left: 1px solid #e8f6ff40; color: #e3eff8; }
+.god-chrome .god-chrome__counters { display: flex; gap: 14px; margin: 0; padding-left: 10px; border-left: 1px solid #e8f6ff40; }
+.god-chrome .god-chrome__counters div { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; }
+.god-chrome .god-chrome__counters dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.god-chrome .god-chrome__counters dt { font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: #cfe3f3; }
+
 @media (prefers-reduced-motion: no-preference) {
-  .god-chrome > :is(.god-chrome__brand, .god-chrome__tabs, .god-chrome__weather, .god-chrome__tools, .god-chrome__command-zone) {
+  .god-chrome > :is(.god-chrome__brand, .god-chrome__tabs, .god-chrome__weather, .god-chrome__tools, .god-chrome__dock, .god-chrome__command-zone) {
     animation: gp-enter 320ms cubic-bezier(.22, 1, .36, 1) var(--gp-enter-delay, 0ms) backwards;
   }
   .god-chrome__tabs { --gp-enter-delay: 25ms; }
   .god-chrome__weather { --gp-enter-delay: 50ms; }
   .god-chrome__tools { --gp-enter-delay: 75ms; }
+  .god-chrome__dock { --gp-enter-delay: 95ms; }
   .god-chrome__command-zone { --gp-enter-delay: 110ms; }
 }
 
 @media (max-width: 900px) {
   .god-chrome .god-chrome__tabs { top: calc(var(--gp-edge) + 44px); width: min(430px, calc(100% - 2 * var(--gp-edge))); }
+}
+/* the dock and the command bar share the bottom edge: counters only when there is room beside the centred bar */
+@media (max-width: 1600px) {
+  .god-chrome .god-chrome__counters { display: none; }
+}
+@media (max-width: 900px) {
+  .god-chrome .god-chrome__dock { bottom: calc(var(--gp-edge) + 56px); left: 50%; transform: translateX(-50%); }
+  .god-chrome .god-chrome__status { display: none; }
 }
 @media (max-width: 540px) {
   .god-chrome .god-chrome__wordmark { font-size: 18px; }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useStore, type ToolId } from '../store'
-import { live, useLive, liveCountsAt, environmentAt } from '../live/session'
+import { DEFAULT_LIVE_CONFIG, live, useLive, liveCountsAt, environmentAt, newCity } from '../live/session'
 import { clock, simClock, PLAYBACK_SPEEDS } from '../world/playback'
 import { cameraTo, leadMap } from '../world/registry'
 import { agentPose, currentPose } from '../world/camera'
@@ -46,11 +46,23 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
   const [citizenTab, setCitizenTab] = useState<CitizenTab>('thoughts')
   const [draft, setDraft] = useState<GodEventDraft>({ kind: 'tornado', intensity: 'medium', radiusM: 110, durationS: 300, heading: 90, autoRespond: false })
   const [settings, setSettings] = useState<TornadoSettings>({ ...DEFAULT_TORNADO, drift: true })
+  const [crowd, setCrowd] = useState<{ travelers: number; buses: number } | null>(null)
   const sequence = useRef(0)
   const resume = useRef(false)
   const session = view.primary?.state
   const counts = liveCountsAt(view, t)
   const environment = session ? environmentAt(session, t) : null
+  const ready = !!session && !['starting', 'restoring', 'failed'].includes(session.status) && !view.busy
+  // SUMO itself alternates between running and paused as it is stepped; the user's play state is what matters
+  const statusLabel = view.error ? 'SUMO problem' : view.busy ? view.busy : !session ? 'Starting the city' : session.status === 'starting' || session.status === 'restoring' ? 'Starting SUMO' : session.status === 'completed' ? 'Horizon reached' : session.status === 'failed' ? 'SUMO stopped' : playing ? 'Live · simulating' : 'Live · paused'
+  const counters = [
+    { label: 'Moving', value: counts ? counts.walking + counts.driving : null },
+    { label: 'Waiting', value: counts?.waiting ?? null },
+    { label: 'Riding', value: counts?.riding ?? null },
+    { label: 'Arrived', value: counts?.arrived ?? null },
+    { label: 'Buses', value: environment ? environment.assignedBuses.size : null },
+  ]
+  const fresh = crowd ?? { travelers: session?.config.initial_population ?? DEFAULT_LIVE_CONFIG.initial_population, buses: session?.config.fleet_size ?? DEFAULT_LIVE_CONFIG.fleet_size }
   const scope = `${pack?.pack_id ?? ''}:${session?.session_id ?? ''}`
   useEffect(() => { useGodVisuals.getState().setScope(scope) }, [scope])
   useEffect(() => {
@@ -62,8 +74,10 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
   useEffect(() => {
     if (!active) return
     const key = (event: KeyboardEvent) => {
-      if (event.repeat || event.ctrlKey || event.metaKey || (event.target instanceof Element && event.target.closest('button,input,textarea,select,[contenteditable="true"]'))) return
-      if (event.code === 'Space' && !useGodVisuals.getState().armed) { event.preventDefault(); live.toggle() }
+      if (event.repeat || event.ctrlKey || event.metaKey) return
+      const inControl = event.target instanceof Element && !!event.target.closest('button,input,textarea,select,[contenteditable="true"]')
+      if (event.code === 'Space' && !inControl && !useGodVisuals.getState().armed) { event.preventDefault(); live.toggle() }
+      // Escape closes whatever is open even while a tab or tool button keeps focus after being clicked
       if (event.key === 'Escape' && !useGodVisuals.getState().armed) { setPanel('none'); useStore.getState().setTool(null); useStore.getState().select(null) }
     }
     window.addEventListener('keydown', key)
@@ -92,6 +106,8 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
   const onTool = (next: GodTool) => {
     if (next === 'map') openTool('area')
     else if (next === 'transport') openTool('closure')
+    else if (next === 'build') openTool('development')
+    else if (next === 'population') openTool('population')
     else if (next === 'weather') openTool('temperature')
     else open(next === 'people' ? 'agents' : next === 'events' ? 'events' : next === 'layers' ? 'settings' : 'none')
   }
@@ -125,7 +141,7 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
   const citizen: GodCitizen | null = entity ? { id: entity.id, name: citizenName(entity.person_id ?? entity.id), role: 'Synthetic traveler', status: 'Live journey', destination: entity.destination_edge ?? 'Unknown destination', activity: 'Measured in SUMO', synthetic: true, traits: [], thoughts: [], relationships: [] } : null
   if (!active) return null
   return <>
-    <GodChrome city={pack?.name ?? ''} activeTab="live" openTab={panel === 'events' || panel === 'event-config' ? 'events' : null} activeTool={panel === 'agents' ? 'people' : panel.startsWith('event') ? 'events' : tool === 'temperature' ? 'weather' : tool === 'closure' ? 'transport' : tool === 'area' ? 'map' : 'select'} dateLabel="" timeLabel={simClock(t)} weatherLabel="Clear" temperatureLabel={environment ? `${environment.temperature}°C` : '—'} weatherNote="Simulation temperature, not a weather forecast" statusLabel="" agentCount={0} playing={playing} is2D={display.projection === 'isometric'} command={command} onTab={onTab} onTool={onTool} onHome={onHome} onCommandChange={setCommand} onCommand={() => commandAction(command)} onSuggestion={commandAction} onTogglePlay={() => live.toggle()} onView={() => {}} />
+    <GodChrome city={pack?.name ?? ''} activeTab="live" openTab={panel === 'events' || panel === 'event-config' ? 'events' : null} activeTool={panel === 'agents' ? 'people' : panel.startsWith('event') ? 'events' : tool === 'temperature' ? 'weather' : tool === 'closure' ? 'transport' : tool === 'development' ? 'build' : tool === 'population' ? 'population' : tool === 'area' ? 'map' : 'select'} dateLabel="" timeLabel={simClock(t)} weatherLabel="Clear" temperatureLabel={environment ? `${environment.temperature}°C` : '—'} weatherNote="Simulation temperature, not a weather forecast" statusLabel={statusLabel} agentCount={counts?.total ?? 0} playing={playing} speed={useStore.getState().speed} speeds={PLAYBACK_SPEEDS} counters={counters} ready={ready} onSpeed={speed => live.setSpeed(speed)} is2D={display.projection === 'isometric'} command={command} onTab={onTab} onTool={onTool} onHome={onHome} onCommandChange={setCommand} onCommand={() => commandAction(command)} onSuggestion={commandAction} onTogglePlay={() => live.toggle()} onView={() => {}} />
     {panel === 'events' && <EventMenu onClose={close} onSelect={selectEvent} selectedEvent={chosen ? 'tornado' : 'normal'} supportedEvents={['normal','tornado']} />}
     {panel === 'event-config' && <EventConfigPanel draft={draft} supported={draft.kind === 'tornado'} placing={armed} onChange={updateDraft} onCancel={armed ? cancel : close} onPlace={arm} />}
     {armed && world && <TornadoPlacement scene={world} armed settings={settings} onSettings={patch => { setSettings(s => ({ ...s, ...patch })); setDraft(d => ({ ...d, radiusM: patch.radius ?? d.radiusM, heading: patch.heading ?? d.heading, intensity: patch.power === undefined ? d.intensity : powerIntensity(patch.power) })) }} onCast={cast} onCancel={cancel} />}
@@ -136,7 +152,13 @@ export default function GodCityUI({ world, active, onHome }: { world: WorldScene
     {!AGENT_DEMO_LOCKED && citizen && <CitizenPanel citizen={citizen} tab={citizenTab} onTab={setCitizenTab} onClose={close} onFollow={() => { const map = leadMap(), pose = world?.traffic.poseOf(citizen.id); if (map && pose && world) cameraTo(agentPose(world.frame.worldToLonLat(pose.x, pose.z), null, currentPose(map)), 'agent') }} onGuide={() => setNotice('Individual guidance is not connected yet.')} onMessage={() => setNotice('Citizen conversations are not connected yet.')} onPerson={id => useStore.getState().select({ kind: 'person', id })} />}
     <div className={citizen || (AGENT_DEMO_LOCKED && selection?.kind === 'person') ? 'gp-follow-behavior' : 'gp-selection-bubble'}><AgentBubble /></div>
     {panel === 'tools' && tool && <PanelBox title={TITLES[tool]} onClose={close}><div className="gp-inline-segment">{(['area','closure','development','population','temperature'] as ToolId[]).map(id => <GlassButton key={id} onClick={() => openTool(id)}>{id === 'development' ? 'Build' : id === 'temperature' ? 'Temp' : id === 'closure' ? 'Roads' : id === 'population' ? 'People' : 'Areas'}</GlassButton>)}</div><div className="gp-legacy-inline"><ToolPanel /></div></PanelBox>}
-    {panel === 'settings' && <PanelBox title="City settings" onClose={close}><GlassButton onClick={() => live.toggle()}>{playing ? 'Pause simulation' : 'Resume simulation'}</GlassButton><div className="gp-inline-segment">{PLAYBACK_SPEEDS.map(speed => <GlassButton key={speed} onClick={() => live.setSpeed(speed)}>{speed}×</GlassButton>)}</div>{(['textures','shadows','sharp'] as const).map(key => <label key={key} className="gp-setting-row"><span>{key === 'sharp' ? 'High resolution' : key === 'textures' ? 'Building textures' : 'Shadows'}</span><input type="checkbox" checked={display[key]} onChange={event => display.set({ [key]: event.target.checked })} /></label>)}<GlassButton onClick={() => display.set({ projection: display.projection === 'perspective' ? 'isometric' : 'perspective' })}>Switch to {display.projection === 'perspective' ? '2D' : '3D'}</GlassButton><GlassButton onClick={() => openTool('development')}>Add a development</GlassButton><GlassButton onClick={() => openTool('population')}>Add travelers</GlassButton></PanelBox>}
+    {panel === 'settings' && <PanelBox title="City settings" onClose={close}><GlassButton onClick={() => live.toggle()}>{playing ? 'Pause simulation' : 'Resume simulation'}</GlassButton><div className="gp-inline-segment">{PLAYBACK_SPEEDS.map(speed => <GlassButton key={speed} onClick={() => live.setSpeed(speed)}>{speed}×</GlassButton>)}</div>
+      <h3 className="gp-section-title">New city</h3>
+      <label className="gp-setting-row"><span>Initial travelers</span><input type="number" min={0} max={10000} step={100} value={fresh.travelers} onChange={event => setCrowd({ ...fresh, travelers: Number(event.target.value) })} /></label>
+      <label className="gp-setting-row"><span>Shuttle buses</span><input type="number" min={0} max={32} step={1} value={fresh.buses} onChange={event => setCrowd({ ...fresh, buses: Number(event.target.value) })} /></label>
+      <GlassButton variant="primary" disabled={!pack || !!view.busy} onClick={() => { if (pack) { void newCity(pack.pack_id, { initial_population: fresh.travelers, fleet_size: fresh.buses }); close() } }}>{view.busy ? 'Working…' : 'Start a fresh city'}</GlassButton>
+      <p className="gp-panel-note">Restarts SUMO from the beginning with this crowd. The current city stays saved and listed on the globe.</p>
+      <h3 className="gp-section-title">Appearance</h3>{(['textures','shadows','sharp'] as const).map(key => <label key={key} className="gp-setting-row"><span>{key === 'sharp' ? 'High resolution' : key === 'textures' ? 'Building textures' : 'Shadows'}</span><input type="checkbox" checked={display[key]} onChange={event => display.set({ [key]: event.target.checked })} /></label>)}<GlassButton onClick={() => display.set({ projection: display.projection === 'perspective' ? 'isometric' : 'perspective' })}>Switch to {display.projection === 'perspective' ? '2D' : '3D'}</GlassButton><GlassButton onClick={() => openTool('development')}>Add a development</GlassButton><GlassButton onClick={() => openTool('population')}>Add travelers</GlassButton></PanelBox>}
     {panel === 'analytics' && <PanelBox title="City analytics" onClose={close}><div className="gp-kpi-grid">{([['Travelers',counts?.total],['Arrived',counts?.arrived],['Waiting',counts?.waiting]] as const).map(([label,value]) => <div key={label}><span>{label}</span><strong>{value ?? '—'}</strong></div>)}</div><div className="gp-facts"><span>Walking</span><b>{counts?.walking ?? '—'}</b><span>Driving</span><b>{counts?.driving ?? '—'}</b><span>Riding</span><b>{counts?.riding ?? '—'}</b><span>Messages passed</span><b>{session?.metrics?.swarm?.messages ?? '—'}</b><span>Informed agents</span><b>{session?.metrics?.swarm?.aware_total ?? '—'}</b></div><p className="gp-panel-note">Actual live-session measurements. Decorative tornadoes do not change these outcomes.</p></PanelBox>}
     {(notice || error || view.error) && <GlassSurface className="gp-toast" role="status"><GodIcon name="info" size={18} /><span>{notice || error || view.error}</span><GlassIconButton icon="close" label="Dismiss notification" onClick={() => { setNotice(null); useStore.getState().setError(null); live.discard() }} /></GlassSurface>}
   </>

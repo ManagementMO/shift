@@ -26,6 +26,7 @@
 .gp-shell .gp-location-list b { font-weight: 500; }
 .gp-shell .gp-location-list small { color: #b9d0e2; font-size: 12px; }
 .gp-shell .gp-setting-row { display: flex; justify-content: space-between; align-items: center; gap: 15px; font-size: 14px; }
+.gp-shell .gp-setting-row input[type=number] { width: 96px; padding: 7px 10px; border: 1px solid #e5f3ff33; border-radius: 10px; color: #f5faff; background: #10305040; font: inherit; text-align: right; }
 .gp-shell .gp-toggle-row { background: none; color: inherit; border: 0; padding: 7px 0; }
 .gp-shell .gp-toggle-track { display: flex; align-items: center; width: 40px; height: 23px; padding: 3px; border: 1px solid #c7dff84d; border-radius: 20px; background: #123d5b55; transition: background .15s; }
 .gp-shell .gp-toggle-track i { width: 15px; height: 15px; border-radius: 50%; background: #e9f4fc; transition: transform .15s; }

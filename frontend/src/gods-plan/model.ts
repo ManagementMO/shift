@@ -1,5 +1,5 @@
 export type GodTab = 'live' | 'simulate' | 'agents' | 'events' | 'analytics'
-export type GodTool = 'select' | 'map' | 'people' | 'transport' | 'events' | 'weather' | 'layers'
+export type GodTool = 'select' | 'map' | 'people' | 'transport' | 'build' | 'population' | 'events' | 'weather' | 'layers'
 export type GodEventKind = 'normal' | 'tornado' | 'earthquake' | 'flood' | 'wildfire' | 'outage' | 'riot' | 'transit' | 'orbital' | 'custom'
 export type GodEventCategory = 'all' | 'natural' | 'infrastructure' | 'social' | 'custom'
 export type GodIntensity = 'low' | 'medium' | 'high'
@@ -72,6 +72,13 @@ export interface GodHUDProps {
   statusLabel: string
   agentCount: number
   playing: boolean
+  /** Playback speed multiplier and the choices offered in the dock. */
+  speed?: number
+  speeds?: readonly number[]
+  /** Live cohort counters shown in the dock (label → value); null values render as a dash. */
+  counters?: readonly { label: string; value: number | null }[]
+  /** False while SUMO is starting or busy: the dock's controls are disabled. */
+  ready?: boolean
   is2D: boolean
   command: string
   commandBusy?: boolean
@@ -83,5 +90,6 @@ export interface GodHUDProps {
   onCommand: () => void
   onSuggestion: (value: string) => void
   onTogglePlay: () => void
+  onSpeed?: (speed: number) => void
   onView: (action: 'locate' | 'projection' | 'settings' | 'zoom-in' | 'zoom-out') => void
 }
