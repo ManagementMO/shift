@@ -239,6 +239,50 @@ They have to **live inside it**.
 
 ---
 
+## 🧩 How we used the sponsor platforms
+
+### Huawei · openJiuwen — the multi-agent backbone
+
+openJiuwen is how our specialists actually exist. Each one is a ReAct agent with an `AgentCard` and a set of bounded tools registered through `ability_manager`, and every tool is read-only: an evidence analyst, a demand analyst, and a planner that can inspect the city and propose a plan but **cannot write a measured outcome or mutate a scenario**.
+
+The only way an agent influences the world is by proposing something that deterministic validators and the simulator then accept or reject.
+
+In the live city, agent-to-agent messages are emitted in openJiuwen's `MessageEnvelope` shape — message id, sender, recipient, topic, session, metadata — so a news-propagation record can be handed to a team runtime unchanged.
+
+### Elasticsearch — the agents' context layer, with a receipt for every claim
+
+The planner is not allowed to browse. It gets a **frozen, content-hashed evidence bundle**: claims with source ids, effective windows, and a status of `confirmed`, `pending`, or `superseded`.
+
+We index each city's notice corpus and query it with `multi_match` over title and body with fuzziness, then record which engine answered — `elasticsearch` or an explicitly labeled local fallback. Nothing silently pretends to be Elasticsearch.
+
+The unresolved list is the most important part: when a corridor mapping or effective window is missing, the bundle says so instead of letting the model fill the gap with confidence.
+
+### Rox — agents that operate on messy data and still take real action
+
+Our evidence layer is explicitly allowed to contradict itself. A superseded lane closure sits alongside the confirmed full closure that replaced it, and the analyst has to say which one actually constrains routing.
+
+The plan then has to survive deterministic validators — fleet limits, allowed stops, service windows, route reachability, vehicle continuity — with one bounded repair round if it fails.
+
+The live city adds the other half: residents act on **partial information**, so a witness knows immediately while someone two blocks away hears about it one hop later, or never. Decisions get made under real uncertainty, and the simulation shows what that costs.
+
+### OpenAI — the reasoning behind the plans
+
+The agent team runs on OpenAI models through an OpenAI-compatible client. Our documented Toronto investigation ran `openai/gpt-4o-mini`, producing two candidate plans that both passed validation.
+
+That strict-JSON step is exactly where a 7B local model falls over and a hosted model does not — and it decides whether the agents produce any plan at all.
+
+### Backboard — a real adapter, not a checkbox
+
+Our agent framework only speaks `/v1/chat/completions`; Backboard speaks threads. So we wrote the translation properly: chat requests become threads, tool results continue the **same** thread via `/threads/tool-outputs`, a tool-call→thread map keeps multi-step tool use coherent, and a local `/llm/v1` shim lets openJiuwen's OpenAI client talk to Backboard unchanged.
+
+Memory is off by design — every call is self-contained, exactly like a stateless completion, so a thread never becomes hidden state the simulation cannot see.
+
+### Cognition · Devin — the engineer on the delivery path
+
+Devin worked on this repository as an engineering teammate, taking the work that sits between "it runs on my machine" and "you can open it": the Vercel deployment and its SPA routing config, the God's Plan README and the architecture diagram in it, wiring the live domain, and filing the submission itself.
+
+---
+
 # Local storage setup
 
 Application records now use **MongoDB Atlas** by default. Before starting the API, set
