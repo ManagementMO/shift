@@ -1,0 +1,55 @@
+.resident-details {
+  position: relative;
+  grid-row: 2;
+  grid-column: 1;
+  justify-self: end;
+  align-self: stretch;
+  z-index: 16;
+  width: min(390px, calc(100% - 88px));
+  min-height: 0;
+  margin: 12px 16px 12px 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border-radius: 0;
+}
+.resident-details .resident-inspector,
+.resident-details-empty { display: grid; gap: 12px; padding: 16px; overflow-wrap: anywhere; line-height: 1.5; }
+.resident-details :is(h2, p) { margin: 0; }
+.resident-details h2 { font-size: 12px; font-weight: 600; }
+.resident-details .resident-inspector > .row:first-child {
+  flex-wrap: wrap;
+  position: sticky;
+  top: -16px;
+  z-index: 1;
+  margin: -16px -16px 0;
+  padding: 14px 16px;
+  background: var(--glass-strong);
+  border-bottom: 1px solid var(--glass-line);
+}
+.resident-details .resident-inspector > .row:first-child h2 { font-size: 17px; }
+.resident-details .brain-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; }
+.resident-details .tiny { padding: 5px 7px; border: 1px solid var(--glass-line); font-size: 11px; }
+.resident-details .tiny:hover { background: var(--accent-soft); }
+.resident-details :is(button, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.resident-details .resident-inspector > :is(section, details) { border-top: 1px solid var(--glass-line); padding-top: 12px; }
+.resident-details section { display: grid; gap: 8px; }
+.resident-details section h2:not(:first-child) { margin-top: 5px; }
+.resident-details .resident-summary { color: var(--ink); font-size: 15px; line-height: 1.5; }
+.resident-details summary { cursor: pointer; font-size: 12px; padding: 3px 0; }
+.resident-details details[open] > summary { margin-bottom: 10px; }
+.resident-details .population-record { padding: 8px 0; border-bottom: 1px solid var(--glass-line); }
+.resident-details ol { margin: 0; padding-left: 22px; }
+.resident-details .pill { border: 1px solid var(--glass-line); padding: 3px 6px; font-size: 10px; }
+@media (max-width: 700px) {
+  .resident-details {
+    /* Stay inside the stage: the wrapped top strip and playback dock remain usable. */
+    align-self: end;
+    max-height: min(62dvh, calc(100% - 16px));
+    width: calc(100% - 72px);
+    margin: 8px 8px 8px 0;
+    z-index: 22;
+  }
+  .resident-details .resident-inspector, .resident-details-empty { padding: 12px; gap: 10px; }
+  .resident-details .resident-inspector > .row:first-child { top: -12px; margin: -12px -12px 0; padding: 12px; }
+}

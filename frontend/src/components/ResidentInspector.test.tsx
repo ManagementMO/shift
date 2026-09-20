@@ -8,6 +8,28 @@ const population = buildPopulationIndex(populationArtifact())
 const render = (t: number, residentId = 'r1') => renderToStaticMarkup(<ResidentInspector population={population} residentId={residentId} t={t} onSelect={() => {}} onClose={() => {}} />)
 
 describe('recorded resident inspector', () => {
+  it('keeps optional camera actions in the resident header without offering unavailable actions', () => {
+    const html = renderToStaticMarkup(<ResidentInspector population={population} residentId="r1" t={12} onSelect={() => {}} onClose={() => {}} onFrame={() => {}} onFollow={() => {}} />)
+    expect(html).toContain('>Follow</button>')
+    expect(html).toContain('>Frame</button>')
+    expect(html.indexOf('>Follow</button>')).toBeLessThan(html.indexOf('synthetic resident'))
+    expect(html.indexOf('>Frame</button>')).toBeLessThan(html.indexOf('synthetic resident'))
+    expect(render(12)).not.toContain('>Follow</button>')
+    expect(render(12)).not.toContain('>Frame</button>')
+    expect(render(12)).toContain('>Close</button>')
+  })
+
+  it('puts the recorded explanation and actual provenance before setup and history', () => {
+    const html = render(12)
+    expect(html.indexOf('Recorded generated summary')).toBeLessThan(html.indexOf('Preferences and responsibilities'))
+    expect(html.indexOf('Actual latest decision')).toBeLessThan(html.indexOf('Relevant task ledger'))
+    expect(html.indexOf('Authority acceptance')).toBeLessThan(html.indexOf('Contacts and relationships'))
+    expect(html.indexOf('Current recorded plan')).toBeLessThan(html.indexOf('Decision history'))
+    expect(html).toContain('not hidden model reasoning')
+    expect(html).toContain('<summary>Recorded messages</summary>')
+    expect(html).toContain('<summary>Observations and memories')
+  })
+
   it('never renders future summaries, task versions, memories, or incoming messages while scrubbing backwards', () => {
     expect(render(60)).toContain('FUTURE MEMORY')
     const html = render(30)

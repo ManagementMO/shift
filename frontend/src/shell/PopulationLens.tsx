@@ -1,9 +1,8 @@
 import { useMemo, useState } from 'react'
-import { brainColor, buildDefinitionIndex, populationSummaryAt, residentStateAt } from '../population'
+import { brainColor, buildDefinitionIndex, populationSummaryAt, residentStateAt, residentViewAt } from '../population'
 import { useStore } from '../store'
 import type { MobilityMode, PopulationMetrics, ResidentRole, RunStatus } from '../types'
 import { fmt } from '../util'
-import ResidentInspector from '../components/ResidentInspector'
 
 export function PopulationMetricsPanel({ metrics, status }: { metrics: PopulationMetrics; status?: RunStatus }) {
   const final = status === 'completed'
@@ -65,14 +64,15 @@ export default function PopulationLens() {
     </div>
     <input aria-label="Find a resident" placeholder="Find a resident or persona" value={query} onChange={(e) => setQuery(e.target.value)} />
     <div className="list population-list" aria-label="Population residents">
-      {rows.map(({ profile, state }) => <button className={`listitem ${selection?.kind === 'resident' && selection.id === profile.resident_id ? 'on' : ''}`} key={profile.resident_id} onClick={() => select({ kind: 'resident', id: profile.resident_id })}>
+      {rows.map(({ profile, state }) => <button className={`listitem ${selection?.kind === 'resident' && selection.id === profile.resident_id ? 'on' : ''}`} aria-pressed={selection?.kind === 'resident' && selection.id === profile.resident_id} key={profile.resident_id} onClick={() => select({ kind: 'resident', id: profile.resident_id })}>
         <span><i className="brain-dot" style={{ background: `rgb(${brainColor(assignments[profile.resident_id]).join(',')})` }} />{profile.name}</span>
         <span className="dim">{profile.resident_id} · {state?.role.replaceAll('_', ' ') ?? profile.roles.join(', ')} · {state?.activity ?? 'state unavailable'} / {state?.mobility_mode ?? '—'}</span>
+        <span className="resident-roster-summary">{population ? residentViewAt(population, profile.resident_id, time)?.decision?.summary ?? 'No recorded decision yet' : 'Recorded state unavailable'}</span>
       </button>)}
       {!rows.length && <div className="small dim">No residents match these filters.</div>}
     </div>
     <div className="small dim">{rows.length} of {profiles.length} residents. All remain selectable here, including co-located residents and those with no current movement sample.</div>
-    {population && selection?.kind === 'resident' ? <ResidentInspector population={population} residentId={selection.id} t={time} onSelect={id => select({ kind: 'resident', id })} onClose={() => select(null)} /> : <div className="small dim">Select a resident for persona, tasks, memories, recorded decisions, and actual framework provenance.</div>}
+    <div className="small dim">Click a person or vehicle on the map, or choose a resident here, to open their decisions, plans, memories, and messages beside the city.</div>
     {population?.artifact && <PopulationMetricsPanel metrics={population.artifact.metrics} status={rx?.bundle.run.status} />}
     {(population?.definition.assumptions ?? definition?.assumptions ?? []).length > 0 && <details className="small"><summary>Declared synthetic assumptions</summary>{(population?.definition.assumptions ?? definition?.assumptions ?? []).map((assumption, i) => <div key={i}>{assumption}</div>)}</details>}
   </div>

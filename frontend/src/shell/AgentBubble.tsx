@@ -8,6 +8,15 @@ import { cameraTo, leadMap } from '../world/registry'
 import { agentPose, buildingPose, corridorPose, currentPose } from '../world/camera'
 import { DeleteButton } from './DeleteButton'
 import LivePreviewCard from './LivePreviewCard'
+import PopulationBubble from './PopulationBubble'
+
+/** Select the active data source before rendering any live-session metadata. */
+export default function AgentBubble() {
+  const populationActive = useStore(s => s.populationActive)
+  const selection = useStore(s => s.selection)
+  if (populationActive && selection && ['resident', 'person', 'car', 'bus', 'bicycle', 'delivery', 'truck', 'stop', 'restriction', 'development'].includes(selection.kind)) return <PopulationBubble />
+  return <LiveAgentBubble />
+}
 
 /** A closure card clicked near the top of the screen opens below its anchor instead of above it. */
 const FLIP_PX = 300
@@ -22,7 +31,7 @@ const STATE_CLASS = ['not_departed', 'walking', 'waiting', 'riding', 'driving', 
  * building or a development.  Anchored to the lead map's screen projection of the thing: a moving entity is followed
  * frame by frame, the rest sit still.  Closures reopen and developments demolish from here, as live commands.
  */
-export default function AgentBubble() {
+function LiveAgentBubble() {
   const selection = useStore((s) => s.selection)
   const select = useStore((s) => s.select)
   const setTool = useStore((s) => s.setTool)

@@ -8,6 +8,17 @@ import { shouldPollRuns } from './populationLifecycle'
 import type { CityPack, RunStatus, ScenarioSpec } from './types'
 
 const initial = useStore.getState()
+
+it('keeps live selections independent of a cached resident recording after returning to the street', () => {
+  useStore.setState({ populationActive: false, primaryRunId: 'pop-run', replays: { 'pop-run': buildIndex(bundle()) }, tool: null })
+  clock.seek(10)
+  useStore.getState().select({ kind: 'bicycle', id: 'bike-body' })
+  expect(useStore.getState().selection).toEqual({ kind: 'bicycle', id: 'bike-body' })
+  useStore.setState({ populationActive: true })
+  useStore.getState().select({ kind: 'bicycle', id: 'bike-body' })
+  expect(useStore.getState().selection).toEqual({ kind: 'resident', id: 'r1' })
+  expect(useStore.getState().tool).toBeNull()
+})
 const pack: CityPack = { pack_id: 'toronto', name: 'Toronto', version: '1', bbox: [-80, 43, -79, 44], center: [-79.38, 43.64], venue_edge_id: 'venue', venue_lonlat: [-79.38, 43.64], stops: [], zones: [], limitations: [], real_data: true, network_fingerprint: 'net' }
 const scenario = (population = true): ScenarioSpec => ({ scenario_id: 'scenario', pack_id: 'toronto', demand_id: 'demand', ...(population ? { scenario_kind: 'population', population_id: 'population' } as const : {}),
   evidence_bundle_id: null, evidence_hash: null, restrictions: [], hazards: [], constraints: { fleet: [], horizon_s: 3600, service_window_s: [0, 3600], allowed_stop_ids: [], objective: 'completion_by_horizon', hard_max_fleet: 0 },

@@ -148,10 +148,10 @@ export const useStore = create<State>((set, get, store) => ({
   select: (selection) => {
     const state = get()
     const rx = state.primaryRunId ? state.replays[state.primaryRunId] : null
-    if (rx && selection && ['bus', 'car', 'person', 'bicycle', 'delivery', 'truck'].includes(selection.kind)) {
+    if (state.populationActive && rx && selection && ['bus', 'car', 'person', 'bicycle', 'delivery', 'truck'].includes(selection.kind)) {
       selection = selectionForEntity(rx, selection.id, selection.kind as 'bus' | 'car' | 'person' | 'bicycle' | 'delivery' | 'truck', clock.t)
     }
-    set({ selection, ...(selection?.kind === 'resident' ? { tool: 'residents' as const } : {}), ...(selection?.kind === 'development' ? EMPTY_DEVELOPMENT : {}) })
+    set({ selection, ...(selection?.kind === 'development' ? EMPTY_DEVELOPMENT : {}) })
   },
   setError: (error) => set({ error }),
   // Picking a different tool ends an Area select pick (closing the panel does not: the pick runs with it closed),

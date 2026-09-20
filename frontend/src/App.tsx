@@ -9,6 +9,7 @@ import ToolRail from './shell/ToolRail'
 import ToolPanel from './shell/ToolPanel'
 import AgentBubble from './shell/AgentBubble'
 import PopulationDock from './shell/PopulationDock'
+import ResidentDetails from './shell/ResidentDetails'
 import './App.css'
 
 const WorldBabylon = lazy(() => import('./babylon/WorldBabylon'))
@@ -47,6 +48,7 @@ export default function App({ active = true, onGlobe, onWorldReady, onWorldError
       <ToolRail active={active} />
       <ToolPanel />
       <AgentBubble />
+      <ResidentDetails />
 
       <div className="bottom">
         {populationActive ? <PopulationDock active={active} /> : <SimDock active={active} />}
@@ -62,9 +64,9 @@ export default function App({ active = true, onGlobe, onWorldReady, onWorldError
         </div>
       )}
 
-      {(error ?? liveError) && (
+      {(error ?? (populationActive ? null : liveError)) && (
         <div className="error" onClick={() => setError(null)}>
-          {error ?? liveError}
+          {error ?? (populationActive ? null : liveError)}
         </div>
       )}
     </div>

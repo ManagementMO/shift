@@ -3,12 +3,14 @@ import { brainColor, residentViewAt, type PopulationIndex } from '../population'
 import type { SocietyTask, SwarmBinding } from '../types'
 import { fmt } from '../util'
 
-export default function ResidentInspector({ population, residentId, t, onSelect, onClose }: {
+export default function ResidentInspector({ population, residentId, t, onSelect, onClose, onFrame, onFollow }: {
   population: PopulationIndex
   residentId: string
   t: number
   onSelect: (id: string) => void
   onClose: () => void
+  onFrame?: () => void
+  onFollow?: () => void
 }) {
   const [taskId, setTaskId] = useState<string | null>(null)
   const view = residentViewAt(population, residentId, t)
@@ -42,7 +44,7 @@ export default function ResidentInspector({ population, residentId, t, onSelect,
     <div className="inspector resident-inspector small">
       <div className="row between">
         <h2><i className="brain-dot" style={{ background: color }} />{profile.name}</h2>
-        <button className="tiny" onClick={onClose}>Close</button>
+        <div className="row">{onFollow && <button className="tiny" onClick={onFollow}>Follow</button>}{onFrame && <button className="tiny" onClick={onFrame}>Frame</button>}<button className="tiny" onClick={onClose}>Close</button></div>
       </div>
       <div className="dim">{profile.resident_id} · synthetic resident · {population.artifact ? `recorded at +${fmt(t)}` : 'initial definition, not executed'}</div>
       <p>{profile.persona}</p>
@@ -54,6 +56,36 @@ export default function ResidentInspector({ population, residentId, t, onSelect,
             : binding?.measured ? `Measured mobility binding: ${binding.entity_id}` : 'No measured or abstract presence binding at this time.'}
       </div>
       {state?.destination_id && <div>intended destination: {population.anchors[state.destination_id]?.name ?? state.destination_id}</div>}
+      <section className="resident-decision" aria-label="Latest recorded decision">
+        <h2>{decision?.source === 'jiuwenswarm' ? 'Recorded generated summary' : 'Recorded decision summary'}</h2>
+        <p className="resident-summary">{decision?.summary || 'No decision summary recorded by this time.'}</p>
+        <div className="dim">Recorded summaries and simulated beliefs are not hidden model reasoning. Inspection does not call a model.</div>
+        <h2>Actual latest decision</h2>
+        <div>source: <b>{provenance.source === 'none' ? 'none recorded yet' : provenance.source}</b> · actual model: <b>{provenance.actualModel ?? 'none recorded'}</b></div>
+        {decision && <div className="dim">decision +{fmt(decision.t)} · epoch {decision.epoch}</div>}
+        {provenance.fallbackReason && <div className="warn">Fallback: {provenance.fallbackReason}</div>}
+        {state?.fallback_reason && state.fallback_reason !== provenance.fallbackReason && <div className="warn">State fallback: {state.fallback_reason}</div>}
+        <h2>Proposal</h2>
+        {decision?.proposal ? <div>{decision.proposal.action} {decision.proposal.target_id ?? ''}{decision.proposal.travel_class ? ` via ${decision.proposal.travel_class}` : ''} · effective +{fmt(decision.proposal.effective_t)}<div className="dim">{decision.proposal.text}</div></div> : <div className="dim">No proposal recorded.</div>}
+        <h2>Authority acceptance</h2>
+        <div>{decision ? decision.accepted ? 'Accepted action' : 'Not accepted' : 'No validation recorded'}{decision?.reason ? ` · ${decision.reason}` : ''}</div>
+        {decision?.plan.length ? <details><summary>Plan proposed with this decision</summary>{decision.plan.map((step, i) => <div key={i}>{step}</div>)}</details> : null}
+        {decision?.beliefs.length ? <details><summary>Beliefs recorded with this decision</summary>{decision.beliefs.map((belief, i) => <div key={i}>{belief}</div>)}</details> : null}
+        {view.events.some((event) => event.status === 'committed') && <details>
+          <summary>Committed world transitions by selected time</summary>
+          {view.events.filter((event) => event.status === 'committed').map((event) => <div className="population-record" key={event.event_id}>+{fmt(event.t)} · {event.text}<div className="dim">authority committed · cause {event.cause_id ?? 'not recorded'}</div></div>)}
+        </details>}
+        <h2>Observed outcomes by selected time</h2>
+        {view.outcomes.length > 0 && <details><summary>{view.outcomes.length} recorded outcomes · latest +{fmt(view.outcomes.at(-1)!.t)}</summary>{view.outcomes.map((event) => <div className="population-record" key={event.event_id}>+{fmt(event.t)} · {event.text}<div className="dim">observed · cause {event.cause_id ?? 'not recorded'}</div></div>)}</details>}
+        {view.outcomes.length === 0 && <div className="dim">No observed outcome recorded yet. Acceptance alone is not completion.</div>}
+      </section>
+      <section>
+        <h2>Current recorded plan</h2>
+        {(state?.plan ?? []).length ? <ol>{state!.plan.map((step, i) => <li key={i}>{step}</li>)}</ol> : <div className="dim">No current plan recorded.</div>}
+        <h2>Beliefs, not authoritative facts</h2>
+        {(state?.beliefs ?? []).map((belief, i) => <div key={i}>{belief}</div>)}
+        {!state?.beliefs.length && <div className="dim">No beliefs recorded in this state.</div>}
+      </section>
       <details>
         <summary>Preferences and responsibilities</summary>
         {Object.entries(profile.preferences).map(([key, value]) => <div key={key}>{key}: {value}</div>)}
@@ -72,61 +104,32 @@ export default function ResidentInspector({ population, residentId, t, onSelect,
         </div>
         {state?.current_task_id && !state.commitments.includes(state.current_task_id) && <button className="tiny" onClick={() => setTaskId(state.current_task_id)}>current task: {state.current_task_id}</button>}
       </section>
-      <section>
-        <h2>Relevant task ledger · 32 most recent</h2>
+      <details open={taskId !== null}>
+        <summary>Relevant task ledger · 32 most recent</summary>
         {taskId && <button className="tiny" onClick={() => setTaskId(null)}>All relevant tasks</button>}
         {tasks.map(taskCard)}
         {tasks.length === 0 && <div className="dim">No matching task recorded by this time.</div>}
-      </section>
-      <section>
-        <h2>Current recorded plan</h2>
-        {(state?.plan ?? []).length ? <ol>{state!.plan.map((step, i) => <li key={i}>{step}</li>)}</ol> : <div className="dim">No current plan recorded.</div>}
-        <h2>Beliefs, not authoritative facts</h2>
-        {(state?.beliefs ?? []).map((belief, i) => <div key={i}>{belief}</div>)}
-        {!state?.beliefs.length && <div className="dim">No beliefs recorded in this state.</div>}
-      </section>
-      <section>
-        <h2>Contacts and relationships</h2>
+      </details>
+      <details>
+        <summary>Contacts and relationships</summary>
         <div className="wrap">{profile.contacts.map((id) => <span key={id}>{contact(id)}{state?.relationships[id] !== undefined && ` ${state.relationships[id].toFixed(2)}`}</span>)}</div>
         {Object.keys(state?.relationships ?? {}).filter((id) => !profile.contacts.includes(id)).map((id) => <div key={id}>{contact(id)} · {state!.relationships[id].toFixed(2)}</div>)}
-      </section>
-      <section>
-        <h2>Assigned brain</h2>
+      </details>
+      <details>
+        <summary>Assigned brain</summary>
         <div><i className="brain-dot" style={{ background: color }} />{provenance.assignedFamily ?? 'unassigned'} · {provenance.assignedModel ?? '—'}</div>
         <div className="dim">API provider {provenance.apiProvider ?? '—'} · control {provenance.controlMode ?? '—'}</div>
-        <h2>Actual latest decision</h2>
-        <div>source: <b>{provenance.source === 'none' ? 'none recorded yet' : provenance.source}</b> · actual model: <b>{provenance.actualModel ?? 'none recorded'}</b></div>
-        {decision && <div>decision +{fmt(decision.t)} · epoch {decision.epoch}</div>}
-        {provenance.fallbackReason && <div className="warn">Fallback: {provenance.fallbackReason}</div>}
-        {state?.fallback_reason && state.fallback_reason !== provenance.fallbackReason && <div className="warn">State fallback: {state.fallback_reason}</div>}
-        <div className="dim">Replay only. Recorded summaries and simulated beliefs are not hidden model reasoning. Inspection does not call a model.</div>
-      </section>
-      <section>
-        <h2>{decision?.source === 'jiuwenswarm' ? 'Recorded generated summary' : 'Recorded decision summary'}</h2>
-        <div>{decision?.summary || 'No decision summary recorded by this time.'}</div>
-        <h2>Proposal</h2>
-        {decision?.proposal ? <div>{decision.proposal.action} {decision.proposal.target_id ?? ''}{decision.proposal.travel_class ? ` via ${decision.proposal.travel_class}` : ''} · effective +{fmt(decision.proposal.effective_t)}<div className="dim">{decision.proposal.text}</div></div> : <div className="dim">No proposal recorded.</div>}
-        <h2>Authority acceptance</h2>
-        <div>{decision ? decision.accepted ? 'Accepted action' : 'Not accepted' : 'No validation recorded'}{decision?.reason ? ` · ${decision.reason}` : ''}</div>
-        {decision?.plan.length ? <details><summary>Plan proposed with this decision</summary>{decision.plan.map((step, i) => <div key={i}>{step}</div>)}</details> : null}
-        {decision?.beliefs.length ? <details><summary>Beliefs recorded with this decision</summary>{decision.beliefs.map((belief, i) => <div key={i}>{belief}</div>)}</details> : null}
-        {view.events.some((event) => event.status === 'committed') && <>
-          <h2>Committed world transitions by selected time</h2>
-          {view.events.filter((event) => event.status === 'committed').map((event) => <div className="population-record" key={event.event_id}>+{fmt(event.t)} · {event.text}<div className="dim">authority committed · cause {event.cause_id ?? 'not recorded'}</div></div>)}
-        </>}
-        <h2>Observed outcomes by selected time</h2>
-        {view.outcomes.map((event) => <div className="population-record" key={event.event_id}>+{fmt(event.t)} · {event.text}<div className="dim">observed · cause {event.cause_id ?? 'not recorded'}</div></div>)}
-        {view.outcomes.length === 0 && <div className="dim">No observed outcome recorded yet. Acceptance alone is not completion.</div>}
-      </section>
+        <div className="dim">Assigned family controls the identity color. It does not establish which model executed this turn.</div>
+      </details>
       <details>
         <summary>Decision history ({view.decisions.length} recent)</summary>
         {[...view.decisions].reverse().map((d) => <div className="population-record" key={d.decision_id}>+{fmt(d.t)} · {d.source} · {d.actual_model_id ?? 'no actual model'}<div>{d.summary}</div><div>{d.proposal?.action ?? 'no proposal'} · {d.accepted ? 'accepted' : 'not accepted'} · {d.reason}</div>{d.fallback_reason && <div className="warn">{d.fallback_reason}</div>}</div>)}
       </details>
-      <details open>
+      <details>
         <summary>Observations and memories ({state?.memories.length ?? 0})</summary>
         {[...(state?.memories ?? [])].reverse().map((memory) => <div className="population-record" key={`${memory.event_id}-${memory.kind}`}>+{fmt(memory.t)} · <b>{memory.kind === 'belief' ? 'belief, not fact' : memory.kind}</b><div>{memory.text}</div><div className="wrap">{memory.related_residents.map(contact)}</div></div>)}
       </details>
-      <details open>
+      <details>
         <summary>Recorded messages</summary>
         {view.receivedMessages.map((message) => <div className="population-record" key={`received-${message.message_id}`}>received +{fmt(message.delivered_s!)} from {contact(message.sender_id)}<div>{message.text}</div></div>)}
         {view.sentMessages.map((message) => <div className="population-record" key={`sent-${message.message_id}`}>sent +{fmt(message.sent_s)} to {contact(message.recipient_id)}<div>{message.text}</div><div className="dim">{message.delivered_s === null ? 'not delivered by selected time' : `delivered +${fmt(message.delivered_s)}`}</div></div>)}
