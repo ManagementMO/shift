@@ -31,6 +31,48 @@ describe('Mapbox zoom ↔ orbit radius', () => {
   })
 })
 
+describe('Ground picking', () => {
+  it.each(['isometric', 'perspective'] as const)('inverts the screen projection of ground points under the %s camera', (projection) => {
+    const engine = new NullEngine({ renderWidth: 1440, renderHeight: 900, textureSize: 512, deterministicLockstep: false, lockstepMaxSteps: 4 })
+    const scene = new Scene(engine)
+    const world = { landmarks: [], crs: { bounds_world: [-3200, -2450, 3200, 2450] } } as unknown as WorldData
+    const cam = new ArcRotateCamera('cam', 0, 1, 1000, Vector3.Zero(), scene)
+    const camera = new WorldCamera(cam, world)
+    camera.setProjection(projection)
+    camera.apply({ target: [380, -520], radius: 1250, heading: -28, elevation: 43 })
+    scene.setTransformMatrix(cam.getViewMatrix(true), cam.getProjectionMatrix(true))
+    const map = new BabylonSyncMap({ engine, scene, camera } as unknown as WorldScene)
+    for (const [x, z] of [[380, -520], [-100, -200], [800, -900], [700, 0]]) {
+      const p = map.projectWorld(x, 0, z)
+      expect(p.x).toBeGreaterThan(0)
+      expect(p.x).toBeLessThan(1440)
+      const g = map.unprojectGround(p.x, p.y)!
+      // float32 matrices: a few centimetres over a kilometre is the expected precision
+      expect(g[0]).toBeCloseTo(x, 0)
+      expect(g[1]).toBeCloseTo(z, 0)
+    }
+    const mpp = map.metresPerPixel(720, 450)
+    expect(mpp).toBeGreaterThan(0.5)
+    expect(mpp).toBeLessThan(4)
+    map.dispose(); scene.dispose(); engine.dispose()
+  })
+
+  it('reports no ground under a perspective ray that looks above the horizon', () => {
+    const engine = new NullEngine({ renderWidth: 1000, renderHeight: 1000, textureSize: 512, deterministicLockstep: false, lockstepMaxSteps: 4 })
+    const scene = new Scene(engine)
+    const world = { landmarks: [], crs: { bounds_world: [-3200, -2450, 3200, 2450] } } as unknown as WorldData
+    const cam = new ArcRotateCamera('cam', 0, 1, 1000, Vector3.Zero(), scene)
+    const camera = new WorldCamera(cam, world)
+    camera.setProjection('perspective')
+    camera.apply({ target: [0, 0], radius: 300, heading: 0, elevation: 10 })
+    scene.setTransformMatrix(cam.getViewMatrix(true), cam.getProjectionMatrix(true))
+    const map = new BabylonSyncMap({ engine, scene, camera } as unknown as WorldScene)
+    expect(map.unprojectGround(500, 0)).toBeNull()
+    expect(map.unprojectGround(500, 999)).not.toBeNull()
+    map.dispose(); scene.dispose(); engine.dispose()
+  })
+})
+
 describe('Native comparison camera synchronization', () => {
   it('preserves height and projection without drifting or emitting follower movement', () => {
     const engine = new NullEngine(), scene = new Scene(engine)

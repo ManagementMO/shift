@@ -254,7 +254,7 @@ describe('development preview lifecycle', () => {
     vi.spyOn(api, 'plans').mockResolvedValue([])
     vi.spyOn(api, 'runs').mockResolvedValue([])
     vi.spyOn(api, 'demand').mockResolvedValue(fixtureBundle(fixtureScenario(), [fixtureTraveler()]).demand!)
-    useStore.getState().select({ kind: 'building', id: 'w123', label: 'City building', category: 'office', height_m: 40, position: [-79.38, 43.65] })
+    useStore.getState().select({ kind: 'building', id: 'w123' })
     const demolished = { ...fixtureScenario(), demolished: ['w123'], change_set: ['demolish building w123'] }
     vi.spyOn(api, 'demolishBuilding').mockResolvedValueOnce(demolished).mockRejectedValueOnce(new Error('422 building id must be 1-80 characters'))
     expect(await useStore.getState().demolishBuilding('w123')).toBe(true)

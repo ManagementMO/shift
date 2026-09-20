@@ -3,7 +3,7 @@ import { BUILDING_KIND_ORDER, BUILDING_KINDS, DEVELOPMENT_USES, developmentCount
 import { useStore } from '../store'
 import type { BuildingKind, Development, DevelopmentSpec } from '../types'
 import { fmt } from '../util'
-import { DeleteButton } from '../world/BuildingCard'
+import { DeleteButton } from './DeleteButton'
 import { currentPose, developmentPose } from '../world/camera'
 import { clock } from '../world/playback'
 import { cameraTo, leadMap } from '../world/registry'

@@ -22,7 +22,7 @@ export default function DevelopmentMarkers({ side }: { runId: string | null; sid
       for (const row of rows) {
         const node = refs.current.get(row.id)
         if (!node) continue
-        const p = map?.projectElevated?.(row.spec.position, row.spec.height_m + 5) ?? map?.project(row.spec.position)
+        const p = map?.projectAt?.(row.spec.position, row.spec.height_m + 5) ?? map?.project(row.spec.position)
         node.style.visibility = p && Number.isFinite(p.x) && Number.isFinite(p.y) ? 'visible' : 'hidden'
         if (p) node.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px) translate(-50%, -100%)`
       }

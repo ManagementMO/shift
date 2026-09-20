@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { useStore, type ToolId } from '../store'
-import type { Corridor, ServicePlan } from '../types'
+import type { ServicePlan } from '../types'
 import { fmt } from '../util'
+import { AREAS, startPick } from '../world/areaSelect'
+import { leadMap } from '../world/registry'
 import { ghostFromProposal } from './ghost'
 import ProposalCard from './ProposalCard'
 import DevelopmentTool from './DevelopmentTool'
 
 const TITLES: Record<ToolId, string> = {
+  area: 'Area select',
   closure: 'Close or reopen a street',
   route: 'Add a bus route',
   stop: 'Bus stops',
@@ -31,6 +34,7 @@ export default function ToolPanel() {
           ✕
         </button>
       </div>
+      {tool === 'area' && <AreaTool />}
       {tool === 'closure' && <ClosureTool />}
       {tool === 'weather' && <HazardTool />}
       {tool === 'route' && <RouteTool />}
@@ -41,6 +45,49 @@ export default function ToolPanel() {
       {(tool === 'road' || tool === 'intersection') && <StructuralTool kind={tool} />}
       <ProposalCard />
     </aside>
+  )
+}
+
+/**
+ * District / Corridor pickers.  Choosing one closes this panel, frames every candidate and opens the pick: the
+ * cursor turns to a crosshair, the city outlines the regions and tints the one under the pointer, and a click
+ * flies in and closes the pick.  Escape, choosing the active picker again, or another tool ends it where the
+ * camera is.
+ */
+function AreaTool() {
+  const picking = useStore((s) => s.picking)
+  const cameraMode = useStore((s) => s.cameraMode)
+  const setPicking = useStore((s) => s.setPicking)
+  const pack = useStore((s) => s.pack)
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    const update = () => {
+      const lead = leadMap()
+      setReady(Boolean(lead && (!lead.cameraLocked || lead.setCameraPreset)))
+    }
+    update()
+    const id = setInterval(update, 500)
+    return () => clearInterval(id)
+  }, [pack])
+  const open = picking ? AREAS.find((a) => a.id === cameraMode) ?? null : null
+  return (
+    <div className="tool">
+      <div className="small dim">Zoom to a part of the city by pointing at it.</div>
+      <div className="list">
+        {AREAS.map((a) => {
+          const on = open?.id === a.id
+          return (
+            <button key={a.id} className={`listitem ${on ? 'on' : ''}`} aria-pressed={on} disabled={!ready || !pack} onClick={() => (on ? setPicking(false) : startPick(a.id))} title={`${a.label} (${a.key})`}>
+              <span>
+                {a.label} <span className="dim">· {a.key}</span>
+              </span>
+              <span className="dim">{a.hint}</span>
+            </button>
+          )
+        })}
+      </div>
+      <div className="small dim">{open ? `Choosing a ${open.label.toLowerCase()} — point at one on the map and click to zoom, Esc to stop.` : 'Districts are the pack’s destination zones and the venue; corridors are its named streets.'}</div>
+    </div>
   )
 }
 
@@ -80,25 +127,16 @@ function WindowPicker({ start, end, setStart, setEnd, horizon }: { start: number
 }
 
 function ClosureTool() {
-  const pack = useStore((s) => s.pack)
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
   const setGhost = useStore((s) => s.setGhost)
-  const [corridors, setCorridors] = useState<Record<string, Corridor>>({})
-  const [key, setKey] = useState<string>('')
+  const corridors = useStore((s) => s.corridors)
+  const [picked, setKey] = useState<string | null>(null)
+  const key = picked && corridors[picked] ? picked : Object.keys(corridors).find((k) => !corridors[k].flagship_closure) ?? Object.keys(corridors)[0] ?? ''
   const [mode, setMode] = useState<'close' | 'reopen'>('close')
   const horizon = scenario?.constraints.horizon_s ?? 2700
   const [start, setStart] = useState(0)
   const [end, setEnd] = useState(horizon)
   const { preview, busy } = usePreview()
-
-  useEffect(() => {
-    if (!pack) return
-    void api.corridors(pack.pack_id).then((c) => {
-      setCorridors(c)
-      const first = Object.keys(c).find((k) => !c[k].flagship_closure) ?? Object.keys(c)[0] ?? ''
-      setKey(first)
-    })
-  }, [pack])
 
   // Placement preview: hovering/selecting a corridor ghosts it on the world before any agent call.
   useEffect(() => {
