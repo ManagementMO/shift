@@ -91,14 +91,17 @@ try {
     await expect(page.locator('.scenario-drawer')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Compare', exact: true })).toHaveCount(0)
     await page.locator('.scenario-drawer').getByRole('button', { name: 'Close', exact: true }).click()
-    // Only the District / Corridor pickers remain as camera modes; everything else is clicked directly on the map.
-    const cameras = page.getByRole('navigation', { name: 'Camera', exact: true })
-    await expect(cameras).toBeVisible()
-    await expect(cameras.getByRole('button')).toHaveText(['District', 'Corridor'])
+    // No camera-mode panel: the District / Corridor pickers live in the left rail's Area select tool.
+    await expect(page.getByRole('navigation', { name: 'Camera', exact: true })).toHaveCount(0)
+    const areaSelect = page.getByRole('navigation', { name: 'Interventions', exact: true }).getByRole('button', { name: 'Area select', exact: true })
+    await expect(areaSelect).toBeVisible()
+    const picker = (name) => page.locator('.toolpanel .listitem', { hasText: name })
     if (path === '/mapbox' && await page.locator('.map-notice').isVisible()) {
       await expect(page.locator('.map-notice')).toContainText('Connect Mapbox to load the 3D city')
       await expect(page.locator('.world canvas')).toHaveCount(0)
-      for (const name of ['District', 'Corridor']) await expect(cameras.getByRole('button', { name, exact: true })).toBeDisabled()
+      await areaSelect.click()
+      for (const name of ['District', 'Corridor']) await expect(picker(name)).toBeDisabled()
+      await page.keyboard.press('Escape')
       assert.deepEqual(errors, [])
       console.log('/mapbox: playback, removed controls, and missing-token notice passed; configured map rendering requires a token')
       await page.close()
@@ -199,12 +202,14 @@ try {
     await page.keyboard.press('Escape')
     await expect.poll(() => page.evaluate(() => window.__cityshift.store.getState().selection)).toBeNull()
     if (path === '/world' && process.env.CAMERA_SCREENSHOT) await page.screenshot({ path: process.env.CAMERA_SCREENSHOT })
-    // A picker frames its candidates, stays open while the camera is moved by hand, and closes on Escape.
+    // Area select: a key opens the tool and its picker, which frames its candidates, ignores keys typed into
+    // fields, and closes on Escape while the panel stays.  Closing the panel ends a pick too.
     for (const [name, key] of [['District', '2'], ['Corridor', '3']]) {
-      const button = cameras.getByRole('button', { name, exact: true })
+      const button = picker(name)
       const before = await cameraPose()
       await page.evaluate(() => document.activeElement?.blur())
       await page.keyboard.press(key)
+      await expect(areaSelect).toHaveAttribute('aria-pressed', 'true')
       await expect(button).toHaveAttribute('aria-pressed', 'true')
       await waitForCamera()
       assert.notDeepEqual(await cameraPose(), before, `${name} did not frame its regions on ${path}`)
@@ -216,7 +221,13 @@ try {
       await page.evaluate(() => document.activeElement?.blur())
       await page.keyboard.press('Escape')
       await expect(button).toHaveAttribute('aria-pressed', 'false')
+      await expect(areaSelect).toHaveAttribute('aria-pressed', 'true')
     }
+    await picker('District').click()
+    await expect.poll(() => page.evaluate(() => window.__cityshift.store.getState().picking)).toBe(true)
+    await page.locator('.toolpanel').getByRole('button', { name: 'Close', exact: true }).click()
+    await expect.poll(() => page.evaluate(() => window.__cityshift.store.getState().picking)).toBe(false)
+    await waitForCamera()
     const beforeResize = await cameraPose()
     for (const width of [1440, 768, 390, 3440]) {
       await page.setViewportSize({ width, height: 900 })

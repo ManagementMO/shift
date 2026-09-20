@@ -7,7 +7,6 @@ import SimDock from './shell/SimDock'
 import ToolRail from './shell/ToolRail'
 import ToolPanel from './shell/ToolPanel'
 import AgentBubble from './shell/AgentBubble'
-import CameraModes from './shell/CameraModes'
 import SwarmLens from './shell/SwarmLens'
 import ScenarioDrawer from './shell/ScenarioDrawer'
 import './App.css'
@@ -56,9 +55,8 @@ export default function App({ renderer = 'babylon', active = true, onGlobe, onWo
       <TopStrip onOpenScenarios={() => setDrawer((d) => !d)} onGlobe={onGlobe} active={active} renderer={renderer} />
       {drawer && <ScenarioDrawer onClose={() => setDrawer(false)} />}
 
-      <ToolRail />
+      <ToolRail active={active} />
       <ToolPanel />
-      <CameraModes active={active} />
       <SwarmLens renderer={renderer} />
       <AgentBubble />
 

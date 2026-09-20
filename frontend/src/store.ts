@@ -27,7 +27,7 @@ export type Selection =
   | { kind: 'building'; id: string }
   | null
 
-export type ToolId = 'road' | 'intersection' | 'stop' | 'route' | 'population' | 'event' | 'closure' | 'weather'
+export type ToolId = 'area' | 'road' | 'intersection' | 'stop' | 'route' | 'population' | 'event' | 'closure' | 'weather'
 
 export type LensTab = 'people' | 'agents' | 'transport' | 'diagnostics'
 
@@ -68,7 +68,7 @@ type State = {
   developer: boolean
   /** Last camera framing asked for through `cameraTo`; 'agent' keeps the camera gliding after the selected entity. */
   cameraMode: CameraMode
-  /** District / Corridor mode is choosing a target: the city outlines regions and a click flies in, then this clears. */
+  /** Area select is choosing a district / corridor: the city outlines regions and a click flies in, then this clears. */
   picking: boolean
   building: string | null // "freeze → build → reload" banner text while a branch is compiled
 
@@ -260,7 +260,8 @@ export const useStore = create<State>((set, get) => ({
   select: (selection) => set({ selection }),
   setInvestigation: (investigation) => set({ investigation }),
   setError: (error) => set({ error }),
-  setTool: (tool) => set({ tool, ghost: tool ? get().ghost : null }),
+  // leaving Area select (another tool, or closing the panel) also ends any pick in progress
+  setTool: (tool) => set({ tool, ghost: tool ? get().ghost : null, picking: tool === 'area' && get().picking }),
   setGhost: (ghost) => set({ ghost }),
   setLens: (lens) => set({ lens }),
   setDeveloper: (developer) => set({ developer }),
