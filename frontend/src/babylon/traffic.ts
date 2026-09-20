@@ -26,9 +26,9 @@ export interface LiveTrafficSource {
   releasedAt(t: number): number
   forEachAt(t: number, visit: (index: number, x: number, z: number, heading: number, speed: number, kind: number, state: number, flags: number) => void): boolean
 }
-/** Prototype sets: vehicles, one pedestrian figure per pose, the far-LOD pin, release pulses, alert rings and the selection halo. */
+/** Prototype sets: vehicles, one pedestrian figure per pose, the far-LOD pin, release pulses, alert rings and the selection / hover halos. */
 type FigureSet = `person-${Pose}`
-type SetKind = 'bus' | 'car' | FigureSet | 'marker' | 'pulse' | 'halo' | 'alert'
+type SetKind = 'bus' | 'car' | FigureSet | 'marker' | 'pulse' | 'halo' | 'hover' | 'alert'
 const FIGURE_SETS = FIGURE_POSES.map((pose): FigureSet => `person-${pose}`)
 const ALERT_RING_COLOR: RGB = [1.0, 0.42, 0.14]
 
@@ -45,8 +45,13 @@ const CAR_PALETTE: RGB[] = [
 ]
 const BUS_RED: RGB = [0.8, 0.09, 0.16]
 const PULSE_COLOR: RGB = [1.0, 0.62, 0.2]
-const HALO_COLOR: RGB = [0.18, 0.77, 0.91]
+/** Orange, the colour the navigation overlay uses for hovered and clicked districts, corridors and stops. */
+const HALO_COLOR: RGB = [0.96, 0.54, 0.12]
+/** The hover ring is the same orange but thinner, so it reads as "can be opened" next to the selected halo. */
+const HOVER_COLOR: RGB = HALO_COLOR
 const HALO_RADIUS: Record<Kind, number> = { bus: 8.5, car: 3.6, person: 1.6 }
+/** Hover ring radius as a fraction of the orbit radius, so it stays a few pixels wide from the city camera. */
+const HOVER_MIN_RADIUS = 0.006
 /** Screen-space pick tolerance (CSS px). */
 export const PICK_PX = 22
 
@@ -60,14 +65,7 @@ function mix(a: RGB, b: RGB, k: number): RGB {
 
 /** Flat annulus on the ground, outer radius `r`, band width `w`. */
 function ring(b: Batch, r: number, w: number, y: number, c: RGB, segments = 24): void {
-  const outer: number[] = []
-  const inner: number[] = []
-  for (let i = 0; i < segments; i++) {
-    const a = (i / segments) * Math.PI * 2
-    outer.push(Math.cos(a) * r, Math.sin(a) * r)
-    inner.push(Math.cos(a) * (r - w), Math.sin(a) * (r - w))
-  }
-  b.polygon(outer, [inner], y, c)
+  b.annulus(0, 0, r, w, y, c, segments)
 }
 
 /** Local space: +z forward, +y up, origin on the ground at the body centre. */
@@ -247,6 +245,8 @@ export class Traffic {
   stats: TrafficStats = { ...EMPTY_STATS }
   /** Selected entity id: drawn at full detail with a ground halo; with `dimOthers`, everyone else fades. */
   selectedId: string | null = null
+  /** Entity under the pointer: outlined with a thin ring so it reads as something you can open. */
+  hoverId: string | null = null
   dimOthers = false
 
   private readonly pathY: number
@@ -275,9 +275,11 @@ export class Traffic {
       marker: new InstanceSet(scene, 'crowd-marker', buildMarker, null, null),
       pulse: new InstanceSet(scene, 'release-pulse', (b) => ring(b, 1, 0.12, 0.05, SKIN), null, null),
       halo: new InstanceSet(scene, 'selection-halo', (b) => ring(b, 1, 0.22, 0.05, SKIN), null, null),
+      hover: new InstanceSet(scene, 'hover-halo', (b) => ring(b, 1, 0.12, 0.05, SKIN), null, null),
       alert: new InstanceSet(scene, 'alert-ring', (b) => ring(b, 1, 0.3, 0.05, ALERT_RING_COLOR), null, null),
     }
     this.sets.halo.reserve(1)
+    this.sets.hover.reserve(1)
   }
 
   /** Draw travellers and vehicles this many times life-size. Positions never change, only the model size. */
@@ -296,7 +298,7 @@ export class Traffic {
   }
 
   private counters(): Record<SetKind, number> {
-    const n = { bus: 0, car: 0, marker: 0, pulse: 0, halo: 0, alert: 0 } as Record<SetKind, number>
+    const n = { bus: 0, car: 0, marker: 0, pulse: 0, halo: 0, hover: 0, alert: 0 } as Record<SetKind, number>
     for (const set of FIGURE_SETS) n[set] = 0
     return n
   }
@@ -327,11 +329,12 @@ export class Traffic {
       e.px = x; e.pz = z; e.py = kind === 'person' ? Y.path : Y.road
       e.yaw = heading * Math.PI / 180; e.seen = true; e.speed = speed; e.state = state; e.flags = flags
       const selected = e.id === this.selectedId
+      const hovered = e.id === this.hoverId
       let set: SetKind = kind === 'person' ? this.figureSet(e.id, speed, state, t) : kind
       let color = kind === 'person' ? stateColor(LIVE_STATES[state] ?? 'walking') : e.color
       if (kind === 'person') {
         people++
-        if (!selected && (view.radius >= 900 || lodFor(Math.hypot(x - view.x, view.y, z - view.z), view.radius) === 'marker')) set = 'marker'
+        if (!selected && !hovered && (view.radius >= 900 || lodFor(Math.hypot(x - view.x, view.y, z - view.z), view.radius) === 'marker')) set = 'marker'
       }
       const scale = set === 'marker' ? scales.marker : scales[kind]
       if (awareLevel(flags)) {
@@ -344,6 +347,7 @@ export class Traffic {
         }
       }
       if (selected) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, HALO_RADIUS[kind] * scale)
+      else if (hovered) this.sets.hover.set(n.hover++, x, Y.junction + 0.12, z, 0, HOVER_COLOR, Math.max(HALO_RADIUS[kind] * scale * 1.25, view.radius * HOVER_MIN_RADIUS))
       else if (this.dimOthers && this.selectedId) color = mix(color, PALETTE.pavement, 0.72)
       this.sets[set].reserve(n[set] + 1)
       this.sets[set].set(n[set]++, x, e.py, z, e.yaw, color, scale)
@@ -385,18 +389,6 @@ export class Traffic {
     return this.releases[i].t
   }
 
-  /** Mean position of the recorded release points (where SUMO put travellers as they left). */
-  releaseCentroid(): [number, number] | null {
-    if (!this.releases.length) return null
-    let x = 0
-    let z = 0
-    for (const r of this.releases) {
-      x += r.x
-      z += r.z
-    }
-    return [x / this.releases.length, z / this.releases.length]
-  }
-
   /** Place every entity for sim time `t`, choosing pedestrian detail from the viewpoint. */
   update(t: number, view: Viewpoint): void {
     if (this.live) { this.updateLive(t, view); return }
@@ -406,6 +398,7 @@ export class Traffic {
     const modes = rx.bundle.compile?.mode_assignment ?? {}
     const s = this.scratch
     const sel = this.selectedId
+    const hov = this.hoverId
     const dim = this.dimOthers && sel !== null
     const scales = this.scalesFor(view)
     let people = 0
@@ -442,14 +435,16 @@ export class Traffic {
       e.pz = z
       e.seen = true
       const isSel = e.id === sel
+      const isHov = e.id === hov && !isSel
       let set: SetKind = e.kind === 'person' ? this.figureSet(e.id, r.speed, personStateAt(rx.personEvents[e.id], t, modes[e.id]) === 'waiting' ? 2 : 1, t) : e.kind
       if (e.kind === 'person') {
         people++
         const d = Math.hypot(x - view.x, view.y, z - view.z)
-        if (!isSel && lodFor(d, view.radius) === 'marker') set = 'marker'
+        if (!isSel && !isHov && lodFor(d, view.radius) === 'marker') set = 'marker'
       }
       const scale = set === 'marker' ? scales.marker : scales[e.kind]
       if (isSel) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, HALO_RADIUS[e.kind] * scale)
+      else if (isHov) this.sets.hover.set(n.hover++, x, Y.junction + 0.12, z, 0, HOVER_COLOR, Math.max(HALO_RADIUS[e.kind] * scale * 1.25, view.radius * HOVER_MIN_RADIUS))
       else if (dim) color = mix(color, PALETTE.pavement, 0.72)
       this.sets[set].set(n[set]++, x, y, z, e.yaw, color, scale)
     }

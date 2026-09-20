@@ -26,7 +26,9 @@ import { WorldFrame } from './coords'
 import { renderScale, type DisplaySettings } from './display'
 import { fitShadowLight } from './shadows'
 import { buildCity, Y, type CityMeshes } from './city'
+import { BuildingIndex } from './buildingIndex'
 import { WorldCamera } from './camera'
+import { KeyboardPan } from './keyboardPan'
 import { RoadIndex } from './roadIndex'
 import { Traffic } from './traffic'
 import { buildSky } from './sky'
@@ -47,12 +49,16 @@ export class WorldScene {
   readonly scene: Scene
   readonly frame: WorldFrame
   readonly camera: WorldCamera
+  /** WASD ground travel; attached to the window unless the camera is fixed. */
+  readonly keys: KeyboardPan
   readonly sun: DirectionalLight
   readonly city: CityMeshes
   readonly shadows: ShadowGenerator | null
   readonly canvas: HTMLCanvasElement
   readonly world: WorldData
   readonly roads: RoadIndex
+  /** Every drawn building as pickable prisms, for pointer picking and info. */
+  readonly buildings: BuildingIndex
   readonly traffic: Traffic
   readonly fill: HemisphericLight
   readonly assetsReady: Promise<void>
@@ -128,7 +134,9 @@ export class WorldScene {
       cam.panningSensibility = 45
     })
     this.camera = new WorldCamera(cam, world, opts.fixedCamera ?? false)
+    this.keys = new KeyboardPan(this.camera, world.crs.bounds_world, scene)
     if (!this.camera.fixed) {
+      this.keys.attach(window)
       const cancelFlight = () => this.camera.cancel()
       canvas.addEventListener('pointerdown', cancelFlight)
       canvas.addEventListener('wheel', cancelFlight, { passive: true })
@@ -201,6 +209,7 @@ export class WorldScene {
 
     // --- replay traffic (created after the static materials are frozen: its own materials stay live)
     this.roads = new RoadIndex(world)
+    this.buildings = new BuildingIndex(world)
     this.traffic = new Traffic(scene, this.frame, balanced ? null : this.shadows, world.surfaces ? Y.road : Y.path)
     scene.onBeforeRenderObservable.add(() => {
       const p = this.camera.cam.globalPosition
@@ -221,7 +230,10 @@ export class WorldScene {
 
   setActive(active: boolean): void {
     this.active = active
-    if (!active) this.camera.cancel()
+    if (!active) {
+      this.camera.cancel()
+      this.keys.release()
+    }
   }
 
   setDisplay(settings: DisplaySettings): void {

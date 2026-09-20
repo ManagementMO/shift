@@ -3,9 +3,10 @@ import { api } from './api'
 import { buildIndex, type ReplayIndex } from './replay'
 import { clock } from './world/playback'
 import { cityPose, type CameraMode } from './world/camera'
-import { cameraTo } from './world/registry'
+import { cameraTo, watchCameraMode } from './world/registry'
 import type {
   CityPack,
+  Corridor,
   HazardTrack,
   Health,
   InterventionProposal,
@@ -23,9 +24,10 @@ export type Selection =
   | { kind: 'car'; id: string }
   | { kind: 'stop'; id: string }
   | { kind: 'restriction'; id: string }
+  | { kind: 'building'; id: string }
   | null
 
-export type ToolId = 'road' | 'intersection' | 'stop' | 'route' | 'population' | 'event' | 'closure' | 'weather'
+export type ToolId = 'area' | 'road' | 'intersection' | 'stop' | 'route' | 'population' | 'event' | 'closure' | 'weather'
 
 export type LensTab = 'people' | 'agents' | 'transport' | 'diagnostics'
 
@@ -42,6 +44,8 @@ type State = {
   packs: { pack_id: string; name: string }[]
   pack: CityPack | null
   roads: GeoJSON.FeatureCollection | null
+  /** Named streets of the pack (corridors.json): closure targets and the Corridor camera's pick regions. */
+  corridors: Record<string, Corridor>
   scenarios: ScenarioSpec[]
   scenarioId: string | null
   travelers: Record<string, Traveler>
@@ -62,7 +66,10 @@ type State = {
   ghost: Ghost | null
   lens: LensTab | null
   developer: boolean
+  /** Last camera framing asked for through `cameraTo`; 'agent' keeps the camera gliding after the selected entity. */
   cameraMode: CameraMode
+  /** Area select is choosing a district / corridor: the city outlines regions and a click flies in, then this clears. */
+  picking: boolean
   building: string | null // "freeze → build → reload" banner text while a branch is compiled
 
   boot: (packId?: string) => Promise<void>
@@ -81,17 +88,25 @@ type State = {
   setLens: (l: LensTab | null) => void
   setDeveloper: (d: boolean) => void
   setCameraMode: (m: CameraMode) => void
+  setPicking: (p: boolean) => void
   applyGhost: () => Promise<void>
 }
 
 let packSelectionRequest = 0
 let scenarioSelectionRequest = 0
 
+/** Everything the shell needs about a city pack; a pack without corridors.json is still a usable city. */
+async function loadPack(packId: string): Promise<{ pack: CityPack; roads: GeoJSON.FeatureCollection; corridors: Record<string, Corridor> }> {
+  const [pack, roads, corridors] = await Promise.all([api.pack(packId), api.roads(packId), api.corridors(packId).catch(() => ({}))])
+  return { pack, roads, corridors }
+}
+
 export const useStore = create<State>((set, get) => ({
   health: null,
   packs: [],
   pack: null,
   roads: null,
+  corridors: {},
   scenarios: [],
   scenarioId: null,
   travelers: {},
@@ -111,6 +126,7 @@ export const useStore = create<State>((set, get) => ({
   lens: null,
   developer: false,
   cameraMode: 'city',
+  picking: false,
   building: null,
 
   async boot(requestedPackId) {
@@ -124,9 +140,9 @@ export const useStore = create<State>((set, get) => ({
         ? scenarios.filter((s) => s.pack_id === requested.pack_id).at(-1)
         : scenarios.find((s) => s.pack_id === 'toronto') ?? scenarios.at(-1)
       const packId = requested?.pack_id ?? preferred?.pack_id ?? packs.find((p) => p.pack_id === 'toronto')?.pack_id ?? packs[0]?.pack_id ?? 'toronto'
-      const [pack, roads] = await Promise.all([api.pack(packId), api.roads(packId)])
+      const loaded = await loadPack(packId)
       if (request !== packSelectionRequest) return
-      set({ pack, roads })
+      set(loaded)
       if (preferred) await get().selectScenario(preferred.scenario_id)
     } catch (e) {
       if (request === packSelectionRequest) set({ error: String(e) })
@@ -137,15 +153,15 @@ export const useStore = create<State>((set, get) => ({
     const request = ++packSelectionRequest
     if (packId === get().pack?.pack_id) return
     try {
-      const [pack, roads] = await Promise.all([api.pack(packId), api.roads(packId)])
+      const loaded = await loadPack(packId)
       if (request !== packSelectionRequest) return
       clock.pause()
       clock.seek(0)
       set({
-        pack, roads, scenarioId: null, travelers: {}, plans: [], runs: [], primaryRunId: null,
-        loadingReplay: null, selection: null, ghost: null, investigation: null, tool: null, cameraMode: 'city', error: null,
+        ...loaded, scenarioId: null, travelers: {}, plans: [], runs: [], primaryRunId: null,
+        loadingReplay: null, selection: null, ghost: null, investigation: null, tool: null, cameraMode: 'city', picking: false, error: null,
       })
-      cameraTo(cityPose(pack.pack_id, pack.center), 'city')
+      cameraTo(cityPose(loaded.pack.pack_id, loaded.pack.center), 'city')
       const own = get().scenarios.filter((s) => s.pack_id === packId)
       if (own.length) await get().selectScenario(own[own.length - 1].scenario_id)
     } catch (e) {
@@ -157,10 +173,10 @@ export const useStore = create<State>((set, get) => ({
     const request = ++scenarioSelectionRequest
     const sc = get().scenarios.find((s) => s.scenario_id === sid)
     if (sc && sc.pack_id !== get().pack?.pack_id) {
-      const [pack, roads] = await Promise.all([api.pack(sc.pack_id), api.roads(sc.pack_id)])
+      const loaded = await loadPack(sc.pack_id)
       if (request !== scenarioSelectionRequest) return
-      set({ pack, roads })
-      cameraTo(cityPose(pack.pack_id, pack.center), 'city')
+      set(loaded)
+      cameraTo(cityPose(loaded.pack.pack_id, loaded.pack.center), 'city')
     }
     clock.pause()
     clock.seek(0)
@@ -244,11 +260,13 @@ export const useStore = create<State>((set, get) => ({
   select: (selection) => set({ selection }),
   setInvestigation: (investigation) => set({ investigation }),
   setError: (error) => set({ error }),
-  setTool: (tool) => set({ tool, ghost: tool ? get().ghost : null }),
+  // picking a different tool ends an Area select pick; closing the panel does not (the pick runs with it closed)
+  setTool: (tool) => set({ tool, ghost: tool ? get().ghost : null, picking: (tool === null || tool === 'area') && get().picking }),
   setGhost: (ghost) => set({ ghost }),
   setLens: (lens) => set({ lens }),
   setDeveloper: (developer) => set({ developer }),
   setCameraMode: (cameraMode) => set({ cameraMode }),
+  setPicking: (picking) => set({ picking }),
 
   /** Confirm a ghost: the backend applies the typed proposal to a NEW scenario id (parent stays immutable). */
   async applyGhost() {
@@ -269,3 +287,5 @@ export const useStore = create<State>((set, get) => ({
 }))
 
 clock.onUi((t) => useStore.setState({ t, playing: clock.playing, speed: clock.speed }))
+// Every explicit camera framing (Follow, Frame, city arrival) records its mode here.
+watchCameraMode((cameraMode) => useStore.setState({ cameraMode }))
