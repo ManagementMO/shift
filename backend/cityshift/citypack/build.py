@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -22,7 +23,7 @@ import sumolib
 
 from cityshift.contracts import CityPack, DestinationZone, StopCandidate
 
-PACK_ROOT = Path(__file__).resolve().parents[3] / "var" / "citypacks"
+PACK_ROOT = Path(os.environ.get("CITYSHIFT_PACK_ROOT") or Path(__file__).resolve().parents[3] / "var" / "citypacks").expanduser().resolve()
 
 
 def _fingerprint(path: Path) -> str:
