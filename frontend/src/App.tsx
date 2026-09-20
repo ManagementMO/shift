@@ -38,15 +38,14 @@ export default function App({ active = true, onGlobe, onWorldReady, onWorldError
   const working = populationBusy ?? (populationActive ? null : busy)
 
   return (
-    <div className="shell gp-shell">
+    <div className="shell gp-shell" data-population-active={populationActive || undefined}>
       <div className="worlds">
         <Suspense fallback={null}>
           <WorldBabylon side="solo" active={active} onWorldReady={ready} onWorldError={onWorldError} />
         </Suspense>
       </div>
-      <GodCityUI world={world} active={active} onHome={onGlobe ?? (() => { window.location.href = '/' })} />
+      <GodCityUI world={world} active={active} onHome={onGlobe ?? (() => { window.location.href = '/' })} recordingControls={populationActive ? <PopulationDock active={active} /> : undefined} />
       <ResidentDetails />
-      {populationActive && active && <div className="gp-population-dock"><PopulationDock active={active} /></div>}
       {working && active && <div className="gp-busy-cover"><GlassSurface><b>{working}</b><p>{populationBusy ? 'Preparing the declared population; model execution remains a separate action.' : 'SUMO is working on the running city.'}</p></GlassSurface></div>}
     </div>
   )

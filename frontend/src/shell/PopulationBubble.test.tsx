@@ -80,7 +80,7 @@ describe('population selection in the current city shell', () => {
   it('keeps recorded time scrubbing available outside the setup panel', () => {
     const html = renderToStaticMarkup(<PopulationDock />)
     expect(html).toContain('Resident history playhead')
-    expect(html).toContain('Recorded +00:12')
+    expect(html).toContain('aria-valuetext="00:12 of 01:00 recorded"')
     expect(html).toContain('max="60"')
   })
 })
