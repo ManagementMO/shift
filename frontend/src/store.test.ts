@@ -148,7 +148,7 @@ describe('population store boundaries', () => {
     expect(fetcher.mock.calls.some(([url]) => String(url).includes('/population'))).toBe(false)
   })
 
-  it('blocks native submission when JiuwenSwarm is unavailable or the scale gate has not been raised', async () => {
+  it('blocks native submission when JiuwenSwarm is unavailable or the configured resident limit is exceeded', async () => {
     const status = { ...populationStatus(), available: false, reason: 'Native JiuwenSwarm unavailable' }
     const fetcher = vi.fn(async () => Response.json(status))
     vi.stubGlobal('fetch', fetcher)
@@ -160,7 +160,7 @@ describe('population store boundaries', () => {
     fetcher.mockImplementation(async () => Response.json(populationStatus()))
     definition.spec.count = 240
     await useStore.getState().submitPopulationRun()
-    expect(useStore.getState().error).toMatch(/20 residents.*proof/)
+    expect(useStore.getState().error).toMatch(/100 residents.*runtime limit/)
     expect(fetcher).toHaveBeenCalledTimes(2)
     definition.spec.brains = [{ ...definition.spec.brains[0], control_mode: 'rules' }]
     await useStore.getState().submitPopulationRun()
@@ -311,7 +311,7 @@ describe('population store boundaries', () => {
     const large = lifecycleServer('paused')
     useStore.setState({ populationDefinition: { ...populationArtifact().definition, spec: { ...populationArtifact().definition.spec, count: 240 } } })
     await useStore.getState().resumePopulationRun('pop-run')
-    expect(useStore.getState().error).toMatch(/20 residents.*proof/)
+    expect(useStore.getState().error).toMatch(/100 residents.*runtime limit/)
     expect(large.fetcher.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
   })
 

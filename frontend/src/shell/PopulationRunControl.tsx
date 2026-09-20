@@ -1,4 +1,4 @@
-import { populationCostLimit, populationScaleReason, populationUnavailableReason } from '../populationControls'
+import { populationBudgetPolicy, populationCostLimit, populationScaleReason, populationUnavailableReason } from '../populationControls'
 import { useStore } from '../store'
 import { fmt } from '../util'
 
@@ -16,7 +16,7 @@ export default function PopulationRunControl() {
   return <div className="population-run small">
     <div>{definition.spec.count} residents · seed {definition.spec.seed} · horizon {fmt(definition.spec.horizon_s)} · cost cap ${definition.spec.budget.max_cost_usd.toFixed(2)}</div>
     <div className={reason ? 'warn' : 'dim'}>{reason ?? 'Native JiuwenSwarm is available. Status is not proof of a successful model run.'}</div>
-    {status && <div className="dim">Session remaining: ${populationCostLimit(status).toFixed(2)}; the persistent session ledger also limits this run.</div>}
+    {status && <div className="dim">Available inference funds: ${populationCostLimit(status).toFixed(2)}. {populationBudgetPolicy(status)}</div>}
     <button className="primary" onClick={() => void submit()} disabled={Boolean(reason) || busy || active}>
       {busy ? 'Submitting population run…' : active ? 'Population run in progress…' : 'Start new society run (uses models)'}
     </button>

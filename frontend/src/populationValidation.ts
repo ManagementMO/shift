@@ -160,7 +160,7 @@ export function parsePopulationArtifact(value: unknown): PopulationArtifact {
 export function parsePopulationStatus(value: unknown): PopulationStatus {
   shape({
     available: bool, reason: optionalText, models: list(brain),
-    budget: shape({ session_limit_microdollars: uint, accounted_microdollars: optional(uint), remaining_microdollars: optional(uint), request_count: optional(uint), blocked: bool }),
+    budget: shape({ session_limit_microdollars: nullable(uint), accounted_microdollars: optional(uint), remaining_microdollars: optional(uint), request_count: optional(uint), blocked: bool }),
     native_proof_required: optional(bool), initial_scale_gate: optional(positive),
     admission: optional(shape({ request_reservation_microdollars: dict(uint), max_output_tokens: positive })),
   })(value, 'population status')

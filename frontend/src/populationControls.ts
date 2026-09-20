@@ -14,17 +14,25 @@ export const DEFAULT_POPULATION_BUDGET: PopulationBudget = {
 
 export function populationCostLimit(status: PopulationStatus | null): number {
   if (!status || status.budget.blocked || status.budget.remaining_microdollars === undefined) return 0
-  return Math.max(0, Math.min(20, status.budget.session_limit_microdollars / 1_000_000, status.budget.remaining_microdollars / 1_000_000))
+  const remaining = status.budget.remaining_microdollars / 1_000_000
+  return Math.max(0, status.budget.session_limit_microdollars === null ? remaining : Math.min(status.budget.session_limit_microdollars / 1_000_000, remaining))
+}
+
+export function populationBudgetPolicy(status: PopulationStatus | null): string {
+  if (!status) return 'Waiting for the provider budget.'
+  return status.budget.session_limit_microdollars === null
+    ? 'No application session cap. Provider balance and key limits still apply, alongside the separate per-run cap.'
+    : `Application session cap: $${(status.budget.session_limit_microdollars / 1_000_000).toFixed(2)}. Provider limits and the separate per-run cap also apply.`
 }
 
 export function populationScaleReason(status: PopulationStatus | null, count: number): string | null {
-  return status?.initial_scale_gate !== undefined && count > status.initial_scale_gate
-    ? `Native execution is limited to ${status.initial_scale_gate} residents until the integration proof passes and the backend raises the scale gate. This definition can still be saved.`
+  return count > populationCountLimit(status)
+    ? `Native execution is limited to ${populationCountLimit(status)} residents by the configured runtime limit. Choose a smaller swarm or update the runtime configuration.`
     : null
 }
 
 export function populationCountLimit(status: PopulationStatus | null): number {
-  return Math.max(0, Math.min(300, status?.initial_scale_gate ?? 20))
+  return Math.max(0, Math.min(300, status?.initial_scale_gate ?? 100))
 }
 
 /** Start with one reviewed model so the default cap can admit the native context reservation. */
@@ -58,11 +66,11 @@ export function defaultPopulationSpec(status: PopulationStatus, options: { count
   if (unavailable) throw new Error(unavailable)
   const cost = options.maxCostUsd ?? 5
   if (!Number.isFinite(cost) || cost < 0) throw new Error('Population budget must be a finite non-negative amount.')
-  const count = options.count ?? Math.min(12, populationCountLimit(status))
+  const count = options.count ?? Math.min(100, populationCountLimit(status))
   const horizon = options.horizon ?? 600
   const seed = options.seed ?? 7
   if (!Number.isInteger(count) || count < 5 || count > 300) throw new Error('Population count must be 5–300.')
-  if (count > populationCountLimit(status)) throw new Error(`Choose at most ${populationCountLimit(status)} residents within the current native execution gate.`)
+  if (count > populationCountLimit(status)) throw new Error(`Choose at most ${populationCountLimit(status)} residents within the configured runtime limit.`)
   if (!Number.isInteger(horizon) || horizon < 60 || horizon > 14400) throw new Error('Population horizon must be 60–14400 seconds.')
   if (!Number.isSafeInteger(seed)) throw new Error('Population seed must be an integer.')
   const modelIds = options.modelIds ?? defaultPopulationModelIds(status)

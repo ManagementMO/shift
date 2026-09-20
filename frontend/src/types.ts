@@ -654,7 +654,8 @@ export type PopulationStimulus = {
 }
 
 export type PopulationSessionBudget = {
-  session_limit_microdollars: number
+  /** null means only provider/key limits and separate per-run caps bound execution. */
+  session_limit_microdollars: number | null
   accounted_microdollars?: number
   remaining_microdollars?: number
   request_count?: number
