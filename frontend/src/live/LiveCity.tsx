@@ -93,6 +93,7 @@ export default function LiveCity() {
     if (session?.session_id) {
       rememberSession(session.session_id)
       const url = new URL(window.location.href)
+      if (url.searchParams.get('session') !== session.session_id) url.searchParams.delete('t')
       url.searchParams.set('session', session.session_id)
       window.history.replaceState(null, '', url)
     }
