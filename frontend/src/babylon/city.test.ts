@@ -46,8 +46,17 @@ describe('New-city rendering without appearance configuration', () => {
     const overlay = new Overlay(scene, new RoadIndex(world), new WorldFrame(world.crs))
     overlay.set({ closed: ['r', 'r'], ghost: ['r'], focus: ['r'], ghostStops: [] })
     const mark = scene.getMeshByName('overlay')!
-    expect(mark.getTotalVertices()).toBe(4)
-    mark.getVerticesData('color')!.slice(0, 3).forEach((v, i) => expect(v).toBeCloseTo(MARK.focus[i]))
+    // one focus ribbon (the ghost of the same edge is not drawn twice), then the closure's barricades and cones
+    const colors = mark.getVerticesData('color')!
+    colors.slice(0, 3).forEach((v, i) => expect(v).toBeCloseTo(MARK.focus[i]))
+    expect(mark.getTotalVertices()).toBeGreaterThan(4)
+    const orange = new Set<number>()
+    for (let i = 0; i < colors.length; i += 4) if (Math.abs(colors[i] - MARK.closed[0]) < 0.02 && Math.abs(colors[i + 2] - MARK.closed[2]) < 0.02) orange.add(i / 4)
+    expect(orange.size).toBeGreaterThan(0)
+    // a closed edge listed twice is furnished once
+    const once = mark.getTotalVertices()
+    overlay.set({ closed: ['r'], ghost: ['r'], focus: ['r'], ghostStops: [] })
+    expect(scene.getMeshByName('overlay')!.getTotalVertices()).toBe(once)
     overlay.dispose()
     city.dispose()
     scene.dispose()

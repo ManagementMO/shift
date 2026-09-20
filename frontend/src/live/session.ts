@@ -9,7 +9,7 @@ import { liveApi } from './api'
 import { LiveController, type LiveViewState } from './controller'
 import type { LiveCounts } from './frames'
 import { environmentAt } from './timeline'
-import type { LiveConfig, LiveSession } from './types'
+import type { Intervention, LiveConfig, LiveSession } from './types'
 
 export const live = new LiveController(clock)
 
@@ -38,6 +38,17 @@ export async function enterCity(packId: string): Promise<void> {
 
 export async function newCity(packId: string, config: Partial<Omit<LiveConfig, 'pack_id'>> = {}): Promise<void> {
   await live.create({ pack_id: packId, ...DEFAULT_LIVE_CONFIG, ...config })
+}
+
+/**
+ * One-click change: SUMO validates the command (the preview step) and, if it is sound, it is applied straight
+ * away and the city keeps playing. Returns false — with `live.getSnapshot().error` set — if SUMO refused it.
+ */
+export async function applyNow(change: Intervention): Promise<boolean> {
+  await live.preview(change)
+  if (live.getSnapshot().error || !live.getSnapshot().draft) return false
+  await live.apply()
+  return !live.getSnapshot().error
 }
 
 /**

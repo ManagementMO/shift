@@ -1,6 +1,6 @@
 /**
- * Scenario marks drawn over the static city: closed edges (active restriction), ghost edges / stops of an
- * unconfirmed proposal, and focus corridors.  Rebuilt only when the set of marked ids changes.
+ * Marks drawn over the static city: closed streets (orange barricades and cones, see `closureProps`), ghost edges /
+ * stops of a tool's aim, and focus corridors.  Rebuilt only when the set of marked ids changes.
  */
 
 import type { Mesh } from '@babylonjs/core/Meshes/mesh'
@@ -8,12 +8,13 @@ import type { StandardMaterial } from '@babylonjs/core/Materials/standardMateria
 import type { Scene } from '@babylonjs/core/scene'
 
 import { hex, meshFromBatch, vertexColorMaterial, Y } from './city'
+import { CLOSURE_ORANGE, closureProps } from './closureProps'
 import type { WorldFrame } from './coords'
 import { Batch, type RGB } from './geometry'
 import type { RoadIndex } from './roadIndex'
 
 export const MARK: Record<'closed' | 'ghost' | 'focus' | 'ghostStop', RGB> = {
-  closed: hex('#d7263d'),
+  closed: CLOSURE_ORANGE,
   ghost: hex('#22b8cf'),
   focus: hex('#eca840'),
   ghostStop: hex('#22b8cf'),
@@ -66,7 +67,7 @@ export class Overlay {
     }
     edges(focus, MARK.focus, 1.5, 0.08)
     edges(ghost, MARK.ghost, 2.5, 0.04)
-    edges(closed, MARK.closed, 2.5, 0)
+    closureProps(b, this.roads, closed)
     for (const s of m.ghostStops) {
       const [x, z] = this.frame.lonLatToWorld(s.lon, s.lat)
       b.disc(x, z, 5, Y.stop + 0.05, MARK.ghostStop, 16)

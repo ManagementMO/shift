@@ -90,7 +90,9 @@ export default function Experience({ initialCity }: { initialCity: boolean }) {
       scene.current.camera.apply({ ...cityPose(scene.current.world), radius: 7200, elevation: 78 })
     } else setReady(false)
     const store = useStore.getState()
-    if (store.pack && store.pack.pack_id !== packId) void store.selectPack(packId).then(applyRequestedSession)
+    // a failed first load (backend not up yet) is retried on every click rather than sticking until a reload
+    if (!store.pack) void store.boot(packId).then(applyRequestedSession)
+    else if (store.pack.pack_id !== packId) void store.selectPack(packId).then(applyRequestedSession)
     else applyRequestedSession()
   }, [applyRequestedSession])
 

@@ -21,7 +21,7 @@ from cityshift.api.population_gateway_router import router as population_gateway
 from cityshift.api.population_router import router as population_router
 from cityshift.api.service import PopulationScenarioError, close_service, get_service
 from cityshift.contracts import SCHEMA_VERSION, DemandSet, ScenarioSpec, ServicePlan
-from cityshift.domain.network import pack_dir
+from cityshift.domain.network import PACK_ROOT, load_pack, pack_dir
 from cityshift.domain.runs import RUN_ROOT
 from cityshift.store import STORAGE_UNAVAILABLE_MESSAGE, StorageUnavailable, storage_backend
 from cityshift.transport.sumo_env import sumo_version
@@ -107,22 +107,22 @@ def health() -> dict:
 
 
 # --- packs --------------------------------------------------------------------------------------
+# City packs live on disk and are what the live city needs first; they must not depend on the scenario store.
 @app.get("/api/packs")
 def list_packs() -> list[dict]:
-    svc = get_service()
     return [
         {
             "pack_id": p.pack_id, "name": p.name, "version": p.version, "bbox": p.bbox, "center": p.center,
             "stops": len(p.stops), "zones": len(p.zones), "real_data": p.real_data, "limitations": p.limitations,
         }
-        for p in svc.list_packs()
+        for p in (load_pack(d.parent.name) for d in sorted(PACK_ROOT.glob("*/pack.json")))
     ]
 
 
 @app.get("/api/packs/{pack_id}")
 def get_pack(pack_id: str) -> dict:
     try:
-        return get_service().pack(pack_id).model_dump(mode="json")
+        return load_pack(pack_id).model_dump(mode="json")
     except FileNotFoundError:
         raise _not_found("pack") from None
 
