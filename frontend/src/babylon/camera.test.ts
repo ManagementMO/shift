@@ -163,6 +163,13 @@ describe('fixed city camera', () => {
     expectInsideCity(cam, 1440, 900)
   })
 
+  it('maps secondary-click drag to rotation and middle or Ctrl-drag to pan', () => {
+    const { cam } = setup(1440, 900, false)
+    expect(cam.movement.input.resolveInteraction('pointer', { button: 2, modifiers: {} })?.interaction).toBe('rotate')
+    expect(cam.movement.input.resolveInteraction('pointer', { button: 1, modifiers: {} })?.interaction).toBe('pan')
+    expect(cam.movement.input.resolveInteraction('pointer', { button: 0, modifiers: { ctrl: true } })?.interaction).toBe('pan')
+  })
+
   it('keeps the standalone renderer lab camera editable', () => {
     const { camera } = setup(1440, 900, false)
     const pose = { target: [100, 200] as [number, number], radius: 300, heading: 45, elevation: 40 }

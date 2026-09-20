@@ -99,6 +99,26 @@ describe('New-city rendering without appearance configuration', () => {
     engine.dispose()
   })
 
+  it('continues meadow through unclassified city land while preserving explicitly paved surfaces', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const world = fixture()
+    world.buildings = []
+    world.surfaces = {
+      ground: [{ ring: [4000, 7000, 4200, 7000, 4200, 7400, 4000, 7400] }], meadow: [],
+      pavement: [{ ring: [4200, 7000, 4400, 7000, 4400, 7400, 4200, 7400] }],
+      grass: [], asphalt: [], rail: [], sand: [],
+    }
+    const city = buildCity(scene, world)
+    expect(city.ground.material?.name).toBe('city-grass')
+    const colors = city.ground.getVerticesData('color')!
+    for (let i = 0; i < 3; i++) expect(colors[i]).toBeCloseTo(PALETTE.meadow[i])
+    expect(city.chunks.some((mesh) => mesh.material?.name === 'city-pavement')).toBe(true)
+    city.dispose()
+    scene.dispose()
+    engine.dispose()
+  })
+
   it('textures the entire base plate and preserves its land tint under bright lighting', () => {
     const engine = new NullEngine()
     const scene = new Scene(engine)
