@@ -311,12 +311,23 @@ function StopTool() {
   )
 }
 
+/** Backend bounds for a live-simulated crowd (`FlagshipRequest.cohort_size`): fewer than 10 is rejected, 2 000 is the ceiling. */
+export const POPULATION_MIN_SIMULATED = 10
+export const POPULATION_MAX = 2000
+
 function PopulationTool() {
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
+  const current = useStore((s) => Object.keys(s.travelers).length)
   const createFlagship = useStore((s) => s.createFlagship)
   const building = useStore((s) => s.building)
-  const [n, setN] = useState(240)
+  // The bar reflects the loaded scenario until the user drags it; `pending` is cleared once a rebuild lands.
+  const [pending, setPending] = useState<{ scenarioId: string | null; value: number } | null>(null)
   const [busy, setBusy] = useState(false)
+  const n = pending && pending.scenarioId === (scenario?.scenario_id ?? null) ? pending.value : current
+  const setN = (value: number) => setPending({ scenarioId: scenario?.scenario_id ?? null, value })
+  const pct = (Math.min(n, POPULATION_MAX) / POPULATION_MAX) * 100
+  const dirty = n !== current
+  const tooFew = n < POPULATION_MIN_SIMULATED
   const go = async () => {
     setBusy(true)
     useStore.setState({ building: `Generating ${n} synthetic travelers · compiling scenario…` })
@@ -328,16 +339,22 @@ function PopulationTool() {
     }
   }
   return (
-    <div className="tool">
-      <div className="small dim">Demand is synthetic and declared as such. Changing the cohort compiles a new scenario (it is not a live edit).</div>
-      <label className="small">
-        travelers leaving the venue: <b>{n}</b>
-        <input type="range" min={20} max={2000} step={20} value={n} onChange={(e) => setN(Number(e.target.value))} />
-      </label>
-      <button className="primary" disabled={busy || !!building} onClick={() => void go()}>
-        {busy ? 'Compiling…' : `Build scenario with ${n} travelers`}
+    <div className="tool population-tool">
+      <div className="population-head small">
+        <span>Population in the area</span>
+        <span className="dim">{scenario ? `${current.toLocaleString()} simulated now` : 'no scenario yet'}</span>
+      </div>
+      <div className="population-bar" style={{ '--pct': `${pct}%` } as React.CSSProperties}>
+        <output htmlFor="population-range" style={{ left: `calc(${pct}% + ${(0.5 - pct / 100) * 18}px)` }}>{n.toLocaleString()}</output>
+        <input id="population-range" type="range" aria-label="Population in the area" min={0} max={POPULATION_MAX} step={1} value={n} onChange={(e) => setN(Number(e.target.value))} disabled={busy || !!building} />
+        <div className="population-ticks"><span>0</span><span>{POPULATION_MAX.toLocaleString()} max</span></div>
+      </div>
+      <button className="primary" disabled={busy || !!building || tooFew || !dirty} onClick={() => void go()}>
+        {busy ? 'Compiling…' : tooFew ? `At least ${POPULATION_MIN_SIMULATED} people to simulate` : dirty ? `Set population to ${n.toLocaleString()}` : 'Population unchanged'}
       </button>
-      {scenario && <div className="small dim">current: {scenario.scenario_id}</div>}
+      <div className="small dim">
+        Synthetic crowd leaving the venue; {POPULATION_MAX.toLocaleString()} is this simulator’s live ceiling, not the area’s census population. Applying compiles a new base scenario{scenario?.parent_scenario_id ? ' — developments on this branch are not carried over' : ''}.
+      </div>
     </div>
   )
 }

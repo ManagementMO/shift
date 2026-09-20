@@ -349,6 +349,16 @@ button:disabled {
 .development-summary b { color: var(--accent); font-size: 15px; }
 .development-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .development-grid > *, .development-grid input { min-width: 0; width: 100%; }
+.population-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; color: var(--ink-2); }
+.population-bar { position: relative; padding: 30px 0 0; }
+.population-bar output { position: absolute; top: 0; transform: translateX(-50%); padding: 3px 9px; border-radius: 999px; background: var(--ink); color: #fff; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.population-bar output::after { content: ''; position: absolute; left: calc(50% - 4px); bottom: -4px; width: 8px; height: 8px; background: var(--ink); transform: rotate(45deg); }
+.population-bar input[type='range'] { margin: 0; height: 22px; -webkit-appearance: none; appearance: none; background: transparent; }
+.population-bar input[type='range']::-webkit-slider-runnable-track { height: 8px; border-radius: 999px; background: linear-gradient(90deg, var(--accent) var(--pct), rgba(22, 32, 44, 0.12) var(--pct)); }
+.population-bar input[type='range']::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -5px; border-radius: 50%; background: #fff; border: 2px solid var(--ink); box-shadow: 0 2px 8px rgba(18, 30, 48, 0.3); cursor: grab; }
+.population-bar input[type='range']:active::-webkit-slider-thumb { cursor: grabbing; transform: scale(1.1); }
+.population-bar input[type='range']:disabled::-webkit-slider-thumb { cursor: default; opacity: 0.6; }
+.population-ticks { display: flex; justify-content: space-between; margin-top: 4px; font-size: 11px; color: var(--dim); }
 .development-tool input[type='number'] { padding: 5px 8px; border: 1px solid rgba(80, 104, 116, 0.24); border-radius: 7px; background: rgba(255, 255, 255, 0.8); width: 100%; }
 .development-tool input[type='number']:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 .development-section { border-top: 1px solid rgba(80, 104, 116, 0.16); padding-top: 10px; }
