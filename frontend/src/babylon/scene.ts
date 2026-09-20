@@ -38,6 +38,7 @@ import { loadLandmarkModels } from './landmarkModels'
 export interface WorldSceneOptions {
   shadows?: boolean
   ssao?: boolean
+  fixedCamera?: boolean
   quality?: 'high' | 'balanced'
 }
 
@@ -122,11 +123,20 @@ export class WorldScene {
     cam.panningInertia = 0.82
     cam.inertia = 0.84
     cam.useNaturalPinchZoom = true
-    cam.attachControl(canvas, true)
+    if (!opts.fixedCamera) cam.attachControl(canvas, true)
     scene.onBeforeRenderObservable.add(() => {
       cam.panningSensibility = 45
     })
-    this.camera = new WorldCamera(cam, world)
+    this.camera = new WorldCamera(cam, world, opts.fixedCamera ?? false)
+    if (!this.camera.fixed) {
+      const cancelFlight = () => this.camera.cancel()
+      canvas.addEventListener('pointerdown', cancelFlight)
+      canvas.addEventListener('wheel', cancelFlight, { passive: true })
+      scene.onDisposeObservable.addOnce(() => {
+        canvas.removeEventListener('pointerdown', cancelFlight)
+        canvas.removeEventListener('wheel', cancelFlight)
+      })
+    }
     applyWorldAtmosphere(scene, world.crs.bounds_world, sky)
 
     // --- shadows (sun) use a fixed world-space frustum, independent of camera rotation and zoom.
@@ -229,6 +239,7 @@ export class WorldScene {
 
   resize(): void {
     this.engine.resize()
+    this.camera.resize(this.engine.getAspectRatio(this.camera.cam))
   }
 
   get fps(): number {

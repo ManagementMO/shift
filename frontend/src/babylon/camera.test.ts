@@ -2,15 +2,180 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine'
 import { Scene } from '@babylonjs/core/scene'
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera'
+import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector'
 import { Camera } from '@babylonjs/core/Cameras/camera'
-import { Vector3 } from '@babylonjs/core/Maths/math.vector'
-import { WorldCamera } from './camera'
+
+import { cityPose, WorldCamera } from './camera'
 import type { WorldData } from './worldData'
 
-const world = { landmarks: [], crs: { bounds_world: [-1000, -1000, 1000, 1000] } } as unknown as WorldData
-afterEach(() => vi.unstubAllGlobals())
+const world: WorldData = {
+  version: 1, pack_id: 'toronto', network_fingerprint: '',
+  crs: { proj: '', utm_zone: 17, net_offset: [0, 0], origin_net: [0, 0], origin_lonlat: [-79.389, 43.649], bounds_world: [-3203.9, -2450.4, 3203.9, 2450.4] },
+  anchors: [], venue: { x: 12.3, z: -774, edge: '' }, stops: [], zones: [], roads: [], junctions: [], buildings: [],
+  landmarks: [
+    { id: 'cn', kind: 'cn_tower', name: 'CN Tower', x: 179.1, z: -662.1, h: 553, ring: [] },
+    { id: 'union', kind: 'union_station', name: 'Union Station', x: 704.9, z: -413.3, h: 26, ring: [] },
+  ],
+  green: [], sand: [], rail: [], water: [], counts: {}, provenance: [],
+}
+const engines: NullEngine[] = []
+
+function setup(width = 1440, height = 900, fixed = true) {
+  const engine = new NullEngine({ renderWidth: width, renderHeight: height, textureSize: 512, deterministicLockstep: false, lockstepMaxSteps: 4 })
+  engines.push(engine)
+  const scene = new Scene(engine)
+  const cam = new ArcRotateCamera('camera', 0, 0.5, 100, Vector3.Zero(), scene)
+  return { cam, camera: new WorldCamera(cam, world, fixed) }
+}
+
+function expectInsideCity(cam: ArcRotateCamera, width: number, height: number) {
+  const [x0, z0, x1, z1] = world.crs.bounds_world
+  for (const [x, y] of [[0, 0], [width, 0], [0, height], [width, height]]) {
+    const near = Vector3.Unproject(new Vector3(x, y, 0), width, height, Matrix.IdentityReadOnly, cam.getViewMatrix(), cam.getProjectionMatrix())
+    const far = Vector3.Unproject(new Vector3(x, y, 1), width, height, Matrix.IdentityReadOnly, cam.getViewMatrix(), cam.getProjectionMatrix())
+    const ray = far.subtract(near).normalize()
+    expect(ray.y).toBeLessThan(0)
+    const ground = near.add(ray.scale(-near.y / ray.y))
+    expect(ground.x).toBeGreaterThan(x0 + 100)
+    expect(ground.x).toBeLessThan(x1 - 100)
+    expect(ground.z).toBeGreaterThan(z0 + 100)
+    expect(ground.z).toBeLessThan(z1 - 100)
+  }
+}
+
+afterEach(() => {
+  for (const engine of engines.splice(0)) engine.dispose()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
+describe('fixed city camera', () => {
+  it('locks the viewing angle, zoom limits, and camera inputs', () => {
+    const { cam, camera } = setup()
+    expect(camera.fixed).toBe(true)
+    expect(camera.pose.heading).toBeCloseTo((cityPose(world).heading + 360) % 360)
+    expect(camera.pose.elevation).toBeCloseTo(52)
+    expect(cam.lowerRadiusLimit).toBe(cam.upperRadiusLimit)
+    expect(cam.lowerAlphaLimit).toBe(cam.upperAlphaLimit)
+    expect(cam.lowerBetaLimit).toBe(cam.upperBetaLimit)
+    expect(Object.keys(cam.inputs.attached)).toHaveLength(0)
+  })
+
+  it('ignores unrestricted flights, direct moves, and entity following', () => {
+    const { camera } = setup()
+    const pose = camera.pose
+    camera.apply({ target: [10000, 10000], radius: 9000, heading: 180, elevation: 5 })
+    camera.flyTo({ target: [-10000, -10000], radius: 45, heading: 90, elevation: 8 }, 100, 'agent')
+    camera.follow(20000, 20000)
+    expect(camera.pose).toEqual(pose)
+    expect(camera.mode).toBe('city')
+    expect(camera.flying).toBe(false)
+  })
+
+  it.each([[1440, 900], [390, 844], [3440, 1440], [3840, 1080], [800, 300]])('keeps the entire ground viewport inside the rendered city at %ix%i', (width, height) => {
+    const { cam } = setup(width, height)
+    expectInsideCity(cam, width, height)
+  })
+
+  it('tightens the framing for ultrawide windows without changing the angle or center', () => {
+    const { camera } = setup()
+    const initial = camera.pose
+    camera.resize(4)
+    expect(camera.pose.radius).toBeLessThan(initial.radius)
+    expect(camera.pose.target).toEqual(initial.target)
+    expect(camera.pose.heading).toBe(initial.heading)
+    expect(camera.pose.elevation).toBe(initial.elevation)
+  })
+
+  it('switches approved presets without unlocking free camera inputs', () => {
+    const { cam, camera } = setup()
+    const city = camera.pose
+    camera.setPreset({ target: [12.3, -774], radius: 800, heading: -17, elevation: 45 }, 'district', 0)
+    expect(camera.mode).toBe('district')
+    expect(camera.pose.radius).toBeLessThan(city.radius)
+    expect(camera.pose.target).toEqual([12.3, -774])
+    expect(camera.pose.heading).not.toBe(city.heading)
+    expect(cam.lowerRadiusLimit).toBe(cam.upperRadiusLimit)
+    expect(Object.keys(cam.inputs.attached)).toHaveLength(0)
+    expectInsideCity(cam, 1440, 900)
+    camera.city(0)
+    expect(camera.mode).toBe('city')
+    expect(camera.pose).toEqual(city)
+  })
+
+  it('preserves the selected preset when the viewport resizes', () => {
+    const { camera } = setup()
+    camera.setPreset({ target: [100, -200], radius: 1400, heading: 80, elevation: 42 }, 'corridor', 0)
+    const preset = camera.pose
+    camera.resize(4)
+    expect(camera.mode).toBe('corridor')
+    expect(camera.pose.radius).toBeLessThan(preset.radius)
+    expect(camera.pose.target).toEqual(preset.target)
+    expect(camera.pose.heading).toBe(preset.heading)
+    camera.resize(1440 / 900)
+    expect(camera.pose).toEqual(preset)
+  })
+
+  it.each([[9000, 9000], [-9000, -9000], [3200, -2400]])('keeps an outlying preset target at %i,%i inside rendered bounds', (x, z) => {
+    const { cam, camera } = setup(3440, 900)
+    camera.setPreset({ target: [x, z], radius: 5000, heading: 140, elevation: 15, y: 100 }, 'incident', 0)
+    expect(camera.pose.radius).toBeGreaterThan(1)
+    expect(camera.pose.elevation).toBeGreaterThanOrEqual(42)
+    expect(camera.pose.y).toBe(0)
+    expectInsideCity(cam, 3440, 900)
+  })
+
+  it('keeps every animation frame within the rendered city', () => {
+    let now = 0
+    let frame: FrameRequestCallback | null = null
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1 })
+    vi.stubGlobal('cancelAnimationFrame', () => { frame = null })
+    const { cam, camera } = setup(3440, 900)
+    camera.setPreset({ target: [3000, -2400], radius: 900, heading: 170, elevation: 25 }, 'corridor', 1000)
+    expect(camera.flying).toBe(true)
+    for (now = 100; now <= 1000; now += 100) {
+      const callback = frame as FrameRequestCallback | null
+      frame = null
+      callback?.(now)
+      expectInsideCity(cam, 3440, 900)
+    }
+    expect(camera.flying).toBe(false)
+    expect(camera.mode).toBe('corridor')
+  })
+
+  it('keeps free camera inputs available before and after choosing a preset', () => {
+    const { cam, camera } = setup(1440, 900, false)
+    expect(camera.fixed).toBe(false)
+    expect(Object.keys(cam.inputs.attached).length).toBeGreaterThan(0)
+    expectInsideCity(cam, 1440, 900)
+    camera.setPreset({ target: [9000, 9000], radius: 5000, heading: 90, elevation: 20 }, 'district', 0)
+    expectInsideCity(cam, 1440, 900)
+    cam.radius *= 0.8
+    cam.alpha += 0.3
+    cam.target.x += 100
+    const manual = camera.pose
+    camera.resize(4)
+    expect(camera.pose).toEqual(manual)
+    expect(Object.keys(cam.inputs.attached).length).toBeGreaterThan(0)
+    camera.city(0)
+    expect(camera.pose).not.toEqual(manual)
+    expectInsideCity(cam, 1440, 900)
+  })
+
+  it('keeps the standalone renderer lab camera editable', () => {
+    const { camera } = setup(1440, 900, false)
+    const pose = { target: [100, 200] as [number, number], radius: 300, heading: 45, elevation: 40 }
+    camera.apply(pose)
+    expect(camera.pose.radius).toBe(300)
+    expect(camera.pose.target).toEqual([100, 200])
+    expect(camera.pose.heading).toBeCloseTo(45)
+  })
+})
 
 describe('Cityscape camera', () => {
+  const world = { landmarks: [], crs: { bounds_world: [-1000, -1000, 1000, 1000] } } as unknown as WorldData
+
   it('keeps an undistorted orthographic image as zoom changes', () => {
     const engine = new NullEngine({ renderWidth: 1200, renderHeight: 800, textureSize: 512, deterministicLockstep: false, lockstepMaxSteps: 4 })
     const scene = new Scene(engine)

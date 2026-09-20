@@ -28,7 +28,6 @@ export default function Experience({ initialCity }: { initialCity: boolean }) {
   const globe = useCallback((push = true) => {
     clock.pause()
     scene.current?.setActive(false)
-    useStore.getState().setCompareMode(false)
     requestedScenario.current = null
     setSelected(null)
     setPhase('globe')
@@ -79,7 +78,6 @@ export default function Experience({ initialCity }: { initialCity: boolean }) {
     clock.pause()
     setRendererError(null)
     useStore.getState().setError(null)
-    useStore.getState().setCompareMode(false)
     requestedScenario.current = scenario?.scenario_id ?? null
     setSelected(place)
     setPhase('preparing')

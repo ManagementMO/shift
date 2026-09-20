@@ -39,6 +39,15 @@ export class BabylonSyncMap implements SyncMap {
     })
   }
 
+  get cameraLocked(): boolean {
+    return this.ws.camera.fixed
+  }
+
+  setCameraPreset(p: CameraPose, mode: CameraMode): void {
+    if (mode === 'city') this.ws.camera.city()
+    else this.ws.camera.setPreset(this.toPose(p), mode)
+  }
+
   toPose(p: CameraPose): Pose {
     const [x, z] = this.ws.frame.lonLatToWorld(p.center[0], p.center[1])
     return { target: [x, z], radius: zoomToRadius(p.zoom, p.center[1]), heading: p.bearing, elevation: Math.max(8, 90 - p.pitch) }
@@ -160,6 +169,7 @@ export class BabylonSyncMap implements SyncMap {
    * just before the first ~10% of travellers left.  Positions and times are the replay's, not staged.
    */
   egress(): boolean {
+    if (this.cameraLocked) return false
     const ws = this.ws
     const l = ws.world.landmarks.find((x) => x.kind === 'rogers_centre')
     const t0 = ws.traffic.releaseQuantile(0.1)

@@ -88,7 +88,7 @@ export default function ProposalCard() {
             {building ? 'Building…' : 'Run branch'}
           </button>
         )}
-        {(p.edge_ids.length > 0 || p.hazard) && (
+        {!leadMap()?.cameraLocked && (p.edge_ids.length > 0 || p.hazard) && (
           <button onClick={focus} className="ghostbtn">
             Frame
           </button>

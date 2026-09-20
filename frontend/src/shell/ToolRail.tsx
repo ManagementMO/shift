@@ -9,7 +9,6 @@ const TOOLS: { id: ToolId; label: string; path: string }[] = [
   { id: 'weather', label: 'Hazard', path: 'M12 3L2 21h20L12 3z M12 9v5 M12 17v1' },
   { id: 'road', label: 'Road', path: 'M7 2L4 22 M17 2l3 20 M12 3v4 M12 10v4 M12 17v4' },
   { id: 'intersection', label: 'Intersection', path: 'M8 2v6H2 M16 2v6h6 M2 16h6v6 M22 16h-6v6' },
-  { id: 'custom', label: 'Custom', path: 'M4 6h16 M4 12h16 M4 18h16 M8 3v6 M16 9v6 M10 15v6' },
 ]
 
 export default function ToolRail() {
