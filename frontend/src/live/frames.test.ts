@@ -20,6 +20,7 @@ function chunk(times: number[], x = 0): ArrayBuffer {
     view.setFloat32(p + 64, 2, true)
     view.setUint8(p + 68, 1)
     view.setUint8(p + 69, 1)
+    view.setUint16(p + 70, t === 1 ? 0b1001 : 0, true)
   })
   return data
 }
@@ -48,7 +49,10 @@ describe('Live recorded frames', () => {
     await replay.ensure(0.5)
     const seen: number[][] = []
     expect(replay.forEachAt(0.5, (...row) => seen.push(row))).toBe(true)
-    expect(seen).toEqual([[7, 1, -40, 0, 2, 1, 1]])
+    expect(seen).toEqual([[7, 1, -40, 0, 2, 1, 1, 0]])
+    const later: number[][] = []
+    replay.forEachAt(1, (...row) => later.push(row))
+    expect(later[0][7]).toBe(0b1001)
     expect(replay.forEachAt(1.5, () => { throw new Error('uncomputed position') })).toBe(false)
     replay.dispose()
   })

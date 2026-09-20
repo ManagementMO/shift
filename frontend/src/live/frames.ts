@@ -3,7 +3,7 @@ const HEADER_BYTES = 48
 const ROW_BYTES = 24
 const COUNT_KEYS = ['total', 'not_departed', 'walking', 'waiting', 'riding', 'driving', 'arrived', 'unroutable'] as const
 export type LiveCounts = Record<(typeof COUNT_KEYS)[number], number>
-export type FrameVisitor = (index: number, x: number, z: number, heading: number, speed: number, kind: number, state: number) => void
+export type FrameVisitor = (index: number, x: number, z: number, heading: number, speed: number, kind: number, state: number, flags: number) => void
 
 export interface RecordedFrame {
   t: number
@@ -125,7 +125,7 @@ export class LiveReplay {
       }
       const heading = a.view.getFloat32(p + 12, true)
       const angle = blend && b ? (heading + (((b.view.getFloat32(q + 12, true) - heading + 540) % 360) - 180) * blend + 360) % 360 : heading
-      visit(id, value(4), value(8), angle, value(16), kind, a.view.getUint8(p + 21))
+      visit(id, value(4), value(8), angle, value(16), kind, a.view.getUint8(p + 21), a.view.getUint16(p + 22, true))
     }
     return true
   }

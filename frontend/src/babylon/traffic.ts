@@ -12,9 +12,11 @@ import type { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGener
 import type { Scene } from '@babylonjs/core/scene'
 
 import { personStateAt, STATE_COLORS, type PersonState, type ReplayIndex, type TrackIndex } from '../replay'
+import { awareLevel, FLAG_FRESH } from '../live/flags'
 import { PALETTE, Y } from './city'
 import type { WorldFrame } from './coords'
 import { activeReleases, lodFor, pulse, releasesFrom, type Release } from './crowd'
+import { alertTint, buildCar, buildCarTrim, buildFigure, buildHead, buildMarker, farBoost, FIGURE_POSES, poseFor, vehicleScale, type Pose } from './figures'
 import { Batch, hash01, type RGB } from './geometry'
 import { interpAt, type Interp } from './interp'
 
@@ -22,10 +24,13 @@ export type Kind = 'bus' | 'car' | 'person'
 export interface LiveTrafficSource {
   entity(index: number): { id: string; kind: Kind } | undefined
   releasedAt(t: number): number
-  forEachAt(t: number, visit: (index: number, x: number, z: number, heading: number, speed: number, kind: number, state: number) => void): boolean
+  forEachAt(t: number, visit: (index: number, x: number, z: number, heading: number, speed: number, kind: number, state: number, flags: number) => void): boolean
 }
-/** Prototype sets: entity kinds plus the far-LOD pedestrian marker, the venue release ring and the selection / hover halos. */
-type SetKind = Kind | 'marker' | 'pulse' | 'halo' | 'hover'
+/** Prototype sets: vehicles, one pedestrian figure per pose, the far-LOD pin, release pulses, alert rings and the selection / hover halos. */
+type FigureSet = `person-${Pose}`
+type SetKind = 'bus' | 'car' | FigureSet | 'marker' | 'pulse' | 'halo' | 'hover' | 'alert'
+const FIGURE_SETS = FIGURE_POSES.map((pose): FigureSet => `person-${pose}`)
+const ALERT_RING_COLOR: RGB = [1.0, 0.42, 0.14]
 
 const CAR_PALETTE: RGB[] = [
   [0.86, 0.87, 0.89], // white
@@ -197,7 +202,7 @@ interface Entity {
   seen: boolean
 }
 
-type LiveEntity = Omit<Entity, 'ix'> & { speed: number; state: number }
+type LiveEntity = Omit<Entity, 'ix'> & { speed: number; state: number; flags: number }
 const LIVE_STATES: PersonState[] = ['not_departed', 'walking', 'waiting', 'riding', 'driving', 'arrived', 'unroutable']
 
 export interface Picked {
@@ -211,7 +216,12 @@ export interface TrafficStats {
   people: number
   /** travellers whose recorded depart time has passed */
   released: number
+  /** agents drawn while aware of an active incident, and those who learned within the last two seconds */
+  alerted: number
+  fresh: number
 }
+
+export const EMPTY_STATS: TrafficStats = { buses: 0, cars: 0, people: 0, released: 0, alerted: 0, fresh: 0 }
 
 /** Where the crowd is being looked at from: drives pedestrian LOD only, never positions. */
 export interface Viewpoint {
@@ -231,7 +241,8 @@ export class Traffic {
   private live: LiveTrafficSource | null = null
   private liveEntities = new Map<string, LiveEntity>()
   private scratch: Interp = { lon: 0, lat: 0, angle: 0, speed: 0, i: -1, k: 0 }
-  stats: TrafficStats = { buses: 0, cars: 0, people: 0, released: 0 }
+  private agentScale = 1
+  stats: TrafficStats = { ...EMPTY_STATS }
   /** Selected entity id: drawn at full detail with a ground halo; with `dimOthers`, everyone else fades. */
   selectedId: string | null = null
   /** Entity under the pointer: outlined with a thin ring so it reads as something you can open. */
@@ -259,79 +270,90 @@ export class Traffic {
         },
         shadows,
       ),
-      car: new InstanceSet(
-        scene,
-        'car',
-        (b) => {
-          box(b, 0, 0.32, 0, 1.8, 0.62, 4.4, CAR_PALETTE[0])
-          box(b, 0, 0.94, -0.3, 1.6, 0.5, 2.3, CAR_PALETTE[0]) // cabin
-        },
-        (b) => {
-          box(b, 0, 0.98, -0.3, 1.64, 0.36, 2.34, GLASS) // glasshouse
-          for (const z of [-1.4, 1.4]) for (const x of [-0.8, 0.8]) box(b, x, 0, z, 0.24, 0.64, 0.64, TYRE)
-        },
-        shadows,
-      ),
-      person: new InstanceSet(
-        scene,
-        'person',
-        (b) => {
-          box(b, 0, 0, 0, 0.42, 1.45, 0.28, SKIN) // body
-        },
-        (b) => {
-          box(b, 0, 1.45, 0, 0.26, 0.28, 0.26, SKIN) // head
-        },
-        null,
-      ),
-      marker: new InstanceSet(scene, 'crowd-marker', (b) => b.disc(0, 0, 1.5, 0.06, SKIN, 8), null, null),
+      car: new InstanceSet(scene, 'car', (b) => buildCar(b, CAR_PALETTE[0]), buildCarTrim, shadows),
+      ...(Object.fromEntries(FIGURE_POSES.map((pose) => [`person-${pose}`, new InstanceSet(scene, `person-${pose}`, (b) => buildFigure(b, pose), (b) => buildHead(b, pose), null)])) as Record<FigureSet, InstanceSet>),
+      marker: new InstanceSet(scene, 'crowd-marker', buildMarker, null, null),
       pulse: new InstanceSet(scene, 'release-pulse', (b) => ring(b, 1, 0.12, 0.05, SKIN), null, null),
       halo: new InstanceSet(scene, 'selection-halo', (b) => ring(b, 1, 0.22, 0.05, SKIN), null, null),
       hover: new InstanceSet(scene, 'hover-halo', (b) => ring(b, 1, 0.12, 0.05, SKIN), null, null),
+      alert: new InstanceSet(scene, 'alert-ring', (b) => ring(b, 1, 0.3, 0.05, ALERT_RING_COLOR), null, null),
     }
     this.sets.halo.reserve(1)
     this.sets.hover.reserve(1)
   }
 
+  /** Draw travellers and vehicles this many times life-size. Positions never change, only the model size. */
+  setAgentScale(scale: number): void {
+    this.agentScale = Math.max(0.5, Math.min(4, scale))
+  }
+
+  private figureSet(id: string, speed: number, state: number, t: number): FigureSet {
+    return `person-${poseFor(speed, t, hash01(id) * 2, state)}`
+  }
+
+  /** Model sizes for this frame: the chosen swarm scale, gentler for vehicles, boosted for far-LOD pins from the city camera. */
+  private scalesFor(view: Viewpoint): Record<Kind | 'marker', number> {
+    const vehicle = vehicleScale(this.agentScale) * farBoost(view.radius, 'vehicle')
+    return { person: this.agentScale, car: vehicle, bus: vehicle, marker: this.agentScale * farBoost(view.radius, 'marker') }
+  }
+
+  private counters(): Record<SetKind, number> {
+    const n = { bus: 0, car: 0, marker: 0, pulse: 0, halo: 0, hover: 0, alert: 0 } as Record<SetKind, number>
+    for (const set of FIGURE_SETS) n[set] = 0
+    return n
+  }
+
   setLiveSource(source: LiveTrafficSource | null): void {
     this.setReplay(null)
     this.live = source
-    this.stats = { buses: 0, cars: 0, people: 0, released: 0 }
+    this.stats = { ...EMPTY_STATS }
   }
 
   private updateLive(t: number, view: Viewpoint): void {
     const source = this.live
     if (!source) return
-    const n: Record<SetKind, number> = { bus: 0, car: 0, person: 0, marker: 0, pulse: 0, halo: 0, hover: 0 }
+    const n = this.counters()
     for (const e of this.liveEntities.values()) e.seen = false
-    let people = 0
-    const available = source.forEachAt(t, (index, x, z, heading, speed, kindCode, state) => {
+    let people = 0, alerted = 0, fresh = 0
+    const scales = this.scalesFor(view)
+    const available = source.forEachAt(t, (index, x, z, heading, speed, kindCode, state, flags) => {
       const meta = source.entity(index)
       if (!meta || (kindCode === 1 && (state === 0 || state === 3 || state === 5))) return
       const kind: Kind = kindCode === 3 ? 'bus' : kindCode === 2 ? 'car' : 'person'
       let e = this.liveEntities.get(meta.id)
       if (!e) {
         const color = kind === 'bus' ? BUS_RED : kind === 'car' ? CAR_PALETTE[Math.floor(hash01(meta.id) * CAR_PALETTE.length)] : STATE_RGB.walking
-        e = { id: meta.id, kind, color, yaw: 0, px: 0, py: 0, pz: 0, seen: false, speed, state }
+        e = { id: meta.id, kind, color, yaw: 0, px: 0, py: 0, pz: 0, seen: false, speed, state, flags }
         this.liveEntities.set(meta.id, e)
       }
       e.px = x; e.pz = z; e.py = kind === 'person' ? Y.path : Y.road
-      e.yaw = heading * Math.PI / 180; e.seen = true; e.speed = speed; e.state = state
+      e.yaw = heading * Math.PI / 180; e.seen = true; e.speed = speed; e.state = state; e.flags = flags
       const selected = e.id === this.selectedId
       const hovered = e.id === this.hoverId
-      let set: SetKind = kind
+      let set: SetKind = kind === 'person' ? this.figureSet(e.id, speed, state, t) : kind
       let color = kind === 'person' ? stateColor(LIVE_STATES[state] ?? 'walking') : e.color
       if (kind === 'person') {
         people++
         if (!selected && !hovered && (view.radius >= 900 || lodFor(Math.hypot(x - view.x, view.y, z - view.z), view.radius) === 'marker')) set = 'marker'
       }
-      if (selected) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, HALO_RADIUS[kind])
-      else if (hovered) this.sets.hover.set(n.hover++, x, Y.junction + 0.12, z, 0, HOVER_COLOR, Math.max(HALO_RADIUS[kind] * 1.25, view.radius * HOVER_MIN_RADIUS))
+      const scale = set === 'marker' ? scales.marker : scales[kind]
+      if (awareLevel(flags)) {
+        alerted++
+        color = alertTint(flags, color)
+        if (flags & FLAG_FRESH) {
+          fresh++
+          this.sets.alert.reserve(n.alert + 1)
+          this.sets.alert.set(n.alert++, x, Y.junction + 0.1, z, 0, ALERT_RING_COLOR, HALO_RADIUS[kind] * scale * 1.4)
+        }
+      }
+      if (selected) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, HALO_RADIUS[kind] * scale)
+      else if (hovered) this.sets.hover.set(n.hover++, x, Y.junction + 0.12, z, 0, HOVER_COLOR, Math.max(HALO_RADIUS[kind] * scale * 1.25, view.radius * HOVER_MIN_RADIUS))
       else if (this.dimOthers && this.selectedId) color = mix(color, PALETTE.pavement, 0.72)
       this.sets[set].reserve(n[set] + 1)
-      this.sets[set].set(n[set]++, x, e.py, z, e.yaw, color)
+      this.sets[set].set(n[set]++, x, e.py, z, e.yaw, color, scale)
     })
     for (const k of Object.keys(n) as SetKind[]) this.sets[k].commit(n[k])
-    this.stats = { buses: n.bus, cars: n.car, people, released: available ? source.releasedAt(t) : 0 }
+    this.stats = { buses: n.bus, cars: n.car, people, released: available ? source.releasedAt(t) : 0, alerted, fresh }
   }
 
   setReplay(rx: ReplayIndex | null): void {
@@ -351,7 +373,9 @@ export class Traffic {
         kind === 'bus' ? BUS_RED : kind === 'car' ? CAR_PALETTE[Math.floor(hash01(id) * CAR_PALETTE.length)] : STATE_COLORS.walking.map((v) => v / 255) as RGB
       this.entities.push({ id, ix, kind, color, yaw: 0, px: 0, py: 0, pz: 0, seen: false })
     }
-    for (const k of Object.keys(counts) as Kind[]) this.sets[k].reserve(counts[k])
+    this.sets.bus.reserve(counts.bus)
+    this.sets.car.reserve(counts.car)
+    for (const set of FIGURE_SETS) this.sets[set].reserve(counts.person)
     this.sets.marker.reserve(counts.person)
     this.releases = releasesFrom(rx, this.frame)
     this.sets.pulse.reserve(64)
@@ -370,12 +394,13 @@ export class Traffic {
     if (this.live) { this.updateLive(t, view); return }
     const rx = this.rx
     if (!rx) return
-    const n: Record<SetKind, number> = { bus: 0, car: 0, person: 0, marker: 0, pulse: 0, halo: 0, hover: 0 }
+    const n = this.counters()
     const modes = rx.bundle.compile?.mode_assignment ?? {}
     const s = this.scratch
     const sel = this.selectedId
     const hov = this.hoverId
     const dim = this.dimOthers && sel !== null
+    const scales = this.scalesFor(view)
     let people = 0
     for (const e of this.entities) {
       const r = interpAt(e.ix, t, s)
@@ -411,16 +436,17 @@ export class Traffic {
       e.seen = true
       const isSel = e.id === sel
       const isHov = e.id === hov && !isSel
-      let set: SetKind = e.kind
+      let set: SetKind = e.kind === 'person' ? this.figureSet(e.id, r.speed, personStateAt(rx.personEvents[e.id], t, modes[e.id]) === 'waiting' ? 2 : 1, t) : e.kind
       if (e.kind === 'person') {
         people++
         const d = Math.hypot(x - view.x, view.y, z - view.z)
         if (!isSel && !isHov && lodFor(d, view.radius) === 'marker') set = 'marker'
       }
-      if (isSel) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, HALO_RADIUS[e.kind])
-      else if (isHov) this.sets.hover.set(n.hover++, x, Y.junction + 0.12, z, 0, HOVER_COLOR, Math.max(HALO_RADIUS[e.kind] * 1.25, view.radius * HOVER_MIN_RADIUS))
+      const scale = set === 'marker' ? scales.marker : scales[e.kind]
+      if (isSel) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, HALO_RADIUS[e.kind] * scale)
+      else if (isHov) this.sets.hover.set(n.hover++, x, Y.junction + 0.12, z, 0, HOVER_COLOR, Math.max(HALO_RADIUS[e.kind] * scale * 1.25, view.radius * HOVER_MIN_RADIUS))
       else if (dim) color = mix(color, PALETTE.pavement, 0.72)
-      this.sets[set].set(n[set]++, x, y, z, e.yaw, color)
+      this.sets[set].set(n[set]++, x, y, z, e.yaw, color, scale)
     }
     const live = activeReleases(this.releases, t)
     this.sets.pulse.reserve(live.length)
@@ -435,13 +461,13 @@ export class Traffic {
       if (r.t > t) break
       released++
     }
-    this.stats = { buses: n.bus, cars: n.car, people, released }
+    this.stats = { buses: n.bus, cars: n.car, people, released, alerted: 0, fresh: 0 }
   }
 
   /** Last drawn world pose of an entity (for follow cameras / inspection); null if unknown or not visible. */
-  poseOf(id: string): { x: number; z: number; yaw: number; kind: Kind; speed?: number; state?: number } | null {
+  poseOf(id: string): { x: number; z: number; yaw: number; kind: Kind; speed?: number; state?: number; flags?: number } | null {
     const live = this.liveEntities.get(id)
-    if (live) return live.seen ? { x: live.px, z: live.pz, yaw: live.yaw, kind: live.kind, speed: live.speed, state: live.state } : null
+    if (live) return live.seen ? { x: live.px, z: live.pz, yaw: live.yaw, kind: live.kind, speed: live.speed, state: live.state, flags: live.flags } : null
     const e = this.entities.find((v) => v.id === id)
     return e && e.seen ? { x: e.px, z: e.pz, yaw: e.yaw, kind: e.kind } : null
   }
@@ -455,7 +481,7 @@ export class Traffic {
     let bestD = tol * tol
     for (const e of this.live ? this.liveEntities.values() : this.entities) {
       if (!e.seen) continue
-      const p = project(e.px, e.py + (e.kind === 'bus' ? 1.8 : e.kind === 'car' ? 0.7 : 0.9), e.pz)
+      const p = project(e.px, e.py + (e.kind === 'bus' ? 1.8 : e.kind === 'car' ? 0.7 : 0.9) * (e.kind === 'person' ? this.agentScale : vehicleScale(this.agentScale)), e.pz)
       const d = (p.x - sx) * (p.x - sx) + (p.y - sy) * (p.y - sy)
       if (d < bestD) {
         bestD = d

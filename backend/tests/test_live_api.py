@@ -86,6 +86,30 @@ def test_api_rejects_invalid_places_and_exposes_metadata_for_each_traveler(clien
     assert connection.get("/api/live/not-a-session").status_code == 404
 
 
+def test_incidents_are_posted_as_commands_and_reported_with_their_cascade(client, live_pack):
+    connection, registry = client
+    session = registry.create(SessionConfig(pack_id=live_pack.pack_id, initial_population=0, car_share=1))
+    session.wait_ready()
+    sid = session.session_id
+    people = {"command_id": "drivers", "at_s": 0, "expected_revision": 0, "intervention": {"kind": "population", "count": 20, "destination_zone_id": "Z_EAST", "origin_zone_id": "Z_WEST", "release_window_s": 30}}
+    assert connection.post(f"/api/live/{sid}/commands", json=people).status_code == 200
+    assert connection.post(f"/api/live/{sid}/advance", json={"target_s": 40}).status_code == 200
+    state = ready(connection, sid, 40)
+    stop = live_pack.stops[0]
+    request = {"command_id": "crash-api", "at_s": 40, "expected_revision": state["revision"], "intervention": {"kind": "incident", "hazard": "crash", "lon": stop.lon, "lat": stop.lat, "radius_m": 120, "duration_s": 300}}
+    preview = connection.post(f"/api/live/{sid}/preview", json=request)
+    assert preview.status_code == 200
+    assert preview.json()["edges"] > 0 and preview.json()["blocks"] == ["passenger", "bus"]
+    applied = connection.post(f"/api/live/{sid}/commands", json=request)
+    assert applied.status_code == 200
+    body = applied.json()
+    assert body["incidents"][0]["hazard"] == "crash" and body["incidents"][0]["active"] is True
+    assert body["metrics"]["swarm"]["events"][0]["label"] == "Vehicle collision"
+    assert body["metrics"]["swarm"]["witnessed"] >= 0
+    far = {**request, "command_id": "sea", "expected_revision": body["revision"], "intervention": {**request["intervention"], "lon": -79.2, "lat": 43.55}}
+    assert connection.post(f"/api/live/{sid}/preview", json=far).status_code == 422
+
+
 def test_resume_continues_an_archived_record_without_overwriting_it(client, live_pack):
     connection, registry = client
     original = registry.create(SessionConfig(pack_id=live_pack.pack_id, initial_population=0))

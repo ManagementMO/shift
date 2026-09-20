@@ -4,6 +4,7 @@ import { api } from '../api'
 import { useStore } from '../store'
 import { usePreferences } from '../preferences'
 import { useDisplay } from '../babylon/display'
+import { SWARM_SCALES } from '../babylon/figures'
 import Icon from '../components/Icon'
 import './settings.css'
 
@@ -69,6 +70,7 @@ export function SettingsPanel({ city = false, showCityAppearance = true, appeara
         {appearance && <div className="settings-row"><label htmlFor={`${titleId}-appearance`}>Globe style</label><select id={`${titleId}-appearance`} value={appearance.monochrome ? 'mono' : 'natural'} onChange={(e) => appearance.setMonochrome(e.target.value === 'mono')}><option value="mono">Monochrome</option><option value="natural">Natural</option></select></div>}
         {showCityAppearance && <><div className="settings-row"><label htmlFor={`${titleId}-projection`}>City overview</label><select id={`${titleId}-projection`} value={display.projection} onChange={(e) => display.set({ projection: e.target.value as 'perspective' | 'isometric' })}><option value="perspective">Perspective</option><option value="isometric">Isometric</option></select></div>
         <div className="settings-row"><label htmlFor={`${titleId}-lighting`}>City lighting</label><select id={`${titleId}-lighting`} value={display.lighting} onChange={(e) => display.set({ lighting: e.target.value as 'afternoon' | 'golden' })}><option value="afternoon">Afternoon</option><option value="golden">Golden hour</option></select></div>
+        <div className="settings-row"><label htmlFor={`${titleId}-swarm`}>Swarm size</label><select id={`${titleId}-swarm`} value={display.swarmScale} onChange={(e) => display.set({ swarmScale: Number(e.target.value) })}>{SWARM_SCALES.map((s) => <option key={s.value} value={s.value}>{s.label} · {s.value}×</option>)}</select></div>
         <label className="settings-check"><span>City shadows</span><input type="checkbox" checked={display.shadows} onChange={(e) => display.set({ shadows: e.target.checked })} /></label>
         <label className="settings-check"><span>City textures</span><input type="checkbox" checked={display.textures} onChange={(e) => display.set({ textures: e.target.checked })} /></label>
         <label className="settings-check"><span>City high resolution</span><input type="checkbox" checked={display.sharp} onChange={(e) => display.set({ sharp: e.target.checked })} /></label></>}

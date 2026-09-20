@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { environmentAt } from './timeline'
+import { environmentAt, interventionLabel } from './timeline'
 import type { LiveSession } from './types'
 
 const session = {
@@ -21,6 +21,11 @@ describe('Interventions at the playhead', () => {
     expect(environmentAt(session, 5).assignedBuses.size).toBe(0)
     expect(environmentAt(session, 25)).toMatchObject({ temperature: 0, population: 6000 })
     expect([...environmentAt(session, 45).assignedBuses]).toEqual(['bus_A'])
+  })
+
+  it('names incidents by hazard and footprint without inventing outcomes', () => {
+    expect(interventionLabel({ kind: 'incident', hazard: 'fire', lon: -79.38, lat: 43.64, radius_m: 90 })).toBe('Building fire · 90 m')
+    expect(interventionLabel({ kind: 'incident', hazard: 'crash', lon: -79.38, lat: 43.64, radius_m: 40, label: 'Gardiner pile-up' })).toBe('Gardiner pile-up · 40 m')
   })
 
   it('preserves overlapping closures until explicitly reopened or all windows end', () => {

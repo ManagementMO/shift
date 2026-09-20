@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 MAX_TRAVELERS = 10000
 Identifier = Annotated[str, Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")]
@@ -49,7 +50,47 @@ class PopulationChange(InputModel):
     release_window_s: int = Field(default=300, ge=0, le=1800, strict=True)
 
 
-Intervention = Annotated[RoadChange | BusRouteChange | TemperatureChange | PopulationChange, Field(discriminator="kind")]
+@dataclass(frozen=True)
+class HazardProfile:
+    label: str
+    blocks: tuple[str, ...]
+    alarm_factor: float
+    default_duration_s: int
+    description: str
+
+
+EVERYONE = ("passenger", "bus", "pedestrian")
+HAZARDS: dict[str, HazardProfile] = {
+    "crash": HazardProfile("Vehicle collision", ("passenger", "bus"), 2.5, 900, "Streets inside the footprint close to cars and buses. Sidewalks stay open."),
+    "fire": HazardProfile("Building fire", EVERYONE, 3.0, 1800, "Nobody may enter the footprint. People inside leave for the nearest street outside it."),
+    "flood": HazardProfile("Flash flood", EVERYONE, 2.0, 3600, "Streets and sidewalks inside the footprint are impassable until the water recedes."),
+    "tornado": HazardProfile("Tornado", EVERYONE, 4.0, 600, "A wide warning radius: everyone who sees it leaves the footprint and spreads the word."),
+    "gas_leak": HazardProfile("Gas leak", EVERYONE, 3.0, 1200, "The footprint is evacuated and closed to all traffic."),
+}
+Hazard = Literal["crash", "fire", "flood", "tornado", "gas_leak"]
+
+
+class IncidentChange(InputModel):
+    kind: Literal["incident"]
+    hazard: Hazard
+    lon: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    lat: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    radius_m: int = Field(default=120, ge=20, le=1500, strict=True)
+    duration_s: int | None = Field(default=None, ge=30, le=14400, strict=True)
+    label: Annotated[str, Field(min_length=1, max_length=60, pattern=r"^[A-Za-z0-9 ,.'()/&-]+$")] | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def effective_duration_s(self) -> int:
+        return self.duration_s if self.duration_s is not None else HAZARDS[self.hazard].default_duration_s
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def alarm_radius_m(self) -> float:
+        return round(self.radius_m * HAZARDS[self.hazard].alarm_factor, 1)
+
+
+Intervention = Annotated[RoadChange | BusRouteChange | TemperatureChange | PopulationChange | IncidentChange, Field(discriminator="kind")]
 
 
 class InterventionRequest(InputModel):

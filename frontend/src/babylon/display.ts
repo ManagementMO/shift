@@ -6,6 +6,8 @@ export interface DisplaySettings {
   sharp: boolean
   projection: 'perspective' | 'isometric'
   lighting: 'afternoon' | 'golden'
+  /** Travellers and vehicles are drawn this many times life-size so the swarm reads from the city camera. */
+  swarmScale: number
 }
 
 export const useDisplay = create<DisplaySettings & { set: (patch: Partial<DisplaySettings>) => void }>((set) => ({
@@ -14,6 +16,7 @@ export const useDisplay = create<DisplaySettings & { set: (patch: Partial<Displa
   sharp: false,
   projection: 'perspective',
   lighting: 'afternoon',
+  swarmScale: 2.2,
   set: (patch) => set(patch),
 }))
 

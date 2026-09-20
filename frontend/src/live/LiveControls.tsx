@@ -2,10 +2,11 @@ import { useState, type FormEvent } from 'react'
 
 import type { CityPack, Corridor } from '../types'
 import { elapsed, environmentAt } from './timeline'
-import type { Intervention, LivePreview, LiveSession } from './types'
+import { alarmRadius, DEFAULT_DURATION, type IncidentSettings } from './incident'
+import { HAZARDS, type Hazard, type Intervention, type LivePreview, type LiveSession } from './types'
 
-export type LiveTool = 'road' | 'route' | 'temperature' | 'population'
-const titles: Record<LiveTool, string> = { road: 'Change a road', route: 'Add a shuttle route', temperature: 'Change temperature', population: 'Send people downtown' }
+export type LiveTool = 'road' | 'route' | 'temperature' | 'population' | 'incident'
+const titles: Record<LiveTool, string> = { road: 'Change a road', route: 'Add a shuttle route', temperature: 'Change temperature', population: 'Send people downtown', incident: 'Declare an incident' }
 
 interface Props {
   tool: LiveTool
@@ -14,10 +15,12 @@ interface Props {
   time: number
   corridors: Record<string, Corridor>
   roads: string[]
+  incident: IncidentSettings
   preview: LivePreview | null
   busy: boolean
   error: string | null
   onRoads: (roads: string[]) => void
+  onIncident: (settings: IncidentSettings) => void
   onPreview: (change: Intervention) => void
   onApply: () => void
   onDiscard: () => void
@@ -26,6 +29,7 @@ interface Props {
 
 export default function LiveControls(p: Props) {
   const environment = environmentAt(p.session, p.time)
+  const hazard = HAZARDS.find(h => h.id === p.incident.hazard) ?? HAZARDS[0]
   const [roadAction, setRoadAction] = useState<'close_road' | 'reopen_road'>('close_road')
   const [duration, setDuration] = useState(0)
   const [temperature, setTemperature] = useState<number | null>(null)
@@ -52,6 +56,10 @@ export default function LiveControls(p: Props) {
     if (p.tool === 'road') change = { kind: roadAction, edge_ids: p.roads, until_s: roadAction === 'close_road' && duration > 0 ? Math.floor(p.time) + duration * 60 : null }
     else if (p.tool === 'temperature') change = { kind: 'temperature', temperature_c: targetTemperature }
     else if (p.tool === 'route') change = { kind: 'add_bus_route', bus_id: selectedBus, stop_ids: stopIds }
+    else if (p.tool === 'incident') {
+      if (!p.incident.place) return
+      change = { kind: 'incident', hazard: p.incident.hazard, lon: p.incident.place.lon, lat: p.incident.place.lat, radius_m: p.incident.radius_m, duration_s: p.incident.duration_s, label: p.incident.label.trim() || null }
+    }
     else change = { kind: 'population', count, destination_zone_id: destination, origin_zone_id: origin || null, release_window_s: windowS }
     p.onPreview(change)
   }
@@ -80,6 +88,16 @@ export default function LiveControls(p: Props) {
         <div className="live-range-labels"><span>−40°C</span><span>Current {environment.temperature}°C</span><span>50°C</span></div>
         <p className="live-assumption">Illustrative mobility assumptions, not a calibrated weather forecast. Review the exact factors before applying.</p>
       </>}
+      {p.tool === 'incident' && <>
+        <p className="live-help">Click the city to place it. Travelers within the warning radius witness it; everyone else has to hear it from a neighbour.</p>
+        <label>Hazard<select value={p.incident.hazard} onChange={e => p.onIncident({ ...p.incident, hazard: e.target.value as Hazard })}>{HAZARDS.map(h => <option key={h.id} value={h.id}>{h.label}</option>)}</select></label>
+        <p className="live-assumption">{hazard.detail} Blocks: {hazard.blocks.toLowerCase()}.</p>
+        <label>Footprint radius<input type="range" min={20} max={600} step={10} value={p.incident.radius_m} onChange={e => p.onIncident({ ...p.incident, radius_m: Number(e.target.value) })} /></label>
+        <div className="live-range-labels"><span>{p.incident.radius_m} m footprint</span><span>Warning radius {alarmRadius(p.incident)} m</span></div>
+        <label>Duration<select value={p.incident.duration_s ?? ''} onChange={e => p.onIncident({ ...p.incident, duration_s: e.target.value ? Number(e.target.value) : null })}><option value="">Typical for this hazard · {Math.round(DEFAULT_DURATION[p.incident.hazard] / 60)} min</option><option value={300}>5 simulated minutes</option><option value={900}>15 simulated minutes</option><option value={1800}>30 simulated minutes</option><option value={3600}>60 simulated minutes</option></select></label>
+        <label>Label (optional)<input type="text" maxLength={60} value={p.incident.label} placeholder={hazard.label} onChange={e => p.onIncident({ ...p.incident, label: e.target.value.replace(/[^A-Za-z0-9 ,.'()/&-]/g, '') })} /></label>
+        <div className="live-selection-note">{p.incident.place ? `Placed at ${p.incident.place.lat.toFixed(5)}, ${p.incident.place.lon.toFixed(5)}` : 'Click a spot in the city to place the incident'}</div>
+      </>}
       {p.tool === 'population' && <>
         <p className="live-help">Add inbound journeys, not a visual crowd multiplier or an instant relocation.</p>
         <label>New travelers<input type="number" min={1} max={10000 - environment.population} step={1} value={count} onChange={e => setCount(Number(e.target.value))} required /></label>
@@ -88,7 +106,7 @@ export default function LiveControls(p: Props) {
         <label>Release window<select value={windowS} onChange={e => setWindowS(Number(e.target.value))}><option value={0}>All at once</option><option value={60}>1 simulated minute</option><option value={300}>5 simulated minutes</option><option value={600}>10 simulated minutes</option></select></label>
         <p className="live-assumption">{Math.round(p.session.config.car_share * 100)}% have car access. The rest walk or use available transit. {environment.population.toLocaleString()} existing travelers stay intact.</p>
       </>}
-      <button className="primary live-submit" disabled={p.busy || (p.tool === 'road' && !p.roads.length) || (p.tool === 'route' && !selectedBus)}>Preview change</button>
+      <button className="primary live-submit" disabled={p.busy || (p.tool === 'road' && !p.roads.length) || (p.tool === 'route' && !selectedBus) || (p.tool === 'incident' && !p.incident.place)}>Preview change</button>
     </form>}
     {p.error && <div className="live-error" role="alert">{p.error}</div>}
     {p.preview && <section className="live-preview" aria-label="Intervention preview">
@@ -96,10 +114,11 @@ export default function LiveControls(p: Props) {
       <h3>{p.preview.title}</h3><p>{p.preview.detail}</p>
       {p.tool === 'road' && <p className="live-selection-note">{corridor ? p.corridors[corridor].label : p.roads.join(', ')}</p>}
       {p.preview.stop_names && <ol className="live-stop-list">{p.preview.stop_names.map((name, i) => <li key={i}>{name}</li>)}</ol>}
+      {p.preview.edges !== undefined && <dl className="live-model-factors"><div><dt>Street segments inside</dt><dd>{p.preview.edges}</dd></div><div><dt>Warning radius</dt><dd>{p.preview.alarm_radius_m} m</dd></div><div><dt>Duration</dt><dd>{Math.round((p.preview.duration_s ?? 0) / 60)} min</dd></div><div><dt>Closed to</dt><dd>{p.preview.blocks?.includes('pedestrian') ? 'Everyone' : 'Cars and buses'}</dd></div></dl>}
       {p.preview.mobility && <dl className="live-model-factors"><div><dt>Walking speed</dt><dd>×{p.preview.mobility.walk_speed_factor.toFixed(2)}</dd></div><div><dt>Walking tolerance</dt><dd>×{p.preview.mobility.walk_tolerance_factor.toFixed(2)}</dd></div><div><dt>Road speed</dt><dd>Unchanged</dd></div></dl>}
       <p className="live-assumption">{p.preview.assumption}</p>
       {p.preview.branches_history && <p className="live-branch-note">The original timeline is preserved. SUMO restores the seed and earlier commands before this edit.</p>}
-      <div className="live-preview-actions"><button className="ghostbtn" disabled={p.busy} onClick={p.onDiscard}>Back to editing</button><button className="primary" disabled={p.busy} onClick={p.onApply}>Apply &amp; play</button></div>
+      <div className="live-preview-actions"><button className="ghostbtn" disabled={p.busy} onClick={p.onDiscard}>Back to editing</button><button className="primary" disabled={p.busy} onClick={p.onApply}>{p.tool === 'incident' ? 'Declare & play' : 'Apply & play'}</button></div>
     </section>}
   </aside>
 }

@@ -9,7 +9,7 @@ import { Camera } from '@babylonjs/core/Cameras/camera'
 
 import type { WorldData } from './worldData'
 
-export type CameraMode = 'city' | 'district' | 'corridor' | 'agent' | 'vehicle' | 'incident' | 'development'
+export type CameraMode = 'city' | 'district' | 'corridor' | 'agent' | 'vehicle' | 'incident' | 'development' | 'swarm'
 
 export interface Pose {
   target: [number, number] // x, z (world metres); target height is always ground
@@ -227,6 +227,11 @@ export class WorldCamera {
 
   incident(x: number, z: number, radiusM: number, ms = 1200): void {
     this.flyTo({ target: [x, z], radius: Math.max(220, radiusM * 3.2), heading: this.pose.heading + 25, elevation: 44 }, ms, 'incident')
+  }
+
+  /** Near-overhead view over a district so crowds, queues and the spread of news read across the rooftops. */
+  swarm(x: number, z: number, spanM = 700, ms = 1200): void {
+    this.flyTo({ target: [x, z], radius: Math.max(320, Math.min(1400, spanM)), heading: this.pose.heading, elevation: 68 }, ms, 'swarm')
   }
 
   /** Track a moving point (follow modes) without fighting the user's orbit: only the target moves. */
