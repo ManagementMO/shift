@@ -496,3 +496,28 @@ Some are mostly an excuse to watch a tiny city descend into chaos.
 The same underlying system makes both interesting.
 
 God’s Plan started because we wanted to see what would happen if AI agents stopped reasoning about a world from the outside and instead had to exist **inside one** - surrounded by other agents, incomplete information, physical constraints, relationships, and the consequences of their own decisions.
+
+---
+
+# Local storage setup
+
+Application records now use **MongoDB Atlas** by default. Before starting the API, set
+`MONGODB_URI` (the Atlas `mongodb+srv://` connection string) and `MONGODB_DATABASE` in
+`backend/.env` or the process environment. The example database is `cityshift_events_development`;
+use a separate database per environment. Keep the URI out of source control and frontend variables.
+Allow the backend's IP in Atlas Network Access and give its database user `readWrite` access only
+to the chosen database. TLS certificate and hostname verification stay enabled; an approved custom
+CA bundle can be supplied with `MONGODB_TLS_CA_FILE` if required by your network.
+
+Scenarios and their demand are inserted together as one immutable document. Plans and validations
+are likewise stored together; run status, evidence, and investigations also live in Atlas. City
+packs and large SUMO/replay artifacts remain on disk (R2 export is still optional). Existing JSON
+records are not automatically imported, overwritten, or deleted. Run execution remains local to a
+single backend process; Atlas is not a distributed simulation job queue. `/api/health` reports
+storage readiness without exposing the connection string. Atlas failures do not silently switch stores.
+
+Select Atlas with `CITYSHIFT_STORAGE=mongodb`; for an explicitly offline demo, set
+`CITYSHIFT_STORAGE=json`. The legacy `CITYSHIFT_STORE` setting is accepted only when
+`CITYSHIFT_STORAGE` is absent. Unit tests use isolated temporary JSON stores or an in-memory
+MongoDB mock and do not require Atlas credentials. Documents larger
+than MongoDB's 16 MiB limit are rejected before writing; reduce the scenario cohort if necessary.

@@ -86,9 +86,19 @@ def runner_for(pack: CityPack) -> SumoRunner:
         return _runners[pack.pack_id]
 
 
-def run_id_for(scenario: ScenarioSpec, plan: ServicePlan, seed: int) -> str:
-    """Deterministic: same scenario + plan + seed => same run id (duplicate submissions are idempotent)."""
-    return "run-" + content_hash({"s": scenario.model_dump(mode="json"), "p": plan.model_dump(mode="json"), "seed": seed})[:12]
+RUN_IDENTITY_EXCLUDES = {"created_at", "label", "change_set", "demolished"}
+
+
+def run_id_for(scenario: ScenarioSpec, plan: ServicePlan, seed: int, demand: DemandSet) -> str:
+    """Deterministic: same scenario + plan + seed => same run id (duplicate submissions are idempotent).
+
+    Provenance fields (creation clock, label, change log) and demolished base buildings are excluded: none of them
+    change what SUMO simulates, so a run stays current across them.
+    """
+    return "run-" + content_hash({
+        "s": scenario.model_dump(mode="json", exclude=RUN_IDENTITY_EXCLUDES), "p": plan.model_dump(mode="json"),
+        "seed": seed, "demand": content_hash(demand), "compiler": "multi-origin-v1",
+    })[:12]
 
 
 def execute_run(
@@ -106,6 +116,8 @@ def execute_run(
     run.engine_version = sumo_version()
     report = validate_plan(pack, scenario, plan, demand)
     (run_dir / "validation.json").write_text(report.model_dump_json(indent=1))
+    (run_dir / "scenario.json").write_text(scenario.model_dump_json(indent=1))
+    (run_dir / "demand.json").write_text(demand.model_dump_json(indent=1))
     if not report.valid:
         run.status = RunStatus.invalid
         run.error = "; ".join(i.message for i in report.issues if i.severity == "hard")
@@ -165,6 +177,8 @@ def execute_run(
             "run_id": run.run_id, "scenario_id": scenario.scenario_id, "plan_id": plan.plan_id, "seed": run.seed,
             "pack": pack.pack_id, "network_fingerprint": pack.network_fingerprint, "engine": run.engine_version,
             "evidence_hash": scenario.evidence_hash, "demand_id": demand.demand_id,
+            "demand_hash": content_hash(demand),
+            "scenario_hash": content_hash(scenario.model_dump(mode="json", exclude={"created_at"})),
         }
         run.manifest_hash = content_hash(manifest)
         (run_dir / "manifest.json").write_text(json.dumps(manifest | {"manifest_hash": run.manifest_hash}, indent=1))

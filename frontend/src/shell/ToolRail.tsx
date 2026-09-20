@@ -4,14 +4,10 @@ import { AREAS, startPick } from '../world/areaSelect'
 
 const TOOLS: { id: ToolId; label: string; path: string }[] = [
   { id: 'area', label: 'Area select', path: 'M4 8V4h4 M16 4h4v4 M20 16v4h-4 M8 20H4v-4 M12 9v6 M9 12h6' },
-  { id: 'closure', label: 'Closure', path: 'M5 5h14v14H5z M8 12h8' },
-  { id: 'route', label: 'Bus route', path: 'M5 18v-7a5 5 0 0 1 5-5h8 M14 2l4 4-4 4 M3 18h4v4H3z' },
-  { id: 'stop', label: 'Bus stop', path: 'M6 4h12v12H6z M9 8h6 M12 16v6 M8 22h8' },
+  { id: 'closure', label: 'Road closures', path: 'M5 5h14v14H5z M8 12h8' },
+  { id: 'development', label: 'Development', path: 'M4 22V9l5-4 5 4v13 M14 22V13l6-3v12 M2 22h20 M7 12h1 M10 12h1 M7 16h1 M10 16h1 M17 15h1 M17 18h1' },
   { id: 'population', label: 'Population', path: 'M8 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M2 20v-3a6 6 0 0 1 12 0v3 M16 5a3 3 0 0 1 0 6 M17 14a5 5 0 0 1 5 5v1' },
-  { id: 'event', label: 'Event', path: 'M5 5h14v16H5z M8 2v6 M16 2v6 M5 11h14 M9 15h6' },
-  { id: 'weather', label: 'Tornado', path: 'M3 5h18 M5 9h13 M8 13h9 M10 17h5 M12 21h2' },
-  { id: 'road', label: 'Road', path: 'M7 2L4 22 M17 2l3 20 M12 3v4 M12 10v4 M12 17v4' },
-  { id: 'intersection', label: 'Intersection', path: 'M8 2v6H2 M16 2v6h6 M2 16h6v6 M22 16h-6v6' },
+  { id: 'temperature', label: 'Temperature', path: 'M10 14V5a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0Z M12 9v7' },
 ]
 
 export default function ToolRail({ active = true }: { active?: boolean }) {

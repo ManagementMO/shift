@@ -9,7 +9,7 @@ import { Camera } from '@babylonjs/core/Cameras/camera'
 
 import type { WorldData } from './worldData'
 
-export type CameraMode = 'city' | 'district' | 'corridor' | 'agent' | 'vehicle' | 'incident' | 'swarm'
+export type CameraMode = 'city' | 'district' | 'corridor' | 'agent' | 'vehicle' | 'incident' | 'development' | 'swarm'
 
 export interface Pose {
   target: [number, number] // x, z (world metres); target height is always ground
@@ -63,6 +63,7 @@ const ease = (t: number): number => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 *
 export class WorldCamera {
   private flight: { from: Pose; to: Pose; t0: number; ms: number; raf: number } | null = null
   mode: CameraMode = 'city'
+  looking = false
   readonly cam: ArcRotateCamera
   readonly world: WorldData
   readonly fixed: boolean
@@ -84,6 +85,24 @@ export class WorldCamera {
     } else {
       cam._panningMouseButton = 1
       cam.movement.input.addEntry({ source: 'pointer', button: 2, interaction: 'rotate' })
+      let enabled = false
+      cam.inputs.add({
+        camera: cam,
+        getClassName: () => 'FixedEyeLookInput',
+        getSimpleName: () => 'fixedEyeLook',
+        attachControl: () => { enabled = true },
+        detachControl: () => { enabled = false; this.looking = false; cam.movement.resetRotationVelocity() },
+        checkInputs: () => {
+          this.looking = false
+          const { x, y } = cam.movement.rotationAccumulatedPixels
+          if (enabled && (x || y || cam.movement.zoomAccumulatedPixels || cam.movement.panAccumulatedPixels.lengthSquared())) {
+            this.cancel()
+            this.mode = 'city'
+          }
+          cam.movement.resetRotationVelocity()
+          if (enabled && (x || y)) this.look(x, y)
+        },
+      })
       this.city(0)
     }
     cam.getScene().onBeforeRenderObservable.add(() => this.updateProjection())
@@ -130,6 +149,29 @@ export class WorldCamera {
 
   get flying(): boolean {
     return this.flight !== null
+  }
+
+  get eye(): Vector3 {
+    const c = this.cam, horizontal = c.radius * Math.sin(c.beta)
+    return new Vector3(c.target.x + Math.cos(c.alpha) * horizontal, c.target.y + c.radius * Math.cos(c.beta), c.target.z + Math.sin(c.alpha) * horizontal)
+  }
+
+  constrainEye(bounds: WorldData['crs']['bounds_world'], groundHeight: (x: number, z: number) => number): void {
+    if (this.fixed || this.flying) return
+    const eye = this.eye
+    const x = Math.max(bounds[0], Math.min(bounds[2], eye.x)), z = Math.max(bounds[1], Math.min(bounds[3], eye.z))
+    const y = Math.max(groundHeight(x, z) + 3, Math.min(12000, eye.y))
+    this.cam.target.addInPlaceFromFloats(x - eye.x, y - eye.y, z - eye.z)
+  }
+
+  private look(dx: number, dy: number): void {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return
+    const c = this.cam, eye = this.eye, direction = c.invertRotation ? -1 : 1
+    c.alpha += dx * direction * (c.getScene().useRightHandedSystem ? -1 : 1)
+    c.beta = Math.max(Math.max(0.01, c.lowerBetaLimit ?? 0.08), Math.min(Math.min(Math.PI - 0.01, c.upperBetaLimit ?? Math.PI - 0.08), c.beta + dy * direction))
+    c.target.addInPlace(eye.subtract(this.eye))
+    this.looking = true
+    c.getViewMatrix(true)
   }
 
   get pose(): Pose {
@@ -240,7 +282,7 @@ export class WorldCamera {
 
   /** Track a moving point (follow modes) without fighting the user's orbit: only the target moves. */
   follow(x: number, z: number, y = 0): void {
-    if (this.fixed || this.flight) return
+    if (this.fixed || this.flight || this.mode !== 'agent') return
     this.cam.target.set(x, y, z)
   }
 }

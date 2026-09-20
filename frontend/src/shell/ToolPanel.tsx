@@ -1,25 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api } from '../api'
+import { applyNow, environmentAt, live, liveClosuresAt, useLive } from '../live/session'
 import { useStore, type ToolId } from '../store'
-import type { ServicePlan } from '../types'
-import { fmt } from '../util'
-import { currentPose, incidentPose } from '../world/camera'
-import { clock } from '../world/playback'
-import { cameraTo, leadMap } from '../world/registry'
 import { AREAS, startPick } from '../world/areaSelect'
-import { ghostFromProposal } from './ghost'
-import ProposalCard from './ProposalCard'
+import { corridorPose, currentPose } from '../world/camera'
+import { cameraTo, leadMap } from '../world/registry'
+import { edgePath } from '../util'
+import DevelopmentTool from './DevelopmentTool'
+import LivePreviewCard from './LivePreviewCard'
 
 const TITLES: Record<ToolId, string> = {
   area: 'Area select',
-  closure: 'Close or reopen a street',
-  route: 'Add a bus route',
-  stop: 'Bus stops',
+  closure: 'Road closures',
+  development: 'New development',
   population: 'Population',
-  event: 'Event',
-  weather: 'Tornado / corridor hazard',
-  road: 'Roads',
-  intersection: 'Intersections',
+  temperature: 'Temperature',
 }
 
 export default function ToolPanel() {
@@ -27,7 +21,7 @@ export default function ToolPanel() {
   const setTool = useStore((s) => s.setTool)
   if (!tool) return null
   return (
-    <aside className="toolpanel">
+    <aside className={`toolpanel ${tool === 'development' ? 'toolpanel-development' : ''}`}>
       <div className="toolpanel-head">
         <b>{TITLES[tool]}</b>
         <button className="iconbtn small" onClick={() => setTool(null)} aria-label="Close">
@@ -36,13 +30,10 @@ export default function ToolPanel() {
       </div>
       {tool === 'area' && <AreaTool />}
       {tool === 'closure' && <ClosureTool />}
-      {tool === 'weather' && <HazardTool />}
-      {tool === 'route' && <RouteTool />}
-      {tool === 'stop' && <StopTool />}
+      {tool === 'development' && <DevelopmentTool />}
       {tool === 'population' && <PopulationTool />}
-      {tool === 'event' && <EventTool />}
-      {(tool === 'road' || tool === 'intersection') && <StructuralTool kind={tool} />}
-      <ProposalCard />
+      {tool === 'temperature' && <TemperatureTool />}
+      {tool !== 'development' && tool !== 'closure' && <LivePreviewCard onApplied={() => useStore.getState().setGhost(null)} />}
     </aside>
   )
 }
@@ -90,332 +81,163 @@ function AreaTool() {
   )
 }
 
-function usePreview() {
-  const scenarioId = useStore((s) => s.scenarioId)
-  const pack = useStore((s) => s.pack)
-  const setGhost = useStore((s) => s.setGhost)
-  const setError = useStore((s) => s.setError)
-  const [busy, setBusy] = useState(false)
-  const preview = async (prompt: string) => {
-    if (!scenarioId) return
-    setBusy(true)
-    try {
-      setGhost(ghostFromProposal(await api.previewEdit(scenarioId, prompt), pack))
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return { preview, busy }
-}
-
-function WindowPicker({ start, end, setStart, setEnd, horizon }: { start: number; end: number; setStart: (v: number) => void; setEnd: (v: number) => void; horizon: number }) {
-  return (
-    <div className="row small">
-      <label>
-        from +{fmt(start)}
-        <input type="range" min={0} max={horizon} step={60} value={start} onChange={(e) => setStart(Math.min(Number(e.target.value), end))} />
-      </label>
-      <label>
-        to +{fmt(end)}
-        <input type="range" min={0} max={horizon} step={60} value={end} onChange={(e) => setEnd(Math.max(Number(e.target.value), start))} />
-      </label>
-    </div>
-  )
-}
-
+/**
+ * Close a street in the running city. Pick a named street here (the camera flies to it) or click a drivable
+ * segment on the map, then Apply: SUMO validates and applies the closure in one step. It stays closed until it is
+ * reopened from the barricaded street's card. Sidewalks stay open.
+ */
 function ClosureTool() {
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const setGhost = useStore((s) => s.setGhost)
   const corridors = useStore((s) => s.corridors)
-  const [picked, setKey] = useState<string | null>(null)
-  const key = picked && corridors[picked] ? picked : Object.keys(corridors).find((k) => !corridors[k].flagship_closure) ?? Object.keys(corridors)[0] ?? ''
-  const [mode, setMode] = useState<'close' | 'reopen'>('close')
-  const horizon = scenario?.constraints.horizon_s ?? 2700
-  const [start, setStart] = useState(0)
-  const [end, setEnd] = useState(horizon)
-  const { preview, busy } = usePreview()
+  const roads = useStore((s) => s.roads)
+  const ghost = useStore((s) => s.ghost)
+  const setGhost = useStore((s) => s.setGhost)
+  const select = useStore((s) => s.select)
+  const { busy, error, primary } = useLive()
+  const t = useStore((s) => s.t)
+  const picked = ghost?.edges ?? []
+  const closures = useMemo(() => liveClosuresAt(primary?.state ?? null, t, (edges) => Object.values(corridors).find((c) => c.edge_ids.every((e) => edges.includes(e)))?.label ?? null), [primary, t, corridors])
+  const closedBy = useMemo(() => {
+    const out = new Map<string, string>()
+    for (const [k, c] of Object.entries(corridors)) {
+      const r = closures.find((x) => c.edge_ids.some((e) => x.edge_ids.includes(e)))
+      if (r) out.set(k, r.restriction_id)
+    }
+    return out
+  }, [corridors, closures])
+  const pickedKey = Object.keys(corridors).find((k) => corridors[k].edge_ids.length === picked.length && corridors[k].edge_ids.every((e) => picked.includes(e))) ?? ''
 
-  // Placement preview: hovering/selecting a corridor ghosts it on the world before any agent call.
-  useEffect(() => {
-    const c = corridors[key]
-    if (!c) return
-    setGhost({ proposal: null, edges: c.edge_ids, stops: [], hazard: null })
-  }, [key, corridors, setGhost])
-
-  const closedKeys = useMemo(() => {
-    const closed = new Set(scenario?.restrictions.flatMap((r) => r.edge_ids) ?? [])
-    return new Set(Object.keys(corridors).filter((k) => corridors[k].edge_ids.some((e) => closed.has(e))))
-  }, [corridors, scenario])
+  const pick = (k: string) => {
+    const rid = closedBy.get(k)
+    if (rid) {
+      select({ kind: 'restriction', id: rid })
+      return
+    }
+    live.discard()
+    setGhost({ edges: corridors[k].edge_ids, stops: [], hazard: null })
+    const lead = leadMap()
+    const path = edgePath(roads, corridors[k].edge_ids)
+    if (lead && !lead.cameraLocked && path.length >= 2) cameraTo(corridorPose(path, currentPose(lead)), 'corridor')
+  }
+  const apply = async () => {
+    if (await applyNow({ kind: 'close_road', edge_ids: picked, until_s: null })) setGhost(null)
+  }
 
   return (
     <div className="tool">
-      <div className="seg">
-        <button className={mode === 'close' ? 'on' : ''} onClick={() => setMode('close')}>
-          Close
-        </button>
-        <button className={mode === 'reopen' ? 'on' : ''} onClick={() => setMode('reopen')}>
-          Reopen
-        </button>
-      </div>
+      <div className="small dim">Choose a street below or click a drivable segment on the map, then apply. Closed streets get barricades; click one to reopen it.</div>
       <div className="list">
         {Object.entries(corridors).map(([k, c]) => (
-          <button key={k} className={`listitem ${key === k ? 'on' : ''}`} onClick={() => setKey(k)}>
+          <button key={k} className={`listitem ${pickedKey === k ? 'on' : ''}`} onClick={() => pick(k)} aria-pressed={pickedKey === k}>
             <span>{c.label}</span>
-            <span className="dim">
-              {c.edge_ids.length} seg{closedKeys.has(k) ? ' · closed now' : ''}
+            <span className={closedBy.has(k) ? 'closed' : 'dim'}>
+              {c.edge_ids.length} seg{closedBy.has(k) ? ' · closed — click to manage' : ''}
             </span>
           </button>
         ))}
       </div>
-      {mode === 'close' && <WindowPicker start={start} end={end} setStart={setStart} setEnd={setEnd} horizon={horizon} />}
-      <button
-        className="primary"
-        disabled={!key || busy}
-        onClick={() => void preview(mode === 'close' ? `close ${corridors[key].label} from ${fmt(start)} to ${fmt(end)}` : `reopen ${corridors[key].label}`)}
-      >
-        {busy ? 'Proposing…' : 'Preview'}
+      <div className="small dim">{picked.length ? `${picked.length} road segment${picked.length === 1 ? '' : 's'} selected` : 'Nothing selected yet'}</div>
+      {error && <div className="small bad">{error}</div>}
+      <button className="primary" disabled={!picked.length || !!busy || !primary} onClick={() => void apply()}>
+        {busy ? 'Closing…' : picked.length ? 'Apply closure' : 'Choose a street'}
       </button>
     </div>
   )
 }
 
-function HazardTool() {
-  const pack = useStore((s) => s.pack)
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const ghost = useStore((s) => s.ghost?.hazard ?? null)
-  const cued = ghost ?? scenario?.hazards[0]
-  const cue = () => {
-    if (!cued?.waypoints.length) return
-    clock.pause()
-    clock.seek(Math.max(0, cued.start_s - 30))
-    clock.setSpeed(8)
-    useStore.getState().setPicking(false)
-    const map = leadMap()
-    if (map) cameraTo(incidentPose(cued.waypoints[0], cued.radius_m * 3, currentPose(map)), 'incident')
-    clock.play()
-  }
-  const horizon = scenario?.constraints.horizon_s ?? 2700
-  const places = useMemo(() => [{ id: 'venue', name: 'the venue' }, ...(pack?.zones.map((z) => ({ id: z.zone_id, name: z.name })) ?? [])], [pack])
-  const [from, setFrom] = useState('venue')
-  const [toChoice, setTo] = useState('')
-  const to = toChoice || places[1]?.id || ''
-  const [radius, setRadius] = useState(250)
-  const [start, setStart] = useState(Math.round(horizon * 0.3))
-  const [end, setEnd] = useState(Math.round(horizon * 0.7))
-  const { preview, busy } = usePreview()
-  const name = (id: string) => places.find((p) => p.id === id)?.name ?? id
-  return (
-    <div className="tool">
-      <div className="small dim">The backend models a timed closure of the full corridor. Tornado smoke and building damage are visual effects, not structural physics; previewing them does not change the current SUMO replay.</div>
-      <a className="ghostbtn" href="/tornado">Open tornado sandbox</a>
-      <label className="small">
-        from
-        <select value={from} onChange={(e) => setFrom(e.target.value)}>
-          {places.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="small">
-        towards
-        <select value={to} onChange={(e) => setTo(e.target.value)}>
-          {places.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="small">
-        radius {radius} m
-        <input type="range" min={100} max={600} step={25} value={radius} onChange={(e) => setRadius(Number(e.target.value))} />
-      </label>
-      <WindowPicker start={start} end={end} setStart={setStart} setEnd={setEnd} horizon={horizon} />
-      <button className="primary" disabled={busy || !to} onClick={() => void preview(`storm corridor via ${name(from)} and ${name(to)} ${radius} m from ${fmt(start)} to ${fmt(end)}`)}>
-        {busy ? 'Proposing…' : 'Preview path'}
-      </button>
-      {cued && <button className="ghostbtn" onClick={cue}>Cue tornado {ghost ? 'preview' : ''}</button>}
-    </div>
-  )
-}
-
-function RouteTool() {
-  const pack = useStore((s) => s.pack)
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const scenarioId = useStore((s) => s.scenarioId)
-  const plans = useStore((s) => s.plans)
-  const setError = useStore((s) => s.setError)
-  const setGhost = useStore((s) => s.setGhost)
-  const [vehicle, setVehicle] = useState(scenario?.constraints.fleet[0]?.vehicle_id ?? '')
-  const [seq, setSeq] = useState<string[]>([])
-  const [q, setQ] = useState('')
-  const [result, setResult] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const allowed = useMemo(() => new Set(scenario?.constraints.allowed_stop_ids ?? []), [scenario])
-  const stops = useMemo(() => {
-    const list = pack?.stops ?? []
-    const lq = q.trim().toLowerCase()
-    return list.filter((s) => (!lq || s.name.toLowerCase().includes(lq)) && (lq || allowed.has(s.stop_id))).slice(0, 12)
-  }, [pack, q, allowed])
-
-  useEffect(() => {
-    setGhost({ proposal: null, edges: [], stops: pack?.stops.filter((s) => seq.includes(s.stop_id)) ?? [], hazard: null })
-  }, [seq, pack, setGhost])
-
-  const submit = async () => {
-    if (!scenarioId || seq.length < 2) return
-    setBusy(true)
-    try {
-      const plan: ServicePlan = {
-        plan_id: `route-${vehicle}-${seq.map((s) => s.slice(-4)).join('-')}`.toLowerCase().replace(/[^a-z0-9-]/g, ''),
-        name: `Route ${seq.map((s) => pack?.stops.find((x) => x.stop_id === s)?.name ?? s).join(' → ')}`,
-        family: 'custom',
-        duties: [{ duty_id: `${vehicle}-d1`, vehicle_id: vehicle, stop_sequence: seq, depart_s: scenario?.constraints.service_window_s[0] ?? 0, layover_s: 60 }],
-        authored_by: 'user',
-        rationale: 'Drawn in the route tool.',
-        assumptions: [],
-        parent_plan_id: null,
-      }
-      const pv = await api.submitPlan(scenarioId, plan)
-      useStore.setState({ plans: [...plans.filter((p) => p.plan.plan_id !== pv.plan.plan_id), pv] })
-      setResult(pv.validation?.valid ? 'Valid — run it from the scenario drawer.' : `Rejected: ${pv.validation?.issues.map((i) => i.message).join('; ')}`)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="tool">
-      <div className="small dim">A route is a plan: one shuttle serving a stop sequence, validated by the same rules as agent plans.</div>
-      <label className="small">
-        vehicle
-        <select value={vehicle} onChange={(e) => setVehicle(e.target.value)}>
-          {scenario?.constraints.fleet.map((f) => (
-            <option key={f.vehicle_id} value={f.vehicle_id}>
-              {f.vehicle_id} · {f.capacity} seats
-            </option>
-          ))}
-        </select>
-      </label>
-      <input placeholder="find a stop (e.g. Union, Queens Quay)" value={q} onChange={(e) => setQ(e.target.value)} />
-      <div className="list">
-        {stops.map((s) => (
-          <button key={s.stop_id} className={`listitem ${seq.includes(s.stop_id) ? 'on' : ''}`} onClick={() => setSeq(seq.includes(s.stop_id) ? seq.filter((x) => x !== s.stop_id) : [...seq, s.stop_id])}>
-            <span>{s.name}</span>
-            <span className="dim">{allowed.has(s.stop_id) ? 'allowed' : 'not in allowed set'}</span>
-          </button>
-        ))}
-      </div>
-      {seq.length > 0 && <div className="small">{seq.map((s, i) => `${i + 1}. ${pack?.stops.find((x) => x.stop_id === s)?.name ?? s}`).join('  ')}</div>}
-      <button className="primary" disabled={busy || seq.length < 2 || !vehicle} onClick={() => void submit()}>
-        {busy ? 'Validating…' : 'Validate route'}
-      </button>
-      {result && <div className="small">{result}</div>}
-    </div>
-  )
-}
-
-function StopTool() {
-  const pack = useStore((s) => s.pack)
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const [from, setFrom] = useState('')
-  const [to, setTo] = useState('')
-  const { preview, busy } = usePreview()
-  const allowed = pack?.stops.filter((s) => scenario?.constraints.allowed_stop_ids.includes(s.stop_id)) ?? []
-  const name = (id: string) => pack?.stops.find((s) => s.stop_id === id)?.name ?? id
-  return (
-    <div className="tool">
-      <div className="small dim">Stops are real OSM bus stops plus declared shuttle bays (marked “declared”). Move boarding from one to another; plans are re-validated.</div>
-      <label className="small">
-        withdraw
-        <select value={from} onChange={(e) => setFrom(e.target.value)}>
-          <option value="">—</option>
-          {allowed.map((s) => (
-            <option key={s.stop_id} value={s.stop_id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="small">
-        use instead
-        <select value={to} onChange={(e) => setTo(e.target.value)}>
-          <option value="">—</option>
-          {pack?.stops.slice(0, 200).map((s) => (
-            <option key={s.stop_id} value={s.stop_id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button className="primary" disabled={!from || !to || busy} onClick={() => void preview(`move stop ${name(from)} to ${name(to)}`)}>
-        {busy ? 'Proposing…' : 'Preview'}
-      </button>
-      <div className="small dim">Adding a brand-new stop needs a network rebuild (netconvert); it is not available live in this build.</div>
-    </div>
-  )
-}
-
+/** Add travelers to the running city: real journeys, routed by SUMO like everyone else's. */
 function PopulationTool() {
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const createFlagship = useStore((s) => s.createFlagship)
-  const building = useStore((s) => s.building)
-  const [n, setN] = useState(240)
-  const [busy, setBusy] = useState(false)
-  const go = async () => {
-    setBusy(true)
-    useStore.setState({ building: `Generating ${n} synthetic travelers · compiling scenario…` })
-    try {
-      await createFlagship(n, 7)
-    } finally {
-      useStore.setState({ building: null })
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="tool">
-      <div className="small dim">Demand is synthetic and declared as such. Changing the cohort compiles a new scenario (it is not a live edit).</div>
-      <label className="small">
-        travelers leaving the venue: <b>{n}</b>
-        <input type="range" min={20} max={2000} step={20} value={n} onChange={(e) => setN(Number(e.target.value))} />
-      </label>
-      <button className="primary" disabled={busy || !!building} onClick={() => void go()}>
-        {busy ? 'Compiling…' : `Build scenario with ${n} travelers`}
-      </button>
-      {scenario && <div className="small dim">current: {scenario.scenario_id}</div>}
-    </div>
-  )
-}
-
-function EventTool() {
   const pack = useStore((s) => s.pack)
-  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
+  const t = useStore((s) => s.t)
+  const { busy, draft, primary } = useLive()
+  const session = primary?.state ?? null
+  const environment = session ? environmentAt(session, t) : null
+  const [count, setCount] = useState(500)
+  const [destination, setDestination] = useState(() => pack?.zones.find((z) => /financial|downtown/i.test(z.name))?.zone_id ?? pack?.zones[0]?.zone_id ?? '')
+  const [origin, setOrigin] = useState('')
+  const [windowS, setWindowS] = useState(300)
+  const ceiling = 10000 - (environment?.population ?? 0)
   return (
     <div className="tool">
-      <div className="small">Event egress at {pack ? 'the venue' : '—'}: everyone leaves at once when the event ends (+00:00).</div>
-      {scenario && (
-        <div className="small dim">
-          fleet {scenario.constraints.fleet.map((f) => `${f.vehicle_id} (${f.capacity})`).join(', ')} · service window +{fmt(scenario.constraints.service_window_s[0])}–+{fmt(scenario.constraints.service_window_s[1])} · horizon +{fmt(scenario.constraints.horizon_s)}
-        </div>
+      <div className="population-head small">
+        <span>People in the city</span>
+        <span className="dim">{environment ? `${environment.population.toLocaleString()} travelers so far` : 'starting the city…'}</span>
+      </div>
+      <label className="small">
+        add travelers: <b>{count.toLocaleString()}</b>
+        <input type="range" min={50} max={Math.max(50, Math.min(5000, ceiling))} step={50} value={count} onChange={(e) => setCount(Number(e.target.value))} disabled={!!draft} />
+      </label>
+      <label className="small">
+        heading to
+        <select value={destination} onChange={(e) => setDestination(e.target.value)} disabled={!!draft}>
+          {pack?.zones.map((z) => (
+            <option key={z.zone_id} value={z.zone_id}>
+              {z.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="small">
+        starting from
+        <select value={origin} onChange={(e) => setOrigin(e.target.value)} disabled={!!draft}>
+          <option value="">spread across the other districts</option>
+          {pack?.zones.map((z) => (
+            <option key={z.zone_id} value={z.zone_id}>
+              {z.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="small">
+        leaving over
+        <select value={windowS} onChange={(e) => setWindowS(Number(e.target.value))} disabled={!!draft}>
+          <option value={0}>all at once</option>
+          <option value={60}>1 minute</option>
+          <option value={300}>5 minutes</option>
+          <option value={600}>10 minutes</option>
+        </select>
+      </label>
+      {!draft && (
+        <button className="primary" disabled={!!busy || !session || !destination || count < 1} onClick={() => void live.preview({ kind: 'population', count, destination_zone_id: destination, origin_zone_id: origin || null, release_window_s: windowS })}>
+          {busy ? 'Checking…' : `Preview +${count.toLocaleString()} travelers`}
+        </button>
       )}
-      <div className="small dim">Change crowd size with Population or assign shuttle service with Bus route.</div>
+      <div className="small dim">{session ? `${Math.round(session.config.car_share * 100)}% have a car; the rest walk or ride. Existing travelers keep their trips.` : ''}</div>
     </div>
   )
 }
 
-function StructuralTool({ kind }: { kind: 'road' | 'intersection' }) {
+/** Change the temperature: an explicit cold-response model alters walking speed and tolerance. */
+function TemperatureTool() {
+  const t = useStore((s) => s.t)
+  const { busy, draft, primary } = useLive()
+  const session = primary?.state ?? null
+  const current = session ? environmentAt(session, t).temperature : 20
+  const [target, setTarget] = useState<number | null>(null)
+  const value = target ?? current
   return (
     <div className="tool">
-      <div className="small">
-        <b>Not available live.</b> Adding a {kind} changes the SUMO network itself and needs a netconvert rebuild of the city pack, then a fresh compile of every scenario on it.
+      <div className="population-head small">
+        <span>Temperature</span>
+        <span className="dim">now {current}°C</span>
       </div>
-      <div className="small dim">What you can do now without pretending: close or reopen existing streets (Closure), or move boarding between existing stops (Bus stop). Both branch the scenario and re-run in SUMO.</div>
+      <label className="small">
+        set to <b>{value}°C</b>
+        <input type="range" min={-40} max={50} step={1} value={value} onChange={(e) => setTarget(Number(e.target.value))} disabled={!!draft} />
+      </label>
+      <div className="row">
+        <button className="ghostbtn" disabled={!!draft || value <= -40} onClick={() => setTarget(Math.max(-40, value - 20))}>
+          −20°C
+        </button>
+        <button className="ghostbtn" disabled={!!draft || value >= 50} onClick={() => setTarget(Math.min(50, value + 20))}>
+          +20°C
+        </button>
+      </div>
+      {!draft && (
+        <button className="primary" disabled={!!busy || !session || value === current} onClick={() => void live.preview({ kind: 'temperature', temperature_c: value })}>
+          {busy ? 'Checking…' : value === current ? 'Temperature unchanged' : `Preview ${value}°C`}
+        </button>
+      )}
+      <div className="small dim">Illustrative mobility assumptions, not a weather forecast. It does not assume snow or ice.</div>
     </div>
   )
 }

@@ -1,39 +1,29 @@
 import { create } from 'zustand'
 import { api } from './api'
-import { buildIndex, type ReplayIndex } from './replay'
+import { DEFAULT_HORIZON_S, developmentError as validateDevelopment, developmentKind, developmentPreset, validDevelopmentGeometry } from './development'
+import { enterCity, live } from './live/session'
 import { clock } from './world/playback'
-import { cityPose, type CameraMode } from './world/camera'
-import { cameraTo, watchCameraMode } from './world/registry'
-import type {
-  CityPack,
-  Corridor,
-  HazardTrack,
-  Health,
-  InterventionProposal,
-  Investigation,
-  PlanWithValidation,
-  ScenarioSpec,
-  SimulationRun,
-  StopCandidate,
-  Traveler,
-} from './types'
+import { cityPose, currentPose, developmentPose, type CameraMode } from './world/camera'
+import { cameraTo, leadMap, watchCameraMode } from './world/registry'
+import type { BuildingKind, CityPack, Corridor, Development, DevelopmentSpec, HazardTrack, Health, StopCandidate } from './types'
 
 export type Selection =
   | { kind: 'bus'; id: string }
   | { kind: 'person'; id: string }
   | { kind: 'car'; id: string }
   | { kind: 'stop'; id: string }
-  | { kind: 'restriction'; id: string }
+  /** A closure in force in the live city (id = the close command); `at` is the clicked lon/lat so its card opens there. */
+  | { kind: 'restriction'; id: string; at?: [number, number] }
+  /** A development standing in the live city. */
+  | { kind: 'development'; id: string }
+  /** A base-city building or landmark picked on the map (ids are the pack's OSM way ids); facts come from `SyncMap.buildingFacts`. */
   | { kind: 'building'; id: string }
   | null
 
-export type ToolId = 'area' | 'road' | 'intersection' | 'stop' | 'route' | 'population' | 'event' | 'closure' | 'weather'
+export type ToolId = 'area' | 'closure' | 'development' | 'population' | 'temperature'
 
-export type LensTab = 'people' | 'agents' | 'transport' | 'diagnostics'
-
-/** A proposed-but-unconfirmed change, drawn as a ghost on the world. Never applied without confirm. */
+/** What a tool is aiming at, drawn on the world before anything is applied: picked streets, stops, a hazard track. */
 export type Ghost = {
-  proposal: InterventionProposal | null
   edges: string[]
   stops: StopCandidate[]
   hazard: HazardTrack | null
@@ -44,61 +34,62 @@ type State = {
   packs: { pack_id: string; name: string }[]
   pack: CityPack | null
   roads: GeoJSON.FeatureCollection | null
-  /** Named streets of the pack (corridors.json): closure targets and the Corridor camera's pick regions. */
+  /** Named streets of the pack (corridors.json): closure targets and the Corridor picker's regions. */
   corridors: Record<string, Corridor>
-  scenarios: ScenarioSpec[]
-  scenarioId: string | null
-  travelers: Record<string, Traveler>
-  plans: PlanWithValidation[]
-  runs: SimulationRun[]
-  primaryRunId: string | null
-  replays: Record<string, ReplayIndex>
-  loadingReplay: string | null
   /** UI-rate copy of the playback clock (≈10 Hz); the renderer reads `clock.t` directly. */
   t: number
   playing: boolean
   speed: number
   selection: Selection
-  investigation: Investigation | null
   error: string | null
   // shell
   tool: ToolId | null
   ghost: Ghost | null
-  lens: LensTab | null
-  developer: boolean
   /** Last camera framing asked for through `cameraTo`; 'agent' keeps the camera gliding after the selected entity. */
   cameraMode: CameraMode
   /** Area select is choosing a district / corridor: the city outlines regions and a click flies in, then this clears. */
   picking: boolean
-  building: string | null // "freeze → build → reload" banner text while a branch is compiled
+  // development being placed (a live command once confirmed)
+  developmentDraft: DevelopmentSpec | null
+  developmentPlaced: boolean
+  /** Cursor position over the map while a draft is still being aimed; the ghost outline follows it. */
+  developmentHover: [number, number] | null
+  developmentError: string | null
+  /** Set when a city loads before any map is registered; the renderer consumes it on ready. */
+  pendingDevelopmentFocus: string | null
 
   boot: (packId?: string) => Promise<void>
   selectPack: (packId: string) => Promise<void>
-  selectScenario: (sid: string) => Promise<void>
-  createFlagship: (cohort: number, seed: number) => Promise<void>
-  refreshRuns: () => Promise<void>
-  submitRun: (planId: string, seed?: number) => Promise<void>
-  cancelRun: (rid: string) => Promise<void>
-  openRun: (rid: string) => Promise<void>
   select: (s: Selection) => void
-  setInvestigation: (i: Investigation | null) => void
   setError: (e: string | null) => void
   setTool: (t: ToolId | null) => void
   setGhost: (g: Ghost | null) => void
-  setLens: (l: LensTab | null) => void
-  setDeveloper: (d: boolean) => void
   setCameraMode: (m: CameraMode) => void
   setPicking: (p: boolean) => void
-  applyGhost: () => Promise<void>
+  chooseDevelopmentKind: (kind: BuildingKind) => void
+  setDevelopmentHover: (position: [number, number] | null) => void
+  /** Commit the aimed footprint: SUMO checks its street access straight away and the panel shows Confirm. */
+  placeDevelopment: (position: [number, number]) => void
+  previewDevelopment: () => Promise<void>
+  /** Confirm the previewed building into the running city. */
+  applyDevelopment: () => Promise<boolean>
+  /** Fly the lead camera to a development standing in the city. Returns false if none. */
+  focusDevelopment: (id?: string) => boolean
 }
 
 let packSelectionRequest = 0
-let scenarioSelectionRequest = 0
 
 /** Everything the shell needs about a city pack; a pack without corridors.json is still a usable city. */
 async function loadPack(packId: string): Promise<{ pack: CityPack; roads: GeoJSON.FeatureCollection; corridors: Record<string, Corridor> }> {
   const [pack, roads, corridors] = await Promise.all([api.pack(packId), api.roads(packId), api.corridors(packId).catch(() => ({}))])
   return { pack, roads, corridors }
+}
+
+const EMPTY_DEVELOPMENT = { developmentDraft: null, developmentPlaced: false, developmentHover: null, developmentError: null }
+
+/** Developments standing in the live city right now. */
+export function liveDevelopments(): Development[] {
+  return live.session?.developments ?? []
 }
 
 export const useStore = create<State>((set, get) => ({
@@ -107,43 +98,29 @@ export const useStore = create<State>((set, get) => ({
   pack: null,
   roads: null,
   corridors: {},
-  scenarios: [],
-  scenarioId: null,
-  travelers: {},
-  plans: [],
-  runs: [],
-  primaryRunId: null,
-  replays: {},
-  loadingReplay: null,
   t: clock.t,
   playing: clock.playing,
   speed: clock.speed,
   selection: null,
-  investigation: null,
   error: null,
   tool: null,
   ghost: null,
-  lens: null,
-  developer: false,
   cameraMode: 'city',
   picking: false,
-  building: null,
+  ...EMPTY_DEVELOPMENT,
+  pendingDevelopmentFocus: null,
 
   async boot(requestedPackId) {
     const request = ++packSelectionRequest
     try {
-      const [health, scenarios, packs] = await Promise.all([api.health(), api.scenarios(), api.packs()])
+      const [health, packs] = await Promise.all([api.health(), api.packs()])
       if (request !== packSelectionRequest) return
-      set({ health, scenarios, packs })
-      const requested = packs.find((p) => p.pack_id === requestedPackId)
-      const preferred = requested
-        ? scenarios.filter((s) => s.pack_id === requested.pack_id).at(-1)
-        : scenarios.find((s) => s.pack_id === 'toronto') ?? scenarios.at(-1)
-      const packId = requested?.pack_id ?? preferred?.pack_id ?? packs.find((p) => p.pack_id === 'toronto')?.pack_id ?? packs[0]?.pack_id ?? 'toronto'
+      set({ health, packs })
+      const packId = packs.find((p) => p.pack_id === requestedPackId)?.pack_id ?? packs.find((p) => p.pack_id === 'toronto')?.pack_id ?? packs[0]?.pack_id ?? 'toronto'
       const loaded = await loadPack(packId)
       if (request !== packSelectionRequest) return
       set(loaded)
-      if (preferred) await get().selectScenario(preferred.scenario_id)
+      await enterCity(packId)
     } catch (e) {
       if (request === packSelectionRequest) set({ error: String(e) })
     }
@@ -155,134 +132,95 @@ export const useStore = create<State>((set, get) => ({
     try {
       const loaded = await loadPack(packId)
       if (request !== packSelectionRequest) return
-      clock.pause()
-      clock.seek(0)
-      set({
-        ...loaded, scenarioId: null, travelers: {}, plans: [], runs: [], primaryRunId: null,
-        loadingReplay: null, selection: null, ghost: null, investigation: null, tool: null, cameraMode: 'city', picking: false, error: null,
-      })
+      set({ ...loaded, selection: null, ghost: null, tool: null, cameraMode: 'city', picking: false, error: null, pendingDevelopmentFocus: null, ...EMPTY_DEVELOPMENT })
       cameraTo(cityPose(loaded.pack.pack_id, loaded.pack.center), 'city')
-      const own = get().scenarios.filter((s) => s.pack_id === packId)
-      if (own.length) await get().selectScenario(own[own.length - 1].scenario_id)
+      await enterCity(packId)
     } catch (e) {
       if (request === packSelectionRequest) set({ error: String(e) })
     }
   },
 
-  async selectScenario(sid) {
-    const request = ++scenarioSelectionRequest
-    const sc = get().scenarios.find((s) => s.scenario_id === sid)
-    if (sc && sc.pack_id !== get().pack?.pack_id) {
-      const loaded = await loadPack(sc.pack_id)
-      if (request !== scenarioSelectionRequest) return
-      set(loaded)
-      cameraTo(cityPose(loaded.pack.pack_id, loaded.pack.center), 'city')
-    }
-    clock.pause()
-    clock.seek(0)
-    if (sc) clock.setHorizon(sc.constraints.horizon_s)
-    set({ scenarioId: sid, plans: [], runs: [], travelers: {}, primaryRunId: null, loadingReplay: null, selection: null, ghost: null })
-    const [plans, runs, demand] = await Promise.all([api.plans(sid), api.runs(sid), api.demand(sid).catch(() => null)])
-    if (request !== scenarioSelectionRequest || get().scenarioId !== sid) return
-    set({ plans, runs, travelers: Object.fromEntries((demand?.travelers ?? []).map((t) => [t.person_id, t])) })
-    const done = runs.filter((r) => r.status === 'completed')
-    if (done.length) await get().openRun(done[done.length - 1].run_id)
-    else if (!runs.length) {
-      const valid = plans.filter((p) => p.validation?.valid)
-      const initial = valid.find((p) => p.plan.family === 'none') ?? valid[0]
-      if (initial) await get().submitRun(initial.plan.plan_id)
-    }
-  },
-
-  async createFlagship(cohort, seed) {
-    try {
-      const s = await api.createFlagship({ pack_id: get().pack?.pack_id ?? 'toronto', seed, cohort_size: cohort, horizon_s: 2700 })
-      const scenarios = await api.scenarios()
-      set({ scenarios })
-      await get().selectScenario(s.scenario_id)
-    } catch (e) {
-      set({ error: String(e) })
-    }
-  },
-
-  async refreshRuns() {
-    const sid = get().scenarioId
-    if (!sid) return
-    const runs = await api.runs(sid)
-    if (get().scenarioId !== sid) return
-    set({ runs })
-    if (get().primaryRunId || get().loadingReplay) return
-    const done = runs.filter((r) => r.status === 'completed' && r.scenario_id === sid)
-    if (done.length) await get().openRun(done[done.length - 1].run_id)
-  },
-
-  async submitRun(planId, seed = 1) {
-    const sid = get().scenarioId
-    if (!sid) return
-    try {
-      await api.submitRun(sid, planId, seed)
-      await get().refreshRuns()
-    } catch (e) {
-      set({ error: String(e) })
-    }
-  },
-
-  async cancelRun(rid) {
-    await api.cancelRun(rid)
-    await get().refreshRuns()
-  },
-
-  async openRun(rid) {
-    const { replays, runs, scenarioId, primaryRunId, loadingReplay } = get()
-    if (rid === primaryRunId || rid === loadingReplay) return
-    clock.pause()
-    set({ loadingReplay: rid })
-    try {
-      let rx = replays[rid]
-      if (!rx) {
-        const run = runs.find((r) => r.run_id === rid) ?? (await api.run(rid))
-        rx = buildIndex(await api.bundle(run))
-        set({ replays: { ...get().replays, [rid]: rx } })
-      }
-      if (get().scenarioId !== scenarioId || get().loadingReplay !== rid) return
-      const scenario = get().scenarios.find((s) => s.scenario_id === scenarioId)
-      clock.setHorizon(Math.max(scenario?.constraints.horizon_s ?? 0, rx.tMax))
-      clock.seek(rx.activityStart ?? 0)
-      set({ primaryRunId: rid, selection: null })
-      clock.play()
-    } catch (e) {
-      if (get().scenarioId === scenarioId && get().loadingReplay === rid) set({ error: String(e) })
-    } finally {
-      if (get().loadingReplay === rid) set({ loadingReplay: null })
-    }
-  },
-
-  select: (selection) => set({ selection }),
-  setInvestigation: (investigation) => set({ investigation }),
+  select: (selection) => set({ selection, ...(selection?.kind === 'development' ? EMPTY_DEVELOPMENT : {}) }),
   setError: (error) => set({ error }),
-  // picking a different tool ends an Area select pick; closing the panel does not (the pick runs with it closed)
-  setTool: (tool) => set({ tool, ghost: tool ? get().ghost : null, picking: (tool === null || tool === 'area') && get().picking }),
+  // Picking a different tool ends an Area select pick (closing the panel does not: the pick runs with it closed),
+  // drops the aim of any tool, and opening the development tool starts a fresh draft for the current city.
+  setTool: (tool) => {
+    const { pack } = get()
+    if (tool !== get().tool) live.discard()
+    set({ tool, ghost: null, ...EMPTY_DEVELOPMENT,
+      picking: (tool === null || tool === 'area') && get().picking,
+      selection: tool === 'development' ? null : get().selection,
+      developmentDraft: tool === 'development' && pack ? developmentPreset(pack, live.session?.horizon_s ?? DEFAULT_HORIZON_S) : null,
+    })
+  },
   setGhost: (ghost) => set({ ghost }),
-  setLens: (lens) => set({ lens }),
-  setDeveloper: (developer) => set({ developer }),
   setCameraMode: (cameraMode) => set({ cameraMode }),
   setPicking: (picking) => set({ picking }),
 
-  /** Confirm a ghost: the backend applies the typed proposal to a NEW scenario id (parent stays immutable). */
-  async applyGhost() {
-    const { ghost, scenarioId } = get()
-    if (!ghost?.proposal || !scenarioId) return
-    set({ building: 'Freezing scenario · compiling branch…' })
-    try {
-      const s = await api.applyEdit(scenarioId, ghost.proposal)
-      const scenarios = await api.scenarios()
-      set({ scenarios, ghost: null, tool: null, building: `Branch ${s.scenario_id} compiled · loading world…` })
-      await get().selectScenario(s.scenario_id)
-    } catch (e) {
-      set({ error: String(e) })
-    } finally {
-      set({ building: null })
+  chooseDevelopmentKind: (kind) => {
+    const { pack, developmentDraft, developmentPlaced, tool } = get()
+    if (tool !== 'development' || !pack) return
+    const ordinal = liveDevelopments().filter((d) => developmentKind(d.spec) === kind).length + 1
+    const preset = developmentPreset(pack, live.session?.horizon_s ?? DEFAULT_HORIZON_S, kind, ordinal)
+    live.discard()
+    set({ developmentDraft: { ...preset, position: developmentDraft?.position ?? preset.position }, developmentError: null })
+    if (developmentPlaced) void get().previewDevelopment()
+  },
+  setDevelopmentHover: (developmentHover) => {
+    const { developmentDraft, developmentPlaced } = get()
+    if (!developmentDraft || developmentPlaced) return
+    const before = get().developmentHover
+    if (before === developmentHover || (before && developmentHover && before[0] === developmentHover[0] && before[1] === developmentHover[1])) return
+    set({ developmentHover })
+  },
+  placeDevelopment: (position) => {
+    const { developmentDraft, tool } = get()
+    if (tool !== 'development' || !developmentDraft) return
+    live.discard()
+    set({ developmentDraft: { ...developmentDraft, position }, developmentPlaced: true, developmentHover: null, developmentError: null })
+    void get().previewDevelopment()
+  },
+  async previewDevelopment() {
+    const { developmentDraft, developmentPlaced } = get()
+    const session = live.session
+    if (!session || !developmentDraft || !developmentPlaced) return
+    const problem = validateDevelopment(developmentDraft, session.horizon_s)
+    if (problem) {
+      set({ developmentError: problem })
+      return
     }
+    await live.preview({ kind: 'development', spec: developmentDraft })
+    const { error } = live.getSnapshot()
+    if (get().developmentDraft === developmentDraft) set({ developmentError: error })
+  },
+  async applyDevelopment() {
+    const { developmentDraft } = get()
+    const draft = live.getSnapshot().draft
+    if (!developmentDraft || draft?.intervention.kind !== 'development') return false
+    await live.apply()
+    const { error } = live.getSnapshot()
+    if (error) {
+      set({ developmentError: error })
+      return false
+    }
+    const added = liveDevelopments().at(-1)
+    set({ tool: null, ...EMPTY_DEVELOPMENT, selection: added ? { kind: 'development', id: added.development_id } : null })
+    return true
+  },
+  focusDevelopment(id) {
+    const developments = liveDevelopments()
+    const development = id ? developments.find((d) => d.development_id === id) ?? null : developments.at(-1) ?? null
+    if (!development || !validDevelopmentGeometry(development.spec)) return false
+    set({ selection: { kind: 'development', id: development.development_id }, ...EMPTY_DEVELOPMENT })
+    const lead = leadMap()
+    if (!lead) {
+      set({ pendingDevelopmentFocus: development.development_id })
+      return false
+    }
+    const { spec } = development
+    cameraTo(developmentPose(spec.position, spec.footprint_m, spec.height_m, currentPose(lead)), 'development')
+    set({ cameraMode: 'development', pendingDevelopmentFocus: null })
+    return true
   },
 }))
 

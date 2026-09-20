@@ -24,7 +24,7 @@ def main() -> None:
             print(f"   [{i.severity}] {i.code}: {i.message}")
         if not rep.valid:
             continue
-        run = SimulationRun(run_id=run_id_for(spec, plan, 1), scenario_id=spec.scenario_id, plan_id=plan.plan_id, seed=1)
+        run = SimulationRun(run_id=run_id_for(spec, plan, 1, demand), scenario_id=spec.scenario_id, plan_id=plan.plan_id, seed=1)
         t0 = time.time()
         execute_run(run, pack, spec, demand, plan, persist=lambda r: None)
         print(f"   status={run.status} in {time.time()-t0:.1f}s dir={run.run_dir}")

@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
+from cityshift.contracts import DevelopmentSpec
+
 MAX_TRAVELERS = 10000
 Identifier = Annotated[str, Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")]
 Temperature = Annotated[float, Field(ge=-40, le=50, allow_inf_nan=False)]
@@ -90,7 +92,24 @@ class IncidentChange(InputModel):
         return round(self.radius_m * HAZARDS[self.hazard].alarm_factor, 1)
 
 
-Intervention = Annotated[RoadChange | BusRouteChange | TemperatureChange | PopulationChange | IncidentChange, Field(discriminator="kind")]
+class DevelopmentChange(InputModel):
+    """Place a building in the running city: its declared trips are generated from the placement and inserted live."""
+
+    kind: Literal["development"]
+    spec: DevelopmentSpec
+
+
+class RemoveDevelopmentChange(InputModel):
+    """Demolish a placed development: travelers who have not set off yet are dropped, the rest finish their trips."""
+
+    kind: Literal["remove_development"]
+    development_id: Identifier
+
+
+Intervention = Annotated[
+    RoadChange | BusRouteChange | TemperatureChange | PopulationChange | IncidentChange | DevelopmentChange | RemoveDevelopmentChange,
+    Field(discriminator="kind"),
+]
 
 
 class InterventionRequest(InputModel):

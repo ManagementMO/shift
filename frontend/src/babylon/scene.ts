@@ -126,11 +126,11 @@ export class WorldScene {
     cam.lowerRadiusLimit = 45
     cam.upperRadiusLimit = 9000
     cam.lowerBetaLimit = 0.08
-    cam.upperBetaLimit = 1.5
+    cam.upperBetaLimit = Math.PI - 0.08
     cam.wheelDeltaPercentage = 0.035
     cam.pinchDeltaPercentage = 0.01
-    cam.angularSensibilityX = 900
-    cam.angularSensibilityY = 900
+    cam.angularSensibilityX = 400
+    cam.angularSensibilityY = 400
     cam.panningAxis = new Vector3(1, 0, 1)
     cam.mapPanning = true
     cam.panningInertia = 0.82
@@ -141,10 +141,21 @@ export class WorldScene {
       cam.panningSensibility = 45
     })
     this.camera = new WorldCamera(cam, world, opts.fixedCamera ?? false)
-    this.keys = new KeyboardPan(this.camera, this.terrain.shape.farBounds, scene, (x, z) => Math.max(0, this.terrain.shape.surface(x, z)))
+    const groundHeight = (x: number, z: number) => Math.max(0, this.terrain.shape.surface(x, z))
+    this.keys = new KeyboardPan(this.camera, this.terrain.shape.farBounds, scene, groundHeight)
+    cam.onAfterCheckInputsObservable.add(() => {
+      if (cam.movement.zoomDeltaCurrentFrame || cam.movement.panDeltaCurrentFrame.lengthSquared() || cam.inertialRadiusOffset || cam.inertialPanningX || cam.inertialPanningY) this.camera.constrainEye(this.terrain.shape.farBounds, groundHeight)
+    })
     if (!this.camera.fixed) {
       this.keys.attach(window)
-      const cancelFlight = () => this.camera.cancel()
+      const cancelFlight = (event: Event) => {
+        this.camera.cancel()
+        if (event.type === 'pointerdown') {
+          cam.inertialAlphaOffset = cam.inertialBetaOffset = cam.inertialRadiusOffset = 0
+          cam.inertialPanningX = cam.inertialPanningY = 0
+          cam.movement.resetPanVelocity()
+        }
+      }
       canvas.addEventListener('pointerdown', cancelFlight)
       canvas.addEventListener('wheel', cancelFlight, { passive: true })
       scene.onDisposeObservable.addOnce(() => {

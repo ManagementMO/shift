@@ -170,7 +170,8 @@ export function cohortSummaryAt(rx: ReplayIndex, t: number): Record<PersonState,
     not_departed: 0, walking: 0, waiting: 0, riding: 0, arrived: 0, unroutable: 0, driving: 0,
   }
   const modes = rx.bundle.compile?.mode_assignment ?? {}
-  for (const [pid, evs] of Object.entries(rx.personEvents)) out[personStateAt(evs, t, modes[pid])]++
+  const ids = rx.bundle.cohort?.cohort ?? rx.bundle.demand?.travelers.map((trip) => trip.person_id) ?? Object.keys(rx.personEvents)
+  for (const pid of ids) out[personStateAt(rx.personEvents[pid], t, modes[pid])]++
   return out
 }
 

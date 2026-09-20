@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SCHEMA_VERSION = "0.1"
 
@@ -108,6 +109,77 @@ class Traveler(BaseModel):
     depart_s: int
     has_car: bool = False
     walk_limit_m: int = 1500
+    development_id: str | None = None
+    trip_direction: Literal["outbound", "inbound"] | None = None
+
+
+class DevelopmentWave(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    start_s: int = Field(ge=0, le=86400)
+    end_s: int = Field(gt=0, le=86400)
+    profile: Literal["uniform", "triangular"]
+
+    @model_validator(mode="after")
+    def ordered(self) -> Self:
+        if self.start_s >= self.end_s:
+            raise ValueError("wave start must precede its end")
+        return self
+
+
+class DevelopmentSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=80)
+    land_use: Literal["residential", "office", "school", "park"]
+    position: tuple[Annotated[float, Field(ge=-180, le=180)], Annotated[float, Field(ge=-85, le=85)]]
+    footprint_m: tuple[Annotated[float, Field(gt=0, le=250)], Annotated[float, Field(gt=0, le=250)]]
+    height_m: float = Field(gt=0, le=300)
+    capacity: int = Field(ge=1, le=5000)
+    people_per_unit: float = Field(gt=0, le=10)
+    trip_rate: float = Field(gt=0, le=1)
+    car_share: float = Field(ge=0, le=1)
+    walk_limit_m: int = Field(ge=0, le=10000)
+    zone_shares: dict[str, Annotated[float, Field(ge=0, le=1)]]
+    first_wave: DevelopmentWave
+    return_wave: DevelopmentWave | None = None
+    seed: int = Field(default=7, ge=0, le=2147483647)
+
+    @model_validator(mode="after")
+    def consistent(self) -> Self:
+        if self.land_use != "residential" and self.people_per_unit != 1:
+            raise ValueError("office, school and park capacity already counts people (employees, students, visitors); people_per_unit must be 1")
+        if not self.zone_shares or not math.isclose(sum(self.zone_shares.values()), 1, abs_tol=1e-6):
+            raise ValueError("zone shares must sum to 1")
+        if self.return_wave and self.return_wave.start_s < self.first_wave.end_s:
+            raise ValueError("return/dismissal wave must start after the first wave ends")
+        return self
+
+
+class DevelopmentAccess(BaseModel):
+    mode: Literal["passenger", "pedestrian"]
+    edge_id: str
+    distance_m: float
+    zone_edges: dict[str, list[str]]
+
+
+class Development(BaseModel):
+    development_id: str
+    spec: DevelopmentSpec
+    access: list[DevelopmentAccess]
+
+
+class DevelopmentPreview(BaseModel):
+    preview_id: str
+    base_scenario_id: str
+    development: Development
+    participants: int
+    incumbent_trips: int
+    added_trips: int
+    inbound_trips: int
+    outbound_trips: int
+    car_trips: int
+    warnings: list[str]
 
 
 class DemandSet(BaseModel):
@@ -202,6 +274,10 @@ class ScenarioSpec(BaseModel):
     evidence_hash: str | None = None
     restrictions: list[Restriction] = []
     hazards: list[HazardTrack] = []
+    developments: list[Development] = []
+    # Base-city buildings (OSM way / landmark ids) removed in this scenario. Visual only: they generate no trips and
+    # touch no network edge, so they are excluded from run identity.
+    demolished: list[str] = []
     constraints: ConstraintSet
     parent_scenario_id: str | None = None
     change_set: list[str] = []

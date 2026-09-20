@@ -11,6 +11,8 @@ export class PlaybackClock {
   playing = false
   speed = 1
   horizon = 2700
+  /** Where playback wraps to on reaching the horizon; null stops there instead (the live mode's own clock). */
+  loopStart: number | null = null
   private frameListeners = new Set<Listener>()
   private uiListeners = new Set<Listener>()
   private raf = 0
@@ -44,9 +46,14 @@ export class PlaybackClock {
     this.emit(true)
   }
 
+  /** Keep a recorded replay running: on reaching the horizon jump back to `start` (its active traffic) and carry on. */
+  setLoop(start: number | null) {
+    this.loopStart = start === null ? null : Math.max(0, start)
+  }
+
   play() {
     if (this.playing) return
-    if (this.t >= this.horizon) this.t = 0
+    if (this.t >= this.horizon) this.t = this.wrapTo()
     this.playing = true
     this.last = performance.now()
     this.raf = requestAnimationFrame(this.step)
@@ -74,13 +81,24 @@ export class PlaybackClock {
     return () => void this.uiListeners.delete(l)
   }
 
+  /** Start of the next pass: the loop start when it lies inside the recording, else the beginning. */
+  private wrapTo(): number {
+    return this.loopStart !== null && this.loopStart < this.horizon ? this.loopStart : 0
+  }
+
   private step = (now: number) => {
     const dt = (now - this.last) / 1000
     this.last = now
     this.t = Math.min(this.horizon, this.frontier ?? this.horizon, this.t + dt * this.speed)
     if (this.t >= this.horizon) {
-      this.playing = false
+      if (this.loopStart === null) {
+        this.playing = false
+        this.emit(true)
+        return
+      }
+      this.t = this.wrapTo()
       this.emit(true)
+      this.raf = requestAnimationFrame(this.step)
       return
     }
     this.emit(false)

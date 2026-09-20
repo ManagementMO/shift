@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from cityshift.contracts import CityPack, ConstraintSet, DemandSet, FleetVehicle, Restriction, ScenarioSpec
+from cityshift.contracts import (
+    CityPack,
+    ConstraintSet,
+    DemandSet,
+    FleetVehicle,
+    Restriction,
+    ScenarioSpec,
+    content_hash,
+)
 from cityshift.domain.compiler import venue_stop_candidates
 from cityshift.domain.demand import generate_demand
 from cityshift.domain.network import load_corridors
@@ -46,4 +54,5 @@ def flagship_scenario(pack: CityPack, seed: int = 7, cohort_size: int = 240, hor
         constraints=cons,
         label=f"Event egress ({pack.name.split(' — ')[0]}) during the {closure_label} closure; two extra buses for {(horizon_s - 600) // 60} minutes",
     )
+    spec.scenario_id += "-" + content_hash(spec.model_dump(mode="json", exclude={"scenario_id", "created_at"}))[:8]
     return spec, demand

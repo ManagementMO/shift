@@ -181,7 +181,7 @@ export class BabylonSyncMap implements SyncMap {
 
   isMoving(): boolean {
     const c = this.ws.camera.cam
-    return this.ws.camera.flying || this.ws.keys?.moving || c.inertialAlphaOffset !== 0 || c.inertialBetaOffset !== 0 || c.inertialRadiusOffset !== 0 || c.inertialPanningX !== 0 || c.inertialPanningY !== 0
+    return this.ws.camera.flying || this.ws.camera.looking || this.ws.keys?.moving || c.inertialAlphaOffset !== 0 || c.inertialBetaOffset !== 0 || c.inertialRadiusOffset !== 0 || c.inertialPanningX !== 0 || c.inertialPanningY !== 0
   }
 
   on(ev: string, cb: MoveCb): void {
@@ -205,6 +205,13 @@ export class BabylonSyncMap implements SyncMap {
   projectAt(lngLat: [number, number], height: number): { x: number; y: number } {
     const [x, z] = this.ws.frame.lonLatToWorld(lngLat[0], lngLat[1])
     return this.projectWorld(x, height, z)
+  }
+
+  entityAt(id: string): { lonLat: [number, number]; heading: number; speed: number; state: number } | null {
+    const pose = this.ws.traffic.poseOf(id)
+    if (!pose) return null
+    // yaw is the Babylon rotation about +y (clockwise from north seen from above), i.e. a compass heading
+    return { lonLat: this.ws.frame.worldToLonLat(pose.x, pose.z), heading: (pose.yaw * 180) / Math.PI, speed: pose.speed ?? 0, state: pose.state ?? -1 }
   }
 
   buildingFacts(id: string): BuildingFacts | null {

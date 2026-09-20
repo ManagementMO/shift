@@ -25,6 +25,8 @@ export function interventionLabel(change: Intervention): string {
     case 'close_road': return `${change.edge_ids.length} road segments closed`
     case 'reopen_road': return `${change.edge_ids.length} road segments reopened`
     case 'incident': return `${change.label ?? HAZARDS.find(h => h.id === change.hazard)?.label ?? change.hazard} · ${change.radius_m} m`
+    case 'development': return `${change.spec.name} placed`
+    case 'remove_development': return 'development demolished'
   }
 }
 

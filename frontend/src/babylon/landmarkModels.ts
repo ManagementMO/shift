@@ -16,7 +16,8 @@ export async function loadLandmarkModels(ws: WorldScene): Promise<void> {
       asset.addAllToScene()
       for (const mesh of asset.rootNodes) mesh.parent = root
       for (const mesh of asset.meshes) {
-        mesh.isPickable = false
+        mesh.isPickable = true // clicking the model still resolves to the landmark for the delete card
+        mesh.metadata = { ...(mesh.metadata ?? {}), landmarkKind: l.kind, landmarkId: l.id }
         mesh.receiveShadows = true
         mesh.freezeWorldMatrix()
         if (mesh.getTotalVertices()) ws.shadows?.addShadowCaster(mesh, false)
@@ -26,9 +27,11 @@ export async function loadLandmarkModels(ws: WorldScene): Promise<void> {
         material.freeze()
       }
       for (const mesh of ws.city.chunks) if (mesh.metadata?.landmarkKind === l.kind) {
+        mesh.metadata.modelLoaded = true // the procedural fallback stays hidden even if the landmark is restored
         mesh.setEnabled(false)
         ws.shadows?.removeShadowCaster(mesh, false)
       }
+      if (ws.city.isHidden(l.id)) root.setEnabled(false)
       ws.landmarkModelsLoaded++
       ws.invalidateShadows()
     } catch (error) {
