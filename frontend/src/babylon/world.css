@@ -101,10 +101,6 @@
   background: var(--accent-soft);
   color: var(--accent);
 }
-.bworld-cams button.hero {
-  background: var(--accent);
-  color: #fff;
-}
 
 .bworld-transport {
   position: absolute;

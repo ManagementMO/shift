@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from './api'
 import { buildIndex } from './replay'
 import { useStore } from './store'
-import type { CityPack, DemandSet, Health, PlanWithValidation, RunBundle, ScenarioSpec, SimulationRun, Traveler } from './types'
+import type { CityPack, Corridor, DemandSet, Health, PlanWithValidation, RunBundle, ScenarioSpec, SimulationRun, Traveler } from './types'
 import { clock } from './world/playback'
 
 const pack: CityPack = {
@@ -214,6 +214,7 @@ describe('District selection', () => {
     vi.spyOn(api, 'scenarios').mockResolvedValue([scenario('toronto', 'toronto-run')])
     vi.spyOn(api, 'pack').mockImplementation(async (pack_id) => ({ pack_id, center: [-80.5395046, 43.4729528] }) as CityPack)
     vi.spyOn(api, 'roads').mockResolvedValue({ type: 'FeatureCollection', features: [] })
+    vi.spyOn(api, 'corridors').mockImplementation(async (pack_id): Promise<Record<string, Corridor>> => (pack_id === 'toronto' ? { front_west: { label: 'Front St W', edge_ids: ['e1'] } } : {}))
     vi.spyOn(api, 'plans').mockResolvedValue([])
     vi.spyOn(api, 'runs').mockResolvedValue([])
     vi.spyOn(api, 'demand').mockResolvedValue({ travelers: [] } as unknown as DemandSet)
@@ -291,6 +292,16 @@ describe('District selection', () => {
     expect(useStore.getState().scenarioId).toBe('toronto-run')
   })
 
+  it('loads the named corridors with the city and keeps the city usable without them', async () => {
+    await useStore.getState().boot('toronto')
+    expect(Object.keys(useStore.getState().corridors)).toEqual(['front_west'])
+    vi.mocked(api.corridors).mockRejectedValueOnce(new Error('no corridors.json'))
+    await useStore.getState().selectPack('waterloo_e7')
+    expect(useStore.getState().pack?.pack_id).toBe('waterloo_e7')
+    expect(useStore.getState().corridors).toEqual({})
+    expect(useStore.getState().error).toBeNull()
+  })
+
   it('keeps the scenario chosen from the globe when a slower earlier selection finishes later', async () => {
     vi.mocked(api.scenarios).mockResolvedValue([scenario('toronto', 'boot-default'), scenario('toronto', 'chosen-from-globe')])
     useStore.setState({ pack: { pack_id: 'toronto' } as CityPack, scenarios: [scenario('toronto', 'boot-default'), scenario('toronto', 'chosen-from-globe')] })
@@ -311,7 +322,7 @@ describe('District selection', () => {
     useStore.setState({
       pack: { pack_id: 'toronto' } as CityPack,
       scenarioId: 'toronto-run', primaryRunId: 'old-run',
-      travelers: { old: { person_id: 'old' } as Traveler }, selection: { kind: 'person', id: 'old' }, cameraMode: 'agent',
+      travelers: { old: { person_id: 'old' } as Traveler }, selection: { kind: 'person', id: 'old' }, cameraMode: 'agent', picking: true,
     })
     clock.seek(120)
     await useStore.getState().selectPack('waterloo_e7')
@@ -322,6 +333,7 @@ describe('District selection', () => {
     expect(state).not.toHaveProperty('compareRunId')
     expect(state).not.toHaveProperty('compareMode')
     expect(state.cameraMode).toBe('city')
+    expect(state.picking).toBe(false)
     expect(state.travelers).toEqual({})
     expect(state.selection).toBeNull()
     expect(clock.t).toBe(0)
