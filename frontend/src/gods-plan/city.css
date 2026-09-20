@@ -44,6 +44,8 @@
 .gp-shell .gp-selection-bubble .bubble { background: linear-gradient(125deg,#accfed26,#143b56a6); backdrop-filter: blur(20px) saturate(1.3); border: 1px solid #e7f6ff69; border-radius: 22px; color: #edf7ff; padding: 20px; box-shadow: 0 16px 42px #09233f38,inset 0 1px 1px #ffffff6b; font: inherit; }
 .gp-shell .gp-selection-bubble .dim { color: #bbd7e9; }
 .gp-shell .gp-selection-bubble button { border-radius: 13px; background: #e5f3ff14; color: #f2f8ff; padding: 7px 12px; }
+/* the card's close glyph is text: no button padding, so it sits in the exact centre of its square */
+.gp-shell .gp-selection-bubble .iconbtn, .gp-shell .gp-legacy-inline .iconbtn, .gp-shell .gp-legacy-panel .iconbtn { display: grid; place-items: center; padding: 0; line-height: 1; border-radius: 50%; }
 .gp-shell .gp-legacy-panel .drawer { position: relative; inset: auto; width: 100%; max-height: none; border: 0; background: none; box-shadow: none; backdrop-filter: none; color: #f0f8ff; padding: 0; }
 .gp-shell .gp-legacy-panel .drawer-head { padding: 0 0 17px; border-color: #daefff26; font-size: 22px; }
 .gp-shell .gp-legacy-panel .drawer-head:not(:first-child) { padding-top: 20px; }
