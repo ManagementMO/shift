@@ -6,6 +6,7 @@ import { cohortSummaryAt, seriesAt, STATE_COLORS, type PersonState } from '../re
 import type { Investigation, Renderer } from '../types'
 import { fmt } from '../util'
 import Inspector from '../components/Inspector'
+import BranchOutcomes from './BranchOutcomes'
 
 const TABS: { id: LensTab; label: string }[] = [
   { id: 'people', label: 'People' },
@@ -184,6 +185,7 @@ function TransportLens() {
   const stops = pack?.stops.filter((s) => Object.hasOwn(rx.stopQueue, s.stop_id)) ?? []
   return (
     <div className="lens-body">
+      <BranchOutcomes />
       <details className="small">
         <summary>Shuttles and stop queues · {fleet.length} vehicles, {stops.length} stops</summary>
         {!fleet.length && <p className="dim">No extra shuttle vehicles were used in this run.</p>}

@@ -1,5 +1,4 @@
-import { useState, type CSSProperties } from 'react'
-import { api } from '../api'
+import type { CSSProperties } from 'react'
 import { BUILDING_KIND_ORDER, BUILDING_KINDS, DEVELOPMENT_USES, developmentCounts, developmentDirection, developmentKind, developmentLabel, validDevelopmentGeometry } from '../development'
 import { useStore } from '../store'
 import type { BuildingKind, Development, DevelopmentSpec } from '../types'
@@ -44,7 +43,6 @@ function Assumptions({ spec }: { spec: DevelopmentSpec }) {
 function DevelopmentDetails({ development }: { development: Development }) {
   const { spec } = development
   const setTool = useStore((s) => s.setTool)
-  const submitRun = useStore((s) => s.submitRun)
   const counts = developmentCounts(spec)
   const kind = developmentKind(spec)
   return <div className="tool development-tool" style={{ '--kind-color': kind ? BUILDING_KINDS[kind].color : DEVELOPMENT_USES[spec.land_use].color } as CSSProperties}>
@@ -61,7 +59,6 @@ function DevelopmentDetails({ development }: { development: Development }) {
       <button className="ghostbtn" onClick={() => frameDevelopment(spec)}>Frame building</button>
       <button className="ghostbtn" onClick={() => { clock.seek(spec.first_wave.start_s); frameDevelopment(spec) }}>Show first wave</button>
     </div>
-    <button className="primary" onClick={() => void submitRun('baseline')}>Run this scenario in SUMO</button>
     <button className="ghostbtn" onClick={() => setTool('development')}>Place another</button>
     <div className="small dim">Synthetic one-way trips, not a calibrated forecast. No roads or construction restrictions were added.</div>
   </div>
@@ -81,7 +78,6 @@ export default function DevelopmentTool() {
   const chooseKind = useStore((s) => s.chooseDevelopmentKind)
   const applyDevelopment = useStore((s) => s.applyDevelopment)
   const setTool = useStore((s) => s.setTool)
-  const [runAfter, setRunAfter] = useState(false)
   const existing = scenario?.developments?.find((d) => selection?.kind === 'development' && selection.id === d.development_id)
   if (existing) return <DevelopmentDetails development={existing} />
   if (!pack || !draft) return <div className="tool small dim">Loading the city…</div>
@@ -89,15 +85,6 @@ export default function DevelopmentTool() {
   const preset = BUILDING_KINDS[kind]
   const counts = developmentCounts(draft)
   const status = !placed ? 'aim' : previewing || preparing ? 'checking' : error ? 'blocked' : preview ? 'ready' : 'checking'
-  const confirm = async () => {
-    const child = await applyDevelopment()
-    if (child && runAfter) {
-      try {
-        await api.submitRun(child.scenario_id, 'baseline')
-        await useStore.getState().refreshRuns()
-      } catch (e) { useStore.getState().setError(String(e)) }
-    }
-  }
   return <div className="tool development-tool" style={{ '--kind-color': preset.color } as CSSProperties}>
     <div className="kind-grid" role="radiogroup" aria-label="Building type">
       {BUILDING_KIND_ORDER.map((k) => <button key={k} role="radio" aria-checked={kind === k} aria-label={BUILDING_KINDS[k].label} title={BUILDING_KINDS[k].blurb}
@@ -121,9 +108,8 @@ export default function DevelopmentTool() {
     <Assumptions spec={draft} />
 
     {status === 'ready' && <div className="development-confirm">
-      <label className="small check"><input type="checkbox" checked={runAfter} onChange={(e) => setRunAfter(e.target.checked)} />Run the new branch in SUMO after confirming</label>
-      <button className="primary confirm" disabled={!!building} onClick={() => void confirm()}>Confirm {preset.label.toLowerCase()}</button>
-      <div className="small dim">Creates a new scenario branch. The parent, base map and existing trips stay unchanged.</div>
+      <button className="primary confirm" disabled={!!building} onClick={() => void applyDevelopment()}>Confirm {preset.label.toLowerCase()}</button>
+      <div className="small dim">Creates a new scenario branch and starts its SUMO run. The parent, base map and existing trips stay unchanged.</div>
     </div>}
     <button className="ghostbtn" onClick={() => setTool(null)}>Cancel</button>
     <div className="small dim">Synthetic experiment, not a planning forecast. Existing network access only; no new roads or construction closures.</div>

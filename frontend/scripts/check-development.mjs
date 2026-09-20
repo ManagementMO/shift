@@ -62,6 +62,12 @@ const ready = async () => {
   await page.waitForFunction(() => !!window.__cityshift?.babylon && !document.querySelector('.bworld-veil'), null, { timeout: 120000 })
   await page.waitForTimeout(1000)
 }
+/** `/` is the globe landing page (the built app has no SPA fallback for `/world`); fly into Toronto from there. */
+const enterCity = async () => {
+  await page.goto(base, { waitUntil: 'load' })
+  await page.getByRole('button', { name: 'Fly to Toronto', exact: true }).click()
+  await ready()
+}
 const positionCamera = async (position) => {
   await page.evaluate((center) => window.__cityshift.map().jumpTo({ center, zoom: 17.4, pitch: 50, bearing: 0 }), position)
   await page.waitForTimeout(700)
@@ -105,8 +111,7 @@ const openAimAndPlace = async () => {
 }
 
 try {
-  await page.goto(base, { waitUntil: 'load' })
-  await ready()
+  await enterCity()
   await page.evaluate(async (sid) => { await window.__cityshift.store.getState().selectScenario(sid) }, parent.scenario_id)
   assert.equal(await page.getByText('Create base scenario').count(), 0)
   await openAimAndPlace()
@@ -160,13 +165,13 @@ try {
   assert.equal(await page.locator('.development-pin.selected').count(), 1)
   await page.getByText('Saved in this scenario', { exact: true }).waitFor()
   await page.screenshot({ path: `${out}after-confirm.png` })
-  await page.reload({ waitUntil: 'load' })
-  await ready()
+  await enterCity() // cold reload through the landing page
   assert.equal((await state()).scenarioId, childId)
   console.log(JSON.stringify({ phase: 'after-reload-framing', ...(await buildingOnScreen('after reload')) }))
-  await page.getByRole('button', { name: 'City', exact: true }).click()
+  const cameras = page.getByRole('navigation', { name: 'Camera', exact: true })
+  await cameras.getByRole('button', { name: 'City', exact: true }).click()
   await page.waitForFunction(() => !window.__cityshift.babylon.camera.flying && window.__cityshift.map().getZoom() < 15.5, null, { timeout: 15000 })
-  await page.getByRole('button', { name: 'Development', exact: true }).click()
+  await cameras.getByRole('button', { name: 'Development', exact: true }).click()
   console.log(JSON.stringify({ phase: 'development-camera-button', ...(await buildingOnScreen('camera button')) }))
   await page.getByRole('button', { name: `Inspect ${KIND.name}`, exact: true }).click()
   await page.getByText('Saved in this scenario', { exact: true }).waitFor()
@@ -187,36 +192,32 @@ try {
   }
   assert.equal(measured[0].metrics.cohort_size, 20)
   assert.equal(measured[1].metrics.cohort_size, 20 + KIND.trips)
+  // The branch auto-runs on selection (upstream behaviour); the explicit submit above is idempotent and returns the same run.
   await page.evaluate(async (primary) => {
     const store = window.__cityshift.store.getState()
     store.setTool(null)
     await store.refreshRuns()
-    await store.openRun(primary, 'primary')
+    await store.openRun(primary)
     store.setLens(null)
     window.__cityshift.seek(20)
   }, measured[1].run_id)
-  await page.locator('.scenario-name').click()
-  await page.getByRole('button', { name: 'Compare parent', exact: true }).click()
-  await page.locator('.scenario-drawer button[aria-label="Close"]').click()
-  await page.waitForFunction(() => document.querySelectorAll('.bworld-canvas').length === 2 && !document.querySelector('.bworld-veil'), null, { timeout: 120000 })
-  await positionCamera([placement[0] - 0.00048, placement[1]])
-  assert.equal(await page.locator('.world-left .development-pin').count(), 0)
-  assert.equal(await page.locator('.world-right .development-pin:not(.draft)').count(), 1)
-  await page.screenshot({ path: `${out}comparison-map.png` })
-  await page.getByRole('button', { name: 'Lens', exact: true }).click()
+  assert.equal(await page.evaluate(() => window.__cityshift.store.getState().primaryRunId), measured[1].run_id)
+  assert.equal(await page.locator('.development-pin:not(.draft)').count(), 1)
+  // Before/after lives in the Transport lens now: the parent run is fetched on demand and matched trip-by-trip.
+  await page.getByRole('button', { name: 'Inspect', exact: true }).click() // upstream renamed the lens toggle
   await page.getByRole('button', { name: 'Transport', exact: true }).click()
-  await page.getByText('Existing, unchanged trips · 20 matched', { exact: true }).waitFor()
-  await page.getByText('Additional / unmatched trips — view', { exact: true }).scrollIntoViewIfNeeded()
+  await page.getByText('Before this change · parent scenario', { exact: true }).waitFor()
+  await page.getByText('Existing, unchanged trips · 20 matched', { exact: true }).waitFor({ timeout: 60000 })
+  await page.getByText('Added trips — this branch only', { exact: true }).scrollIntoViewIfNeeded()
   assert.equal(await page.locator('.lens .fleetcard').count(), 0)
-  assert.equal(await page.locator('.dock .delta').count(), 0, 'Unequal populations must not display raw live-count improvement badges')
   await page.getByText('Shuttles and stop queues · 0 vehicles, 0 stops', { exact: true }).waitFor()
   const cohorts = await Promise.all(measured.map((run) => api(`/api/runs/${run.run_id}/cohort`)))
   const incumbentIds = new Set(parentDemand.travelers.map((trip) => trip.person_id))
   const expectedExisting = Object.keys(cohorts[1].arrived).filter((id) => incumbentIds.has(id)).length
   const expectedAdded = Object.keys(cohorts[1].arrived).filter((id) => !incumbentIds.has(id)).length
   const groups = await page.locator('.population-summary').allTextContents()
-  assert.ok(groups.some((text) => text.includes('Existing trips — view') && text.includes(`completed ${expectedExisting}/20`)))
-  assert.ok(groups.some((text) => text.includes('Additional / unmatched trips — view') && text.includes(`completed ${expectedAdded}/${KIND.trips}`)))
+  assert.ok(groups.some((text) => text.includes('Existing trips — this branch') && text.includes(`completed ${expectedExisting}/20`)), JSON.stringify(groups))
+  assert.ok(groups.some((text) => text.includes('Added trips — this branch only') && text.includes(`completed ${expectedAdded}/${KIND.trips}`)), JSON.stringify(groups))
   await page.screenshot({ path: `${out}comparison.png` })
   assert.deepEqual(errors, [], 'Browser JavaScript errors')
   console.log(JSON.stringify({ phase: 'complete', screenshots: out, runs: measured.map((r) => ({ id: r.run_id, scenario: r.scenario_id, metrics: r.metrics })) }, null, 2))
