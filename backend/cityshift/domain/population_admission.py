@@ -48,6 +48,6 @@ def boundary_budget_reason(population: PopulationDefinition, resident_ids: list[
     for model_id, quote in admission_quotes(models, budget.max_output_tokens).items():
         if quote > remaining:
             return (f"Execution paused: {model_id} needs a ${quote / 1_000_000:.4f} request reservation; "
-                    f"${max(0, remaining) / 1_000_000:.4f} remains within the run/session budget. "
+                    f"${max(0, remaining) / 1_000_000:.4f} remains within the run/inference budget. "
                     "No replacement rule decisions were generated.")
     return None

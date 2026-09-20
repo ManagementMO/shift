@@ -72,27 +72,28 @@ class PopulationService:
             reason = "The pinned isolated JiuwenSwarm environment is not installed."
         elif not configured:
             reason = "Configure OPENROUTER_API_KEY and enable CITYSHIFT_POPULATION_LIVE=1, then restart the backend."
-        budget = {"session_limit_microdollars": 20_000_000, "blocked": True}
+        budget = {"session_limit_microdollars": None, "blocked": True}
         try:
             gateway = get_population_gateway()
+            # Provider-capped mode needs a current key balance before admission.
+            if installed and configured and not gateway.readiness()["ready"]:
+                asyncio.run(gateway.preflight())
             raw_budget = gateway.usage()
             budget = {key: raw_budget[key] for key in (
                 "session_limit_microdollars", "accounted_microdollars", "remaining_microdollars", "request_count", "blocked",
             )}
             if budget["blocked"] or budget["remaining_microdollars"] <= 0:
-                reason = "The persistent session inference budget is blocked or exhausted."
-            elif installed and configured and not gateway.readiness()["ready"]:
-                asyncio.run(gateway.preflight())
+                reason = "The inference budget is blocked or exhausted."
         except GatewayError as exc:
             reason = str(exc)
         models = [BrainAssignment(model_family=model.family, model_id=model.model_id, api_provider="openrouter",
                                   config_ref=model.family).model_dump(mode="json") for model in POPULATION_MODELS.values()]
         quotes = admission_quotes(list(POPULATION_MODELS), 1024)
         if reason is None and min(quotes.values()) > budget.get("remaining_microdollars", 0):
-            reason = (f"Remaining session budget cannot reserve one reviewed model request "
+            reason = (f"Remaining inference budget cannot reserve one reviewed model request "
                       f"(minimum ${min(quotes.values()) / 1_000_000:.4f}). No inference was started.")
         return {"available": reason is None, "reason": reason, "models": models, "budget": budget,
-                "native_proof_required": True, "initial_scale_gate": 20,
+                "native_proof_required": True, "initial_scale_gate": 100,
                 "admission": {"request_reservation_microdollars": quotes, "max_output_tokens": 1024}}
 
     @staticmethod
@@ -104,7 +105,7 @@ class PopulationService:
         for model_id, quote in quotes.items():
             if quote > limit:
                 raise SwarmUnavailable(f"{model_id} requires a ${quote / 1_000_000:.4f} reservation per request; "
-                                       f"the available run/session cap is ${limit / 1_000_000:.4f}. "
+                                       f"the available run/inference cap is ${limit / 1_000_000:.4f}. "
                                        "Select an affordable reviewed model or reduce its output cap. No inference was started.")
 
     def create(self, spec: PopulationSpec) -> ScenarioSpec:
@@ -172,7 +173,7 @@ class PopulationService:
                 if not status["available"]:
                     raise SwarmUnavailable(str(status["reason"]))
                 if population.spec.count > status["initial_scale_gate"]:
-                    raise SwarmUnavailable("The 12-resident native integration proof must pass before the scale gate is raised.")
+                    raise SwarmUnavailable(f"Native execution is limited to {status['initial_scale_gate']} residents.")
                 self.check_admission(population, status)
             run = SimulationRun(run_id=rid, scenario_id=population_id, population_id=population_id,
                                 run_kind="population", plan_id="service-ledger-v1", seed=population.spec.seed,

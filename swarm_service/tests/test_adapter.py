@@ -165,14 +165,15 @@ def test_native_token_budget_still_rejects_invalid_or_excessive_limits(settings,
         Budget.model_validate(payload)
 
 
-def test_native_resident_gate_stays_at_twenty(settings):
+def test_native_roster_accepts_100_residents_with_bounded_concurrency(settings):
     payload = run_payload(settings)
     payload["budget"]["max_tokens"] = 20_000_000
     payload["residents"] = [{"resident_id": f"resident-{index}", "instructions": "A local test resident.",
-                             "model_id": "alpha"} for index in range(20)]
-    assert len(RunRequest.model_validate(payload).residents) == 20
+                             "model_id": "alpha"} for index in range(100)]
+    assert len(RunRequest.model_validate(payload).residents) == 100
+    assert RunRequest.model_validate(payload).budget.max_concurrency == 1
     payload["residents"].append({
-        "resident_id": "resident-20", "instructions": "A local test resident.", "model_id": "alpha",
+        "resident_id": "resident-100", "instructions": "A local test resident.", "model_id": "alpha",
     })
     with pytest.raises(ValidationError):
         RunRequest.model_validate(payload)
