@@ -127,6 +127,191 @@ def gateway_at(path: Path, fake: FakeOpenRouter, **kwargs: Any) -> PopulationGat
     )
 
 
+def provider_gateway_at(path: Path, fake: FakeOpenRouter, *, adopt: bool = False,
+                        approved_40: bool = True) -> PopulationGateway:
+    return PopulationGateway(
+        config=PopulationProviderConfig(enabled=True, api_key=fake.expected_key,
+                                        provider_budget=True, adopt_provider_key=adopt,
+                                        approved_40_key_policy=approved_40),
+        ledger_path=path, transport=httpx.MockTransport(fake.handle),
+    )
+
+
+async def test_provider_budget_is_explicit_and_preserves_fixed_ledger_history(tmp_path):
+    fake = FakeOpenRouter()
+    path = tmp_path / "budget.sqlite3"
+    fixed = gateway_at(path, fake)
+    fixed.register_run("prior-run", [MODEL], token=LOCAL_SECRET)
+    await fixed.complete(LOCAL_SECRET, request_body())
+    # Simulate requests written before credential attribution was introduced.
+    with fixed._ledger._connection() as connection:
+        connection.execute("UPDATE requests SET credential_binding=NULL")
+        legacy = hashlib.sha256(("population-provider-cap:0:" + UPSTREAM_SECRET).encode()).hexdigest()
+        connection.execute("UPDATE provider_cap SET credential_binding=?", (legacy,))
+    enabled = provider_gateway_at(path, fake, approved_40=False)
+    await enabled.preflight()
+    usage = enabled.usage("prior-run")
+    assert usage["budget_mode"] == "provider"
+    assert usage["session_limit_microdollars"] is None
+    assert usage["remaining_microdollars"] == 20_000_000 - 8
+    assert usage["run_totals"]["calls"] == 1
+    assert usage["request_accounted_microdollars"] == 8
+    assert "credential_binding" not in usage["requests"][0]
+    restored_fixed = gateway_at(path, fake)
+    assert restored_fixed.usage()["session_limit_microdollars"] == 20_000_000
+    assert restored_fixed.usage()["request_accounted_microdollars"] == 8
+
+
+async def test_provider_policy_toggle_is_not_a_new_key_or_a_budget_refill(tmp_path):
+    fake = FakeOpenRouter()
+    path = tmp_path / "budget.sqlite3"
+    old = provider_gateway_at(path, fake, approved_40=False)
+    old.register_run("ongoing-run", [MODEL], token=LOCAL_SECRET)
+    fake.status = 500
+    with pytest.raises(GatewayError):
+        await old.complete(LOCAL_SECRET, request_body())
+    before = old.usage()
+    changed = provider_gateway_at(path, fake, approved_40=True, adopt=True)
+    await changed.preflight()
+    assert changed.usage()["remaining_microdollars"] == before["remaining_microdollars"]
+    assert changed.authenticate(LOCAL_SECRET)  # same key: tokens remain valid
+    fake.key_info = key_metadata(limit=40, limit_remaining=40)
+    with pytest.raises(GatewayError) as failure:
+        await changed.preflight()
+    assert failure.value.code == "provider_cap_changed"
+    assert changed.usage()["remaining_microdollars"] == before["remaining_microdollars"]
+
+
+async def test_provider_budget_can_exceed_twenty_but_still_reserves_under_verified_cap(tmp_path):
+    fake = FakeOpenRouter()
+    fake.key_info = key_metadata(limit=40, limit_remaining=40, include_byok_in_limit=False)
+    fake.status = 500
+    gateway = provider_gateway_at(tmp_path / "budget.sqlite3", fake)
+    assert (await gateway.preflight())["available_microdollars"] == 40_000_000
+    for index in range(4):
+        registration = gateway.register_run(f"run-{index}", [MODEL])
+        # Provider failures intentionally retain full reservations. These are
+        # mock HTTP requests, not evidence of live inference.
+        results = await asyncio.gather(
+            *(gateway.complete(registration.token, request_body()) for _ in range(10)),
+            return_exceptions=True,
+        )
+        assert all(isinstance(result, GatewayError) for result in results)
+        assert gateway.usage(f"run-{index}")["run_totals"]["accounted_microdollars"] <= 20_000_000
+    usage = gateway.usage()
+    assert 20_000_000 < usage["accounted_microdollars"] <= 40_000_000
+    assert usage["remaining_microdollars"] < gateway.quote(registration.token, request_body()).ceiling_microdollars
+    assert usage["session_limit_microdollars"] is None
+
+
+async def test_provider_budget_rotation_preserves_holds_run_limits_and_inflight_accounting(tmp_path):
+    fake = FakeOpenRouter()
+    fake.key_info = key_metadata(limit=40, usage=3, limit_remaining=37)
+    path = tmp_path / "budget.sqlite3"
+    old = provider_gateway_at(path, fake, adopt=True)
+    await old.preflight()
+    old.register_run("ongoing-run", [MODEL], token=LOCAL_SECRET, limits=RunLimits(max_calls=1))
+    scope = old.authenticate(LOCAL_SECRET)
+    quote = old.quote(LOCAL_SECRET, request_body())
+    pending = old._ledger.reserve(scope, quote, old._clock(), old._provider_binding())
+    held = old.usage()["accounted_microdollars"]
+
+    fake.expected_key = "replacement-fake-key"
+    fake.key_info = key_metadata(limit=40, limit_remaining=39, usage=1)
+    replacement = provider_gateway_at(path, fake, adopt=True)
+    assert (await replacement.preflight())["available_microdollars"] == 39_000_000
+    usage = replacement.usage("ongoing-run")
+    assert usage["accounted_microdollars"] == held + 1_000_000
+    assert usage["provider_usage_hold_microdollars"] == 4_000_000
+    assert usage["run_totals"]["calls"] == 1
+    with pytest.raises(GatewayError, match="registered"):
+        replacement.authenticate(LOCAL_SECRET)
+    registration = replacement.register_run("ongoing-run", [MODEL], limits=RunLimits(max_calls=1))
+    with pytest.raises(GatewayError) as exhausted:
+        await replacement.complete(registration.token, request_body())
+    assert exhausted.value.code == "run_limit_exceeded"
+    # An old request may finish after rotation; settlement cannot consume or
+    # replenish the replacement key's balance, and all audit history remains.
+    old._ledger.settle(pending, quote, completion(), 1, True)
+    assert replacement.usage()["remaining_microdollars"] == 39_000_000
+    assert replacement.usage()["accounted_microdollars"] == 4_000_008
+    assert provider_gateway_at(path, fake).usage()["provider_usage_hold_microdollars"] == 4_000_000
+
+    fake.expected_key = UPSTREAM_SECRET
+    fake.key_info = key_metadata(limit=40, usage=3, limit_remaining=37)
+    with pytest.raises(GatewayError) as retired:
+        await old.preflight()
+    assert retired.value.code == "provider_cap_changed"
+    assert replacement.readiness()["ready"]  # stale workers cannot invalidate the new credential
+    assert not fake.posts
+
+
+@pytest.mark.parametrize("provider_budget,adopt", [(False, True), (True, False)])
+async def test_provider_key_rotation_requires_both_explicit_opt_ins(tmp_path, provider_budget, adopt):
+    fake = FakeOpenRouter()
+    path = tmp_path / "budget.sqlite3"
+    first = gateway_at(path, fake)
+    await first.preflight()
+    fake.expected_key = "replacement-fake-key"
+    second = PopulationGateway(
+        config=PopulationProviderConfig(enabled=True, api_key=fake.expected_key,
+                                        provider_budget=provider_budget, adopt_provider_key=adopt),
+        ledger_path=path, transport=httpx.MockTransport(fake.handle),
+    )
+    with pytest.raises(GatewayError) as failure:
+        await second.preflight()
+    assert failure.value.code == "provider_cap_changed"
+    assert not fake.posts
+
+
+async def test_provider_mode_never_waives_run_ceiling_or_accounting_violation(tmp_path):
+    fake = FakeOpenRouter()
+    fake.key_info = key_metadata(limit=40, limit_remaining=40)
+    path = tmp_path / "budget.sqlite3"
+    gateway = provider_gateway_at(path, fake)
+    with pytest.raises(GatewayError):
+        gateway.register_run("oversized-run", [MODEL], limits=RunLimits(max_cost_microdollars=20_000_001))
+    gateway.register_run("bad-run", [MODEL], token=LOCAL_SECRET)
+    fake.output = completion(provider="wrong-provider")
+    with pytest.raises(GatewayError) as failure:
+        await gateway.complete(LOCAL_SECRET, request_body())
+    assert failure.value.code == "accounting_violation"
+    fake.expected_key = "replacement-fake-key"
+    replacement = provider_gateway_at(path, fake, adopt=True)
+    with pytest.raises(GatewayError) as blocked:
+        await replacement.preflight()
+    assert blocked.value.code == "accounting_violation"
+    assert replacement.usage()["blocked"]
+    assert replacement.usage()["request_count"] == 1
+
+
+@pytest.mark.parametrize("updates", [
+    {"limit_reset": "daily"}, {"byok_usage": 0.001}, {"limit": None},
+    {"is_management_key": True}, {"limit_remaining": 41}, {"limit": 41, "limit_remaining": 41},
+])
+async def test_provider_budget_still_rejects_unbounded_or_unsupported_provider_policy(tmp_path, updates):
+    fake = FakeOpenRouter()
+    fake.key_info = key_metadata(**({"limit": 40, "limit_remaining": 40} | updates))
+    gateway = provider_gateway_at(tmp_path / "budget.sqlite3", fake, adopt=True)
+    with pytest.raises(GatewayError) as failure:
+        await gateway.preflight()
+    assert failure.value.code == "provider_cap_unverified"
+    assert not fake.posts
+
+
+def test_provider_budget_and_replacement_opt_ins_are_exact(monkeypatch):
+    for name in ("CITYSHIFT_POPULATION_PROVIDER_BUDGET", "CITYSHIFT_POPULATION_ADOPT_PROVIDER_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    assert not population_provider_config().provider_budget
+    assert not population_provider_config().adopt_provider_key
+    monkeypatch.setenv("CITYSHIFT_POPULATION_PROVIDER_BUDGET", "1")
+    monkeypatch.setenv("CITYSHIFT_POPULATION_ADOPT_PROVIDER_KEY", "true")
+    assert population_provider_config().provider_budget
+    assert not population_provider_config().adopt_provider_key
+    monkeypatch.setenv("CITYSHIFT_POPULATION_ADOPT_PROVIDER_KEY", "1")
+    assert population_provider_config().adopt_provider_key
+
+
 @pytest.fixture
 def setup_gateway(tmp_path: Path) -> tuple[PopulationGateway, FakeOpenRouter]:
     fake = FakeOpenRouter()

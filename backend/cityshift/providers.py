@@ -313,6 +313,8 @@ class PopulationProviderConfig:
     enabled: bool = False
     api_key: str = field(default="", repr=False)
     approved_40_key_policy: bool = False
+    provider_budget: bool = False
+    adopt_provider_key: bool = False
 
 
 def population_provider_config() -> PopulationProviderConfig:
@@ -320,6 +322,8 @@ def population_provider_config() -> PopulationProviderConfig:
         enabled=os.environ.get("CITYSHIFT_POPULATION_LIVE") == "1",
         api_key=os.environ.get("OPENROUTER_API_KEY", ""),
         approved_40_key_policy=os.environ.get("CITYSHIFT_POPULATION_APPROVED_40_KEY") == "1",
+        provider_budget=os.environ.get("CITYSHIFT_POPULATION_PROVIDER_BUDGET") == "1",
+        adopt_provider_key=os.environ.get("CITYSHIFT_POPULATION_ADOPT_PROVIDER_KEY") == "1",
     )
 
 
