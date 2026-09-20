@@ -155,7 +155,7 @@ function PopulationTool() {
   const session = primary?.state ?? null
   const environment = session ? environmentAt(session, t) : null
   const [count, setCount] = useState(500)
-  const [destination, setDestination] = useState(() => pack?.zones.find((z) => /financial|downtown/i.test(z.name))?.zone_id ?? pack?.zones[0]?.zone_id ?? '')
+  const [destination, setDestination] = useState(() => [...(pack?.zones ?? [])].sort((a, b) => b.share - a.share)[0]?.zone_id ?? '')
   const [origin, setOrigin] = useState('')
   const [windowS, setWindowS] = useState(300)
   const ceiling = 10000 - (environment?.population ?? 0)

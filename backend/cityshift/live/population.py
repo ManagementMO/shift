@@ -96,7 +96,16 @@ class Population:
         destination = self.zones[change.destination_zone_id]
         origins = [self.zones[change.origin_zone_id]] if change.origin_zone_id else [z for z in self.pack.zones if z.zone_id != destination.zone_id]
         origins = origins or [destination]
-        origin_edges = sorted({eid for z in origins for eid in z.edge_ids if self.network.edge(eid).allows("pedestrian")})
+        # Travelers spread across the other districts come from each in proportion to its declared demand share.
+        origin_edges: list[str] = []
+        origin_weights: list[float] = []
+        for zone in origins:
+            edges = sorted(eid for eid in set(zone.edge_ids) if self.network.edge(eid).allows("pedestrian"))
+            if edges:
+                origin_edges += edges
+                origin_weights += [zone.share / len(edges)] * len(edges)
+        if not any(origin_weights):
+            origin_weights = [1.0] * len(origin_edges)
         destination_edges = sorted(eid for eid in destination.edge_ids if self.network.edge(eid).allows("pedestrian"))
         if not origin_edges or not destination_edges:
             raise ValueError("district has no pedestrian origins or destinations")
@@ -107,7 +116,7 @@ class Population:
         rng = random.Random((self.config.seed << 32) ^ int(digest[:16], 16))
         for i in range(change.count):
             pid = f"{prefix}_{i:05d}"
-            origin, target = rng.choice(origin_edges), rng.choice(destination_edges)
+            origin, target = rng.choices(origin_edges, origin_weights)[0], rng.choice(destination_edges)
             car = rng.random() < self.config.car_share
             entity_id = f"car_{pid}" if car else pid
             depart = t + rng.randint(0, change.release_window_s)
