@@ -23,6 +23,7 @@ beforeEach(() => {
   }))
   vi.stubGlobal('cancelAnimationFrame', vi.fn(() => { frame = null }))
   clock.pause()
+  clock.setLoop(null)
   clock.setHorizon(2700)
   clock.seek(0)
   clock.setSpeed(defaultSpeed)
@@ -65,7 +66,7 @@ describe('playback clock', () => {
     expect(clock.playing).toBe(false)
   })
 
-  it('stops at the horizon and restarts when played again', () => {
+  it('without a loop stops at the horizon and restarts when played again', () => {
     clock.setSpeed(1)
     clock.setHorizon(2)
     clock.play()
@@ -76,6 +77,46 @@ describe('playback clock', () => {
     expect(clock.t).toBe(0)
     advance(1)
     expect(clock.t).toBe(1)
+  })
+
+  it('keeps a looping replay running: the horizon wraps back to the active traffic and playback continues', () => {
+    const listener = vi.fn()
+    const off = clock.onUi(listener)
+    clock.setSpeed(1)
+    clock.setHorizon(10)
+    clock.setLoop(4)
+    clock.play()
+    advance(9)
+    expect(clock.t).toBe(9)
+    advance(2)
+    expect(clock.t).toBe(4)
+    expect(clock.playing).toBe(true)
+    expect(listener).toHaveBeenLastCalledWith(4)
+    advance(3)
+    expect(clock.t).toBe(7)
+    expect(clock.playing).toBe(true)
+    off()
+  })
+
+  it('wraps to the beginning when the loop start lies beyond the recording, and ignores negatives', () => {
+    clock.setSpeed(1)
+    clock.setHorizon(3)
+    clock.setLoop(50)
+    clock.play()
+    advance(4)
+    expect(clock.t).toBe(0)
+    expect(clock.playing).toBe(true)
+    clock.setLoop(-5)
+    expect(clock.loopStart).toBe(0)
+  })
+
+  it('resumes a looping replay from its loop start when played again at the horizon', () => {
+    clock.setLoop(30)
+    clock.setHorizon(100)
+    clock.seek(100)
+    clock.play()
+    expect(clock.t).toBe(30)
+    expect(clock.playing).toBe(true)
   })
 })
 

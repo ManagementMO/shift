@@ -1,3 +1,4 @@
+import { spansScenario } from '../closures'
 import { useStore } from '../store'
 import { personStateAt, seriesAt } from '../replay'
 import { fmt } from '../util'
@@ -77,7 +78,7 @@ export default function Inspector() {
           <div className="small">
             <div>{r.label}</div>
             <div className="dim">
-              {r.edge_ids.length} edges · modes {r.modes.join(', ')} · {fmt(r.start_s)}–{fmt(r.end_s)}
+              {r.edge_ids.length} edges · modes {r.modes.join(', ')} · {spansScenario(r, scenario?.constraints.horizon_s ?? 0) ? 'whole scenario' : `${fmt(r.start_s)}–${fmt(r.end_s)}`}
             </div>
             <div className="dim">source claim: {r.source_claim_id ?? 'scenario fixture (no evidence claim attached)'}</div>
             {primary?.bundle.run.metrics?.warnings.filter((w) => w.toLowerCase().includes('restriction integrity')).map((w, i) => (

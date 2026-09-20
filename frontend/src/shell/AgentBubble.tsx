@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import { api } from '../api'
+import { isHazardRestriction, spansScenario } from '../closures'
 import { DEVELOPMENT_USES, developmentCounts, developmentLabel } from '../development'
 import { useStore } from '../store'
 import { clock } from '../world/playback'
@@ -7,6 +9,12 @@ import { centroidOf, edgePath, fmt } from '../util'
 import { cameraTo, leadMap } from '../world/registry'
 import { agentPose, buildingPose, corridorPose, currentPose } from '../world/camera'
 import { DeleteButton } from './DeleteButton'
+import { ghostFromProposal } from './ghost'
+import ProposalCard from './ProposalCard'
+
+/** A closure card clicked near the top of the screen opens below its anchor instead of above it. */
+const FLIP_PX = 300
+const SIDE_PX = 170
 
 const STATE_LABEL: Record<PersonState, string> = {
   not_departed: 'not yet departed',
@@ -32,6 +40,10 @@ export default function AgentBubble() {
   const deleting = useStore((s) => s.deleting)
   const removeDevelopment = useStore((s) => s.removeDevelopment)
   const demolishBuilding = useStore((s) => s.demolishBuilding)
+  const setGhost = useStore((s) => s.setGhost)
+  const setError = useStore((s) => s.setError)
+  const proposal = useStore((s) => s.ghost?.proposal ?? null)
+  const scenarioId = useStore((s) => s.scenarioId)
   const rx = useStore((s) => (s.primaryRunId ? s.replays[s.primaryRunId] : null))
   const travelers = useStore((s) => s.travelers)
   const pack = useStore((s) => s.pack)
@@ -40,11 +52,13 @@ export default function AgentBubble() {
   const cameraMode = useStore((s) => s.cameraMode)
   const t = useStore((s) => s.t)
   const [pt, setPt] = useState<{ x: number; y: number } | null>(null)
+  const [busyRemove, setBusyRemove] = useState(false)
 
   const kind = selection?.kind ?? null
   const selId = selection?.id ?? null
   const id = selection && (selection.kind === 'bus' || selection.kind === 'car' || selection.kind === 'person') ? selection.id : null
   const restriction = kind === 'restriction' ? scenario?.restrictions.find((r) => r.restriction_id === selId) ?? null : null
+  const clickedAt = selection?.kind === 'restriction' ? selection.at ?? null : null
   const stopSel = kind === 'stop' ? pack?.stops.find((s) => s.stop_id === selId) ?? null : null
   const building = useMemo(() => (kind === 'building' && selId ? leadMap()?.buildingFacts?.(selId) ?? null : null), [kind, selId])
   // The development panel already shows a development's details while it is open (e.g. right after confirming).
@@ -54,13 +68,14 @@ export default function AgentBubble() {
   // Keep the bubble on its anchor (per frame, off the React tree except for the final set when it moves).
   useEffect(() => {
     if (!selId || (id && !rx)) return
-    // A closure can run for blocks: pin its bubble to the closed segment nearest the middle of the view.
+    // A closure can run for blocks: pin its bubble where it was clicked, else to the closed segment nearest the middle of the view.
     const path = restriction ? edgePath(roads, restriction.edge_ids) : []
     const still = (lead: ReturnType<typeof leadMap>): [number, number] | null => {
       if (stopSel) return [stopSel.lon, stopSel.lat]
       if (building) return building.lonLat
       if (development) return development.spec.position
       if (!restriction) return null
+      if (clickedAt) return clickedAt
       const c = lead?.getCenter()
       return c ? nearestPoint(path, [c.lng, c.lat]) : centroidOf(path)
     }
@@ -108,7 +123,7 @@ export default function AgentBubble() {
       off()
       lead?.off('move', onMove)
     }
-  }, [id, selId, rx, pack, roads, restriction, stopSel, building, development, roofHeight, cameraMode])
+  }, [id, selId, rx, pack, roads, restriction, clickedAt, stopSel, building, development, roofHeight, cameraMode])
 
   if (!selection) return null
   const style = pt ? { left: pt.x, top: pt.y } : undefined
@@ -186,37 +201,67 @@ export default function AgentBubble() {
   }
 
   if (restriction) {
+    // A street closure has no time window: it stays until removed here.  Removing previews the reopen as a ghost
+    // proposal and confirms through the same branch flow as every other edit; hazard footprints follow their track.
     const r = restriction
-    const status = t < r.start_s ? `starts in ${fmt(r.start_s - t)}` : t > r.end_s ? 'over' : 'in effect now'
+    const hazard = isHazardRestriction(r)
+    const untimed = spansScenario(r, scenario?.constraints.horizon_s ?? 0)
+    const active = t >= r.start_s && t <= r.end_s
+    const status = untimed ? 'closed' : t < r.start_s ? `starts in ${fmt(r.start_s - t)}` : t > r.end_s ? 'over' : 'in effect now'
+    const removing = proposal?.kind === 'reopen_edge' && r.edge_ids.every((e) => proposal.edge_ids.includes(e))
     const frame = () => {
       const lead = leadMap()
       const pts = edgePath(roads, r.edge_ids)
       if (lead && pts.length >= 2) cameraTo(corridorPose(pts, currentPose(lead)), 'incident')
     }
+    const remove = async () => {
+      if (!scenarioId) return
+      setBusyRemove(true)
+      try {
+        if (tool) setTool(null)
+        setGhost(ghostFromProposal(await api.previewEdit(scenarioId, `remove closure ${r.restriction_id}`), pack))
+      } catch (e) {
+        setError(String(e))
+      } finally {
+        setBusyRemove(false)
+      }
+    }
+    // keep the wider card on screen: flip below a high anchor, hold it off the side edges
+    const placed = pt ? { left: Math.max(SIDE_PX, Math.min(window.innerWidth - SIDE_PX, pt.x)), top: pt.y } : undefined
     return (
-      <div className={cls} style={style}>
+      <div className={`${cls} closure ${pt && pt.y < FLIP_PX ? 'below' : ''}`} style={placed} role="dialog" aria-label={hazard ? 'Hazard footprint' : 'Street closure'}>
         <div className="bubble-head">
-          <b>{r.restriction_id.startsWith('hazard') ? 'Hazard footprint' : 'Street closure'}</b>
-          <span className={`pill closure ${t >= r.start_s && t <= r.end_s ? '' : 'off'}`}>{status}</span>
+          <b>{hazard ? 'Hazard footprint' : 'Street closure'}</b>
+          <span className={`pill closure ${active ? '' : 'off'}`}>{status}</span>
           <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
             ✕
           </button>
         </div>
         <div className="small">{r.label}</div>
         <div className="small dim">
-          {r.edge_ids.length} segments · {r.modes.join(', ')} · +{fmt(r.start_s)}–+{fmt(r.end_s)}
+          {r.edge_ids.length} segments · {r.modes.join(', ')} · {untimed ? 'closed until you remove it' : `+${fmt(r.start_s)}–+${fmt(r.end_s)}`}
         </div>
         <div className="small dim">source: {r.source_claim_id ?? 'scenario fixture, no evidence claim'}</div>
-        <div className="row">
-          {!locked && (
-            <button className="ghostbtn" onClick={frame}>
-              Frame
+        {removing && !tool ? (
+          <ProposalCard />
+        ) : (
+          <div className="row">
+            {!hazard && (
+              <button className="primary" onClick={() => void remove()} disabled={busyRemove || !scenarioId}>
+                {busyRemove ? 'Checking…' : 'Remove closure'}
+              </button>
+            )}
+            {!locked && (
+              <button className="ghostbtn" onClick={frame}>
+                Frame
+              </button>
+            )}
+            <button className="ghostbtn" onClick={() => setLens('transport')}>
+              Details
             </button>
-          )}
-          <button className="ghostbtn" onClick={() => setLens('transport')}>
-            Details
-          </button>
-        </div>
+          </div>
+        )}
+        {hazard && <div className="small dim">Hazard footprints follow their storm track; change the hazard instead of removing this.</div>}
       </div>
     )
   }

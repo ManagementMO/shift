@@ -246,8 +246,8 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
         pickable: closedNow.size > 0,
         onClick: (info: PickingInfo) => {
           const id = String(info.object?.properties?.id)
-          const r = scenario?.restrictions.find((x) => x.edge_ids.includes(id))
-          if (r) select({ kind: 'restriction', id: r.restriction_id })
+          const r = scenario?.restrictions.find((x) => x.edge_ids.includes(id) && t >= x.start_s && t <= x.end_s)
+          if (r) select({ kind: 'restriction', id: r.restriction_id, at: info.coordinate ? [info.coordinate[0], info.coordinate[1]] : undefined })
         },
         updateTriggers: { getLineColor: [closedNow.size, ghostEdges.size, focus.size], getLineWidth: [closedNow.size, ghostEdges.size] },
         parameters: { depthCompare: 'always' },

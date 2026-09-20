@@ -1,3 +1,4 @@
+import { spansScenario } from '../closures'
 import { useStore } from '../store'
 import { DEVELOPMENT_USES, developmentCounts } from '../development'
 import type { SimulationRun } from '../types'
@@ -72,7 +73,7 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
           </button>)}
           {scenario.restrictions.map((r) => (
             <button key={r.restriction_id} className="linkish" onClick={() => select({ kind: 'restriction', id: r.restriction_id })}>
-              ⛔ {r.label} — {r.edge_ids.length} segments, +{fmt(r.start_s)}–+{fmt(r.end_s)}
+              ⛔ {r.label} — {r.edge_ids.length} segments{spansScenario(r, scenario.constraints.horizon_s) ? '' : `, +${fmt(r.start_s)}–+${fmt(r.end_s)}`}
             </button>
           ))}
           {scenario.hazards.map((h) => (

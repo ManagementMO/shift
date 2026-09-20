@@ -6,7 +6,7 @@ import { alarmRadius, DEFAULT_DURATION, type IncidentSettings } from './incident
 import { HAZARDS, type Hazard, type Intervention, type LivePreview, type LiveSession } from './types'
 
 export type LiveTool = 'road' | 'route' | 'temperature' | 'population' | 'incident'
-const titles: Record<LiveTool, string> = { road: 'Change a road', route: 'Add a shuttle route', temperature: 'Change temperature', population: 'Send people downtown', incident: 'Declare an incident' }
+const titles: Record<LiveTool, string> = { road: 'Road closures', route: 'Add a shuttle route', temperature: 'Change temperature', population: 'Population', incident: 'Declare an incident' }
 
 interface Props {
   tool: LiveTool
@@ -31,7 +31,6 @@ export default function LiveControls(p: Props) {
   const environment = environmentAt(p.session, p.time)
   const hazard = HAZARDS.find(h => h.id === p.incident.hazard) ?? HAZARDS[0]
   const [roadAction, setRoadAction] = useState<'close_road' | 'reopen_road'>('close_road')
-  const [duration, setDuration] = useState(0)
   const [temperature, setTemperature] = useState<number | null>(null)
   const [count, setCount] = useState(5000)
   const [destination, setDestination] = useState(() => p.pack.zones.find(z => /financial|downtown/i.test(z.name))?.zone_id ?? p.pack.zones[0]?.zone_id ?? '')
@@ -53,7 +52,8 @@ export default function LiveControls(p: Props) {
   const submit = (event: FormEvent) => {
     event.preventDefault()
     let change: Intervention
-    if (p.tool === 'road') change = { kind: roadAction, edge_ids: p.roads, until_s: roadAction === 'close_road' && duration > 0 ? Math.floor(p.time) + duration * 60 : null }
+    // a closure has no timer: it stays until it is reopened here
+    if (p.tool === 'road') change = { kind: roadAction, edge_ids: p.roads, until_s: null }
     else if (p.tool === 'temperature') change = { kind: 'temperature', temperature_c: targetTemperature }
     else if (p.tool === 'route') change = { kind: 'add_bus_route', bus_id: selectedBus, stop_ids: stopIds }
     else if (p.tool === 'incident') {
@@ -71,8 +71,7 @@ export default function LiveControls(p: Props) {
         <p className="live-help">Choose a named street or click a segment in the city. Sidewalk access is preserved.</p>
         <label>Street<select value={corridor} onChange={e => p.onRoads(p.corridors[e.target.value]?.edge_ids ?? [])}><option value="">Pick in the city</option>{Object.entries(p.corridors).map(([id, value]) => <option key={id} value={id}>{value.label}</option>)}</select></label>
         <div className="live-selection-note">{p.roads.length ? `${p.roads.length} SUMO road segments selected` : 'Click a drivable street to select it'}</div>
-        <label>Operation<select value={roadAction} onChange={e => setRoadAction(e.target.value as typeof roadAction)}><option value="close_road">Close to cars and buses</option><option value="reopen_road">Restore original permissions</option></select></label>
-        {roadAction === 'close_road' && <label>Reopen after<select value={duration} onChange={e => setDuration(Number(e.target.value))}><option value={0}>Keep closed</option><option value={5}>5 simulated minutes</option><option value={10}>10 simulated minutes</option></select></label>}
+        <label>Operation<select value={roadAction} onChange={e => setRoadAction(e.target.value as typeof roadAction)}><option value="close_road">Close to cars and buses</option><option value="reopen_road">Reopen</option></select></label>
       </>}
       {p.tool === 'route' && <>
         <p className="live-help">Allocate a real 60-seat bus. It drives from the venue depot and repeats the stop sequence.</p>
@@ -99,7 +98,7 @@ export default function LiveControls(p: Props) {
         <div className="live-selection-note">{p.incident.place ? `Placed at ${p.incident.place.lat.toFixed(5)}, ${p.incident.place.lon.toFixed(5)}` : 'Click a spot in the city to place the incident'}</div>
       </>}
       {p.tool === 'population' && <>
-        <p className="live-help">Add inbound journeys, not a visual crowd multiplier or an instant relocation.</p>
+        <p className="live-help">Adds real journeys to the running city — the new travelers set off from their origins and are routed by SUMO like everyone else.</p>
         <label>New travelers<input type="number" min={1} max={10000 - environment.population} step={1} value={count} onChange={e => setCount(Number(e.target.value))} required /></label>
         <label>Destination<select value={destination} onChange={e => setDestination(e.target.value)}>{p.pack.zones.map(z => <option key={z.zone_id} value={z.zone_id}>{z.name}</option>)}</select></label>
         <label>Origins<select value={origin} onChange={e => setOrigin(e.target.value)}><option value="">Distributed across other districts</option>{p.pack.zones.map(z => <option key={z.zone_id} value={z.zone_id}>{z.name}</option>)}</select></label>

@@ -23,12 +23,11 @@ import './live.css'
 
 type Side = 'primary' | 'baseline'
 type Selected = Picked & { side: Side; follow: boolean }
+// Every tool here changes the running SUMO city in place; there is no scenario building.
 const TOOLS: { id: LiveTool; label: string; mark: string }[] = [
-  { id: 'road', label: 'Road', mark: 'M5 2 3 18M15 2l2 16M10 3v3m0 3v3m0 3v2' },
-  { id: 'route', label: 'Bus route', mark: 'M4 6h12v9H4zM6 3h8M7 15v2m6-2v2M4 10h12' },
-  { id: 'temperature', label: 'Temperature', mark: 'M8 12V4a2 2 0 0 1 4 0v8a4 4 0 1 1-4 0ZM10 8v6' },
+  { id: 'road', label: 'Road closures', mark: 'M5 2 3 18M15 2l2 16M10 3v3m0 3v3m0 3v2' },
   { id: 'population', label: 'Population', mark: 'M7 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM2 17v-3a4 4 0 0 1 8 0v3m3-12a2 2 0 0 1 0 4m0 2a4 4 0 0 1 4 4v2' },
-  { id: 'incident', label: 'Incident', mark: 'M10 2 1.5 17h17L10 2Zm0 6v4m0 2.5v.5' },
+  { id: 'temperature', label: 'Temperature', mark: 'M8 12V4a2 2 0 0 1 4 0v8a4 4 0 1 1-4 0ZM10 8v6' },
 ]
 const PERSON_STATE = ['Not departed', 'Walking', 'Waiting for transport', 'On transit', 'Driving', 'Arrived', 'Unroutable']
 const NO_ROADS: string[] = []
@@ -213,7 +212,7 @@ export default function LiveCity() {
         <button className="ghostbtn" disabled={!!view.busy} onClick={() => { void controller.pause(); closeTool(); setSetup(true) }}>New city</button>
         <button className={`ghostbtn ${view.baseline ? 'on' : ''}`} disabled={!session?.parent_session_id || !!view.busy} onClick={() => void controller.compare(!view.baseline)}>Compare original</button>
         {view.baseline && <label className="live-wipe">Split<input aria-label="Comparison divider" type="range" min={15} max={85} value={split} onChange={event => setSplit(Number(event.target.value))} /></label>}
-        <a className="ghostbtn live-classic-link" href="/">Recorded experiments</a>
+        <a className="ghostbtn live-classic-link" href="/world">Recorded experiments</a>
       </div>
     </header>
 

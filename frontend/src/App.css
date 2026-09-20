@@ -511,6 +511,14 @@ button:disabled {
   color: var(--accent);
   opacity: 0.8;
 }
+.listitem .closed {
+  font-size: 11px;
+  color: var(--closure);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
 .linkish {
   color: var(--closure);
   text-align: left;
@@ -985,6 +993,24 @@ details summary {
 .bubble-head .iconbtn {
   margin-left: auto;
 }
+.bubble.closure {
+  width: 300px;
+}
+.bubble.below {
+  transform: translate(-50%, 26px);
+}
+.bubble.below::after {
+  bottom: auto;
+  top: -7px;
+  transform: translateX(-50%) rotate(225deg);
+}
+.bubble .proposal {
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  margin-top: 4px;
+}
 
 /* ---------- bottom: sim dock ---------- */
 .bottom {
@@ -1046,104 +1072,6 @@ details summary {
   color: var(--ink);
   box-shadow: 0 1px 4px rgba(18, 30, 48, 0.14);
 }
-.clock {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.05;
-  min-width: 104px;
-  white-space: nowrap;
-}
-.clock .wall {
-  font-size: 18px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.01em;
-}
-.clock .rel {
-  font-size: 10.5px;
-  color: var(--dim);
-  font-variant-numeric: tabular-nums;
-}
-.dock-timeline {
-  position: relative;
-  grid-column: 1 / -1;
-  grid-row: 2;
-  min-width: 0;
-  padding: 10px 0 14px;
-}
-.dock-timeline input[type='range'] {
-  position: relative;
-  z-index: 2;
-  margin: 0;
-  height: 22px;
-  -webkit-appearance: none;
-  appearance: none;
-  background: transparent;
-}
-.dock-timeline input[type='range']::-webkit-slider-runnable-track {
-  height: 6px;
-  border-radius: var(--r);
-  background: rgba(255, 255, 255, 0.12);
-}
-.dock-timeline input[type='range']::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 18px;
-  height: 18px;
-  margin-top: -6px;
-  border-radius: 50%;
-  background: var(--surface-raised);
-  border: 2px solid var(--ink);
-  box-shadow: 0 2px 8px rgba(18, 30, 48, 0.3);
-  cursor: grab;
-}
-.dock-timeline input[type='range']:active::-webkit-slider-thumb {
-  cursor: grabbing;
-  transform: scale(1.1);
-}
-.bands {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 18px;
-  height: 6px;
-  pointer-events: none;
-  z-index: 1;
-}
-.band {
-  position: absolute;
-  top: 0;
-  height: 6px;
-  border-radius: var(--r);
-  opacity: 0.55;
-}
-.band.closure {
-  background: var(--closure);
-}
-.band.hazard {
-  background: var(--hazard);
-  top: 8px;
-}
-.ticks {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -2px;
-  height: 14px;
-  pointer-events: none;
-}
-.ticks span {
-  position: absolute;
-  transform: translateX(-50%);
-  font-size: 10.5px;
-  color: var(--dim);
-  font-variant-numeric: tabular-nums;
-}
-.ticks span:first-child {
-  transform: none;
-}
-.ticks span:last-child {
-  transform: translateX(-100%);
-}
 .dock-metrics {
   display: flex;
   grid-column: 2;
@@ -1164,9 +1092,6 @@ details summary {
     grid-row: 2;
     justify-content: space-between;
     gap: 4px;
-  }
-  .dock-timeline {
-    grid-row: 3;
   }
 }
 .metric {
@@ -1278,7 +1203,7 @@ details summary {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
-.clock, .metric .val, .display-mode {
+.metric .val, .display-mode {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
 }
 .rail, .dock, .railbtn, .ghostbtn, .seg, .seg button, .plan, .proposal, .fleetcard, .listitem, .bubble, button.primary, input, select, textarea, .iconbtn:not(.play) {
@@ -1350,8 +1275,6 @@ details summary {
   .bottom { width: calc(100vw - 28px); bottom: 10px; }
   .dock { padding: 10px; grid-template-columns: 1fr; gap: 6px; }
   .dock-controls { justify-content: space-between; }
-  .dock-timeline { width: 100%; min-width: 0; padding: 4px 0 14px; }
-  .dock-timeline .bands { top: 12px; }
   .metric { min-width: 0; padding-left: 6px; }
   .metric .lbl { font-size: 9px; }
   .rail { left: 10px; padding: 3px; }

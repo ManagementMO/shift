@@ -42,6 +42,7 @@ function deferred<T>() {
 
 afterEach(() => {
   clock.pause()
+  clock.setLoop(null)
   clock.seek(0)
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -127,6 +128,7 @@ describe('opening a city replay', () => {
     expect(clock.speed).toBe(1)
     expect(clock.t).toBe(60)
     expect(useStore.getState().t).toBe(60)
+    expect(clock.loopStart).toBe(60)
     clock.pause()
     clock.seek(0)
     expect(clock.t).toBe(0)

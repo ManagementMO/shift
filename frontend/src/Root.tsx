@@ -3,8 +3,8 @@ import { lazy, Suspense } from 'react'
 import App from './App.tsx'
 import Experience from './globe/Experience'
 
-// `/` opens the globe; `/world` opens the city directly. `/mapbox` is the Mapbox alternative.
-// `/world/lab` is the bare Babylon viewer for renderer experiments.
+// `/` opens the globe; `/world` opens the city directly. `/live` is the persistent SUMO city; `/mapbox` is the
+// Mapbox alternative. `/world/lab` is the bare Babylon viewer for renderer experiments.
 const WorldApp = lazy(() => import('./babylon/WorldApp.tsx'))
 const CityShowcase = lazy(() => import('./babylon/CityShowcase.tsx'))
 const LiveCity = lazy(() => import('./live/LiveCity.tsx'))

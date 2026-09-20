@@ -17,7 +17,7 @@ export function proposalTitle(p: InterventionProposal): string {
     case 'close_edge':
       return `Close ${p.edge_ids.length} road segments`
     case 'reopen_edge':
-      return `Reopen ${p.edge_ids.length} road segments`
+      return `Remove closure · ${p.edge_ids.length} road segments`
     case 'set_fleet':
       return `Fleet → ${p.fleet_count} buses`
     case 'move_stop':

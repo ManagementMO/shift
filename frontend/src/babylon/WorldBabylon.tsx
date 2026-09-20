@@ -222,7 +222,11 @@ export default function WorldBabylon({ runId, side, active = true, onWorldReady,
             if (shape) cameraTo(corridorPose(shape.axis.map(([x, z]) => ws.frame.worldToLonLat(x, z)), currentPose(map)), 'corridor')
           }
           useStore.getState().setPicking(false)
-        } else useStore.getState().select({ kind: t.kind === 'incident' ? 'restriction' : t.kind, id: t.id } as Selection)
+        } else if (t.kind === 'incident') {
+          // the closure's card opens where it was clicked, not at the corridor's centre
+          const g = map.unprojectGround(p.x, p.y)
+          useStore.getState().select({ kind: 'restriction', id: t.id, at: g ? ws.frame.worldToLonLat(g[0], g[1]) : undefined })
+        } else useStore.getState().select({ kind: t.kind, id: t.id } as Selection)
       }
       // A drag released off the canvas must not leave hover disarmed.
       const onWindowUp = (): void => {

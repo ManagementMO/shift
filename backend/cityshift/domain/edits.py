@@ -4,6 +4,9 @@ Parsing is rule-first (corridor names, stop names, zone names, numbers, mm:ss wi
 only to classify intent when the rules cannot, and its answer is coerced into the same typed proposal and
 re-validated against the city pack. Nothing here ever mutates an existing scenario; `apply` returns a child
 scenario with `parent_scenario_id` and a human-readable `change_set`.
+
+Street closures have no time window: a closed corridor stays closed for the whole scenario until an edit
+removes it (by corridor name or by restriction id). Only modeled hazards keep a start/end window.
 """
 
 from __future__ import annotations
@@ -77,6 +80,17 @@ def _match_place(text: str, pack: CityPack, corridors: dict) -> list[tuple[str, 
     return pts
 
 
+def _match_restriction(text: str, scenario: ScenarioSpec) -> list[Restriction]:
+    """Restrictions named by id in `text` (the UI removes a clicked closure this way)."""
+    return [r for r in scenario.restrictions if r.restriction_id in text]
+
+
+def restriction_name(r: Restriction) -> str:
+    """Short human name of a restriction: its corridor, without the fixture/edit suffixes."""
+    name = re.sub(r"^close\s+", "", r.label.split(" — ")[0].split(" (")[0].strip(), flags=re.IGNORECASE)
+    return name or r.restriction_id
+
+
 def _proposal_id(sid: str, text: str) -> str:
     return "ip-" + hashlib.sha1(f"{sid}|{text}|{datetime.now(UTC).isoformat()}".encode()).hexdigest()[:10]
 
@@ -89,8 +103,6 @@ def preview(pack: CityPack, scenario: ScenarioSpec, text: str, llm: LLMClient | 
     base = partial(InterventionProposal, proposal_id=pid, text=text, base_scenario_id=scenario.scenario_id)
     start, end, explicit = _window(text, (0, horizon))
     warnings: list[str] = []
-    if not explicit:
-        warnings.append(f"no mm:ss window given; using the whole horizon 00:00–{horizon // 60:02d}:{horizon % 60:02d}")
 
     # ---- fleet
     if re.search(r"\b(bus|buses|fleet|vehicles?)\b", t) and re.search(r"\b(set|use|only|add|with|to)\b", t):
@@ -105,6 +117,8 @@ def preview(pack: CityPack, scenario: ScenarioSpec, text: str, llm: LLMClient | 
 
     # ---- storm
     if "storm" in t or "hazard" in t or "flood" in t:
+        if not explicit:
+            warnings.append(f"no mm:ss window given; using the whole horizon 00:00–{horizon // 60:02d}:{horizon % 60:02d}")
         pts = _match_place(text, pack, corridors)
         if len(pts) < 1:
             return base(kind="storm", ambiguous=True, reason="name at least one place (venue, a zone name) for the storm corridor", warnings=warnings)
@@ -128,10 +142,15 @@ def preview(pack: CityPack, scenario: ScenarioSpec, text: str, llm: LLMClient | 
         return base(kind="move_stop", stop_id=stops[0], target_stop_id=stops[1], warnings=warnings,
                                     reason=f"plans serving {stops[0]} will be re-validated against {stops[1]}")
 
-    # ---- close / reopen corridor
+    # ---- close / reopen corridor (closures are untimed: closed until removed)
     if re.search(r"\b(close|closed|closure|block|shut)\b", t) or re.search(r"\b(reopen|open|lift|remove)\b", t):
-        keys = _match_corridor(text, corridors)
         reopen = bool(re.search(r"\b(reopen|lift|remove)\b", t)) or (re.search(r"\bopen\b", t) and "close" not in t)
+        named = _match_restriction(text, scenario) if reopen else []
+        if named:
+            edges = sorted({e for r in named for e in r.edge_ids})
+            return base(kind="reopen_edge", edge_ids=edges, warnings=warnings,
+                                        reason=f"remove closure {', '.join(restriction_name(r) for r in named)}")
+        keys = _match_corridor(text, corridors)
         if not keys:
             if llm is not None and llm.available():
                 return _llm_classify(pack, scenario, text, corridors, llm, base, warnings)
@@ -142,9 +161,11 @@ def preview(pack: CityPack, scenario: ScenarioSpec, text: str, llm: LLMClient | 
             already = {e for r in scenario.restrictions for e in r.edge_ids}
             if not (set(edges) & already):
                 warnings.append("none of these edges is currently restricted; reopening is a no-op")
-            return base(kind="reopen_edge", edge_ids=edges, start_s=start, end_s=end, warnings=warnings,
+            return base(kind="reopen_edge", edge_ids=edges, warnings=warnings,
                                         reason=f"reopen {', '.join(corridors[k]['label'] for k in keys)}")
-        return base(kind="close_edge", edge_ids=edges, start_s=start, end_s=end, warnings=warnings,
+        if explicit:
+            warnings.append("closures have no time window; the street stays closed until you remove it")
+        return base(kind="close_edge", edge_ids=edges, warnings=warnings,
                                     reason=f"close {', '.join(corridors[k]['label'] for k in keys)} ({len(edges)} edges)")
 
     if llm is not None and llm.available():
@@ -160,7 +181,7 @@ def _llm_classify(pack: CityPack, scenario: ScenarioSpec, text: str, corridors: 
         f"Request: {text!r}\nCorridor keys: {[ (k, c['label']) for k, c in corridors.items()] }\n"
         f"Horizon seconds: {scenario.constraints.horizon_s}"
     )
-    hint = '{"kind": "close_edge|reopen_edge|set_fleet|unsupported", "corridor_keys": ["..."], "fleet_count": null, "start_s": 0, "end_s": 0, "reason": "..."}'
+    hint = '{"kind": "close_edge|reopen_edge|set_fleet|unsupported", "corridor_keys": ["..."], "fleet_count": null, "reason": "..."}'
     try:
         out, res = llm.chat_json(system, user, hint)
     except Exception as exc:  # noqa: BLE001
@@ -168,12 +189,9 @@ def _llm_classify(pack: CityPack, scenario: ScenarioSpec, text: str, corridors: 
     warnings = warnings + [f"intent classified by {res.provider}/{res.model}; edges resolved deterministically"]
     kind = out.get("kind", "unsupported")
     keys = [k for k in out.get("corridor_keys", []) if k in corridors]
-    horizon = scenario.constraints.horizon_s
-    start = max(0, int(out.get("start_s") or 0))
-    end = min(horizon, int(out.get("end_s") or horizon))
     if kind in ("close_edge", "reopen_edge") and keys:
         edges = sorted({e for k in keys for e in corridors[k]["edge_ids"]})
-        return base(kind=kind, edge_ids=edges, start_s=start, end_s=end, warnings=warnings, reason=str(out.get("reason", "")))
+        return base(kind=kind, edge_ids=edges, warnings=warnings, reason=str(out.get("reason", "")))
     if kind == "set_fleet" and out.get("fleet_count"):
         return base(kind="set_fleet", fleet_count=int(out["fleet_count"]), warnings=warnings, reason=str(out.get("reason", "")))
     return base(kind="unsupported", ambiguous=True, warnings=warnings, reason=str(out.get("reason", "unsupported")))
@@ -190,10 +208,10 @@ def apply(pack: CityPack, scenario: ScenarioSpec, p: InterventionProposal) -> Sc
     change: list[str] = []
     if p.kind == "close_edge":
         restrictions.append(Restriction(
-            restriction_id=f"closure-{p.proposal_id[3:]}", edge_ids=p.edge_ids, start_s=p.start_s or 0,
-            end_s=p.end_s or cons.horizon_s, label=p.reason + " (operator edit, not a live advisory)",
+            restriction_id=f"closure-{p.proposal_id[3:]}", edge_ids=p.edge_ids, start_s=0, end_s=cons.horizon_s,
+            label=p.reason + " (operator edit, not a live advisory)",
         ))
-        change.append(f"close {len(p.edge_ids)} edges {p.start_s}-{p.end_s}s: {p.reason}")
+        change.append(f"close {len(p.edge_ids)} edges: {p.reason}")
     elif p.kind == "reopen_edge":
         drop = set(p.edge_ids)
         kept = []

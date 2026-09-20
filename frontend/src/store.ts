@@ -27,14 +27,15 @@ export type Selection =
   | { kind: 'person'; id: string }
   | { kind: 'car'; id: string }
   | { kind: 'stop'; id: string }
-  | { kind: 'restriction'; id: string }
+  /** `at` is the clicked lon/lat on the closure, so its card opens where the user clicked rather than at the corridor centre. */
+  | { kind: 'restriction'; id: string; at?: [number, number] }
   /** A saved development of the active scenario. */
   | { kind: 'development'; id: string }
   /** A base-city building or landmark picked on the map (ids are the pack's OSM way ids); facts come from `SyncMap.buildingFacts`. */
   | { kind: 'building'; id: string }
   | null
 
-export type ToolId = 'area' | 'road' | 'intersection' | 'stop' | 'route' | 'population' | 'event' | 'development' | 'closure' | 'weather'
+export type ToolId = 'area' | 'closure' | 'development' | 'population'
 
 export type LensTab = 'people' | 'agents' | 'transport' | 'diagnostics'
 
@@ -336,6 +337,8 @@ export const useStore = create<State>((set, get) => ({
       if (get().scenarioId !== scenarioId || get().loadingReplay !== rid) return
       const scenario = get().scenarios.find((s) => s.scenario_id === scenarioId)
       clock.setHorizon(Math.max(scenario?.constraints.horizon_s ?? 0, rx.tMax))
+      // the replay never stops: it opens at recorded activity and loops back there at the end
+      clock.setLoop(rx.activityStart ?? 0)
       clock.seek(rx.activityStart ?? 0)
       set({ primaryRunId: rid, selection: null })
       clock.play()

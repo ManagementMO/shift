@@ -79,13 +79,15 @@ def test_close_corridor_preview_and_immutable_apply(world):
     pack, scenario, _ = world
     p = edits.preview(pack, scenario, "Also close Erb St through Uptown from 10:00 to 30:00")
     assert p.kind == "close_edge" and not p.ambiguous
-    assert p.edge_ids and (p.start_s, p.end_s) == (600, 1800)
+    assert p.edge_ids and (p.start_s, p.end_s) == (None, None), "street closures carry no time window"
+    assert any("no time window" in w for w in p.warnings)
     before = scenario.model_dump()
     child = edits.apply(pack, scenario, p)
     assert scenario.model_dump() == before, "applying an edit must not mutate the base scenario"
     assert child.scenario_id != scenario.scenario_id and child.parent_scenario_id == scenario.scenario_id
     assert len(child.restrictions) == len(scenario.restrictions) + 1
     assert set(child.restrictions[-1].edge_ids) == set(p.edge_ids)
+    assert (child.restrictions[-1].start_s, child.restrictions[-1].end_s) == (0, scenario.constraints.horizon_s)
     assert "close" in child.change_set[-1].lower()
 
 

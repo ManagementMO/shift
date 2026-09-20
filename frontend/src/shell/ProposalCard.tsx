@@ -65,11 +65,12 @@ export default function ProposalCard() {
         <b>{proposalTitle(p)}</b>
       </div>
       <div className="small">{p.reason}</div>
-      {p.start_s !== null && p.end_s !== null && !blocked && (
+      {p.kind === 'storm' && p.start_s !== null && p.end_s !== null && !blocked && (
         <div className="small dim">
           window +{fmt(p.start_s)} → +{fmt(p.end_s)}
         </div>
       )}
+      {p.kind === 'close_edge' && !blocked && <div className="small dim">closed for the whole scenario · click the closure on the city to remove it later</div>}
       {p.hazard && <div className="small dim">{p.hazard.label}</div>}
       {p.warnings.map((w, i) => (
         <div key={i} className="small warn">
