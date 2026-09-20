@@ -97,6 +97,9 @@
 
 .god-chrome .god-chrome__command-zone {
   position: absolute;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
   bottom: var(--gp-edge);
   left: 50%;
   transform: translateX(-50%);

@@ -374,7 +374,8 @@ proposal review.
 The resident recording dock now has an independent, bounded layout rather than
 inheriting the full-width live dock's minimum column sizes. Time labels, a thin
 progress track, playback controls and compact counters remain inside the glass
-card. The card sits above the command bar; resident panels reserve space for it.
+card. The card sits at the bottom centre, with the prompt bar directly above it in
+one shared layout; resident panels reserve space for both.
 The redundant live playback dock is hidden during resident inspection, and its
 Space shortcut defers to recorded playback.
 
