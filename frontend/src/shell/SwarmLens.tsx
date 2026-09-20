@@ -6,6 +6,7 @@ import type { Investigation } from '../types'
 import { fmt } from '../util'
 import Inspector from '../components/Inspector'
 import ComparePanel from '../components/ComparePanel'
+import PopulationLens, { PopulationMetricsPanel } from './PopulationLens'
 
 const TABS: { id: LensTab; label: string }[] = [
   { id: 'people', label: 'People' },
@@ -29,6 +30,7 @@ const LABEL: Record<PersonState, string> = {
 export default function SwarmLens() {
   const lens = useStore((s) => s.lens)
   const setLens = useStore((s) => s.setLens)
+  const population = useStore((s) => s.scenarios.find((sc) => sc.scenario_id === s.scenarioId)?.scenario_kind === 'population')
   if (!lens) return null
   return (
     <aside className="drawer lens">
@@ -43,9 +45,10 @@ export default function SwarmLens() {
         </button>
       </div>
       <div className="drawer-body">
-        {lens === 'people' && <PeopleLens />}
-        {lens === 'agents' && <AgentsLens />}
-        {lens === 'transport' && <TransportLens />}
+        {population && lens !== 'diagnostics' && <PopulationLens />}
+        {!population && lens === 'people' && <PeopleLens />}
+        {!population && lens === 'agents' && <AgentsLens />}
+        {!population && lens === 'transport' && <TransportLens />}
         {lens === 'diagnostics' && <DiagnosticsLens />}
       </div>
     </aside>
@@ -242,12 +245,13 @@ function DiagnosticsLens() {
   return (
     <div className="lens-body">
       <div className="small dim">Everything here is implementation detail: versions, hashes, providers, fallbacks, raw warnings.</div>
+      {scenario?.scenario_kind === 'population' && <div className="small dim">Transit analyst configuration is separate from resident brains. The population inspector shows assigned models, actual recorded decision sources, and native framework mappings.</div>}
       <div className="kv small mono">
         <span>schema</span>
         <b>{health?.schema_version ?? '—'}</b>
         <span>SUMO</span>
         <b>{health?.sumo ?? '—'}</b>
-        <span>model</span>
+        <span>transit analyst model</span>
         <b>
           {health ? `${health.providers.llm.model} via ${health.providers.llm.provider}${health.providers.llm.sponsor ? '' : ' (local fallback)'}` : '—'}
           {health && !health.providers.llm.available ? ' · unavailable' : ''}
@@ -268,6 +272,8 @@ function DiagnosticsLens() {
         <b>{scenario ? `${scenario.evidence_bundle_id ?? 'none'} ${scenario.evidence_hash ? scenario.evidence_hash.slice(0, 12) : ''}` : '—'}</b>
       </div>
       {rx && runRow(rx, 'view run')}
+      {rx?.population?.artifact && <PopulationMetricsPanel metrics={rx.population.artifact.metrics} status={rx.bundle.run.status} />}
+      {rx?.bundle.run.run_kind === 'population' && !rx.population && <div className="warn small">Population artifact absent; no mental state, ownership, or native provenance can be inferred from tracks alone.</div>}
       {compare && runRow(compare, 'compare run')}
       {rx && (
         <details className="small">

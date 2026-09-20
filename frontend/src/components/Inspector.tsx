@@ -1,4 +1,8 @@
+import { useMemo } from 'react'
 import { useStore } from '../store'
+import { bindingsForEntityAt, buildDefinitionIndex } from '../population'
+import { selectedResidentId } from '../selection'
+import ResidentInspector from './ResidentInspector'
 import { personStateAt, seriesAt } from '../replay'
 import { fmt } from '../util'
 import { clock } from '../world/playback'
@@ -19,11 +23,18 @@ function Spark({ series, max, t }: { series: { times: number[]; values: number[]
 
 export default function Inspector() {
   const selection = useStore((s) => s.selection)
+  const primaryRunId = useStore((s) => s.primaryRunId)
   const primary = useStore((s) => (s.primaryRunId ? s.replays[s.primaryRunId] : null))
   const pack = useStore((s) => s.pack)
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
   const t = useStore((s) => s.t)
   const select = useStore((s) => s.select)
+  const definition = useStore((s) => s.populationDefinition)
+  const initialPopulation = useMemo(() => definition ? buildDefinitionIndex(definition) : null, [definition])
+  const population = primaryRunId ? primary?.population ?? null : initialPopulation
+  const residentId = selection?.kind === 'resident' ? selection.id : primary ? selectedResidentId(primary, selection, t) : null
+  if (population && residentId) return <ResidentInspector population={population} residentId={residentId} t={primary ? t : 0} onSelect={(id) => select({ kind: 'resident', id })} onClose={() => select(null)} />
+  if (selection?.kind === 'resident') return <div className="small warn">{primaryRunId && !primary ? 'Resident selection retained. The old replay was invalidated; recorded state will reload at the next pause or finalization boundary.' : 'Population artifact unavailable; resident state cannot be reconstructed for this run.'}</div>
 
   if (!selection) {
     return (
@@ -94,6 +105,18 @@ export default function Inspector() {
 
   if (!primary) return null
 
+  if (primary.bundle.run.run_kind === 'population') {
+    const bindings = population ? bindingsForEntityAt(population, selection.id, t) : []
+    return <div className="inspector small">
+      <h2>{selection.kind} · {selection.id}</h2>
+      <div className="dim">{bindings.some((b) => b.ownership === 'shared') ? 'Shared mobility. No arbitrary passenger brain color.' : 'No active resident ownership binding. Neutral recorded traffic.'}</div>
+      {!population && <div className="warn">Population artifact unavailable; resident inspection is unavailable.</div>}
+      <div className="wrap">{bindings.map((b) => <button className="tiny" key={b.resident_id} onClick={() => select({ kind: 'resident', id: b.resident_id })}>{population?.profiles[b.resident_id]?.name ?? b.resident_id}</button>)}</div>
+      <div>{primary.tracks[selection.id]?.times.length ?? 0} measured samples</div>
+      <button onClick={() => select(null)}>Close</button>
+    </div>
+  }
+
   if (selection.kind === 'bus') {
     const occ = primary.occupancy[selection.id]
     const cap = scenario?.constraints.fleet.find((f) => f.vehicle_id === selection.id)?.capacity ?? 60
@@ -147,14 +170,14 @@ export default function Inspector() {
     )
   }
 
-  if (selection.kind === 'car') {
+  if (selection.kind === 'car' || selection.kind === 'bicycle' || selection.kind === 'delivery' || selection.kind === 'truck') {
     const ix = primary.tracks[selection.id]
-    const pid = selection.id.startsWith('car_') ? selection.id.slice(4) : null
+    const pid = selection.kind === 'car' && selection.id.startsWith('car_') ? selection.id.slice(4) : null
     return (
       <div className="inspector">
         <h2>{selection.id}</h2>
         <div className="small dim">
-          {selection.id.startsWith('bg_') ? 'background traffic (synthetic, fixed count)' : 'cohort traveler driving their own car'} · samples {ix?.times.length ?? 0}
+          {selection.kind !== 'car' ? `recorded ${selection.kind}` : selection.id.startsWith('bg_') ? 'background traffic (synthetic, fixed count)' : 'cohort traveler driving their own car'} · samples {ix?.times.length ?? 0}
         </div>
         {pid && (
           <button className="tiny" onClick={() => select({ kind: 'person', id: pid })}>

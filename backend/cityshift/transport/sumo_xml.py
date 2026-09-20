@@ -6,6 +6,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.sax.saxutils import quoteattr as q
 
+from cityshift.contracts import TravelClass
+
+POPULATION_TYPES: dict[TravelClass, str] = {
+    "pedestrian": "ped", "bicycle": "bicycle", "passenger": "car", "delivery": "delivery", "truck": "truck",
+}
+PEDESTRIAN_SPEED_MPS = 1.4
+
 
 @dataclass
 class BusStopDef:
@@ -58,10 +65,13 @@ class EdgeClosure:
     modes: list[str] = field(default_factory=lambda: ["passenger", "bus"])
 
 
-VTYPES = """
-    <vType id="shuttle_bus" vClass="bus" length="12.0" width="2.55" height="3.2" maxSpeed="20" accel="1.2" decel="4.0" personCapacity="{cap}" guiShape="bus" color="0,200,255"/>
+VTYPES = f"""
+    <vType id="shuttle_bus" vClass="bus" length="12.0" width="2.55" height="3.2" maxSpeed="20" accel="1.2" decel="4.0" personCapacity="{{cap}}" guiShape="bus" color="0,200,255"/>
     <vType id="car" vClass="passenger" length="4.5" width="1.8" maxSpeed="30" accel="2.6" decel="4.5" guiShape="passenger" color="220,220,200"/>
-    <vType id="ped" vClass="pedestrian" width="0.6" length="0.4" maxSpeed="1.4" guiShape="pedestrian"/>
+    <vType id="ped" vClass="pedestrian" width="0.6" length="0.4" maxSpeed="{PEDESTRIAN_SPEED_MPS}" guiShape="pedestrian"/>
+    <vType id="bicycle" vClass="bicycle" length="1.8" width="0.65" maxSpeed="6.94" accel="1.2" decel="3.0" guiShape="bicycle"/>
+    <vType id="delivery" vClass="delivery" length="6.0" width="2.0" maxSpeed="25" accel="2.0" decel="4.5" guiShape="delivery"/>
+    <vType id="truck" vClass="truck" length="10.0" width="2.5" maxSpeed="22" accel="1.0" decel="4.0" guiShape="truck"/>
 """
 
 
@@ -121,13 +131,14 @@ def write_routes(
             )
         )
     for p in persons:
+        arrival = f' arrivalPos="{p.arrival_pos}"' if p.arrival_pos is not None else ""
         if p.walk_only or p.stop_id is None or p.alight_stop_id is None:
-            plan = f'\n        <walk from={q(p.origin_edge)} to={q(p.dest_edge)}/>'
+            plan = f'\n        <walk from={q(p.origin_edge)} to={q(p.dest_edge)}{arrival}/>'
         else:
             plan = (
                 f'\n        <walk from={q(p.origin_edge)} busStop={q(p.stop_id)}/>'
                 f'\n        <ride busStop={q(p.alight_stop_id)} lines={q(p.lines)}/>'
-                f'\n        <walk to={q(p.dest_edge)}/>'
+                f'\n        <walk to={q(p.dest_edge)}{arrival}/>'
             )
         items.append(
             (

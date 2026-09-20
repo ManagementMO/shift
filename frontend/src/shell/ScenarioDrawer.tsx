@@ -1,9 +1,12 @@
 import { useStore } from '../store'
 import type { SimulationRun } from '../types'
 import { fmt } from '../util'
+import PopulationRunControl from './PopulationRunControl'
+import PopulationRunActions from './PopulationRunActions'
+import { populationReplayReady } from '../populationLifecycle'
 
 function StatusPill({ run }: { run: SimulationRun }) {
-  const cls = run.status === 'completed' ? 'ok' : run.status === 'running' || run.status === 'queued' ? 'busy' : 'bad'
+  const cls = run.status === 'paused' ? '' : run.status === 'completed' ? 'ok' : run.status === 'running' || run.status === 'queued' ? 'busy' : 'bad'
   return (
     <span className={`pill ${cls}`}>
       {run.status}
@@ -29,6 +32,7 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
   const submitRun = useStore((s) => s.submitRun)
   const cancelRun = useStore((s) => s.cancelRun)
   const openRun = useStore((s) => s.openRun)
+  const refreshRuns = useStore((s) => s.refreshRuns)
   const setCompareMode = useStore((s) => s.setCompareMode)
   const select = useStore((s) => s.select)
 
@@ -57,11 +61,11 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
         {samePack.map((s) => (
           <button key={s.scenario_id} className={`listitem ${s.scenario_id === scenarioId ? 'on' : ''}`} onClick={() => void selectScenario(s.scenario_id)}>
             <span>{s.parent_scenario_id ? `↳ branch · ${s.change_set[s.change_set.length - 1] ?? s.scenario_id}` : s.label.split(' during ')[0].replace(/\s*\(.*\)\)?\s*$/, '')}</span>
-            <span className="dim">{s.scenario_id}</span>
+            <span className="dim">{s.scenario_kind ?? 'transport'} · {s.scenario_id}</span>
           </button>
         ))}
       </div>
-      {scenario && (
+      {scenario && scenario.scenario_kind !== 'population' && (
         <div className="small">
           <div className="dim">
             fleet {scenario.constraints.fleet.map((f) => `${f.vehicle_id} (${f.capacity})`).join(', ')} · window +{fmt(scenario.constraints.service_window_s[0])}–+
@@ -80,6 +84,23 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
         </div>
       )}
 
+      {scenario?.scenario_kind === 'population' ? <>
+        <div className="drawer-head"><b>Resident society</b></div>
+        <PopulationRunControl />
+        <div className="drawer-head"><b>Population runs</b><button className="ghostbtn" onClick={() => void refreshRuns()}>Refresh status</button></div>
+        <div className="small dim">Execution pause waits for a verified paired checkpoint. Playback pause only stops the viewer; Stop does not request a checkpoint.</div>
+        {runs.length === 0 && <div className="small dim">No execution yet. Building a definition does not start model calls.</div>}
+        {runs.map((r) => <div className="plan" key={r.run_id}>
+          <div className="row between"><span className="mono">{r.run_id}</span><StatusPill run={r} /></div>
+          <div className="small dim">{r.engine_version || 'engine not started'} · seed {r.seed}</div>
+          <div className="row wrap">
+            {populationReplayReady(r) && <button className={`ghostbtn ${primaryRunId === r.run_id ? 'on' : ''}`} disabled={loadingReplay === r.run_id} onClick={() => void openRun(r.run_id, 'primary', true)}>{loadingReplay === r.run_id ? 'Loading…' : r.status === 'paused' ? 'View paused records' : 'View recorded artifacts'}</button>}
+          </div>
+          <PopulationRunActions run={r} />
+          {r.error && <div className="bad small">{r.error}</div>}
+          {r.warnings.map((warning, i) => <div className="warn small" key={i}>{warning}</div>)}
+        </div>)}
+      </> : <>
       <div className="drawer-head">
         <b>Plans</b>
       </div>
@@ -132,6 +153,7 @@ export default function ScenarioDrawer({ onClose }: { onClose: () => void }) {
           </div>
         </div>
       ))}
+      </>}
     </aside>
   )
 }

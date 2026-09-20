@@ -27,6 +27,15 @@ from cityshift.providers import LLMClient
 from cityshift.store import Store
 
 
+class PopulationScenarioError(ValueError):
+    pass
+
+
+def require_transport(scenario: ScenarioSpec) -> None:
+    if scenario.scenario_kind != "transport":
+        raise PopulationScenarioError("Population scenarios use the population API, not transport planning or interventions.")
+
+
 class Service:
     def __init__(self, store: Store | None = None, workers: int = 2):
         self.store = store or Store()
@@ -58,6 +67,7 @@ class Service:
         return scenario
 
     def register_scenario(self, scenario: ScenarioSpec, demand: DemandSet) -> ScenarioSpec:
+        require_transport(scenario)
         existing = self.store.get_scenario(scenario.scenario_id)
         if existing is not None:
             return existing
@@ -81,6 +91,7 @@ class Service:
 
     # plans ---------------------------------------------------------------------------------------
     def register_plan(self, scenario: ScenarioSpec, plan: ServicePlan) -> ValidationReport:
+        require_transport(scenario)
         pack = self.pack(scenario.pack_id)
         report = validate_plan(pack, scenario, plan, self.store.get_demand(scenario.scenario_id))
         self.store.put_plan(scenario.scenario_id, plan, report)
@@ -95,6 +106,7 @@ class Service:
     # runs ----------------------------------------------------------------------------------------
     def submit_run(self, sid: str, pid: str, seed: int) -> SimulationRun:
         scenario = self.scenario(sid)
+        require_transport(scenario)
         plan = self.plan(sid, pid)
         demand = self.demand(sid)
         pack = self.pack(scenario.pack_id)
@@ -133,16 +145,19 @@ class Service:
     # prompt-to-edit ------------------------------------------------------------------------------
     def preview_edit(self, sid: str, prompt: str) -> InterventionProposal:
         scenario = self.scenario(sid)
+        require_transport(scenario)
         return edits.preview(self.pack(scenario.pack_id), scenario, prompt, llm=LLMClient())
 
     def apply_edit(self, sid: str, proposal: InterventionProposal) -> ScenarioSpec:
         scenario = self.scenario(sid)
+        require_transport(scenario)
         child = edits.apply(self.pack(scenario.pack_id), scenario, proposal)
         return self.register_scenario(child, self.demand(sid))
 
     # agents --------------------------------------------------------------------------------------
     def investigate(self, sid: str, problem: str, constraint: str) -> Investigation:
         scenario = self.scenario(sid)
+        require_transport(scenario)
         demand = self.demand(sid)
         pack = self.pack(scenario.pack_id)
         inv = new_investigation(sid, problem, constraint)

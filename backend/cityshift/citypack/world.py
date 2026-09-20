@@ -390,18 +390,16 @@ def compile_network(net: sumolib.net.Net, frame: WorldFrame) -> tuple[list[dict]
         allow: set[str] = set()
         for ln in e.getLanes():
             lane_allow = []
-            if ln.allows("passenger"):
-                lane_allow.append("car")
-                allow.add("car")
-            if ln.allows("bus"):
-                lane_allow.append("bus")
-                allow.add("bus")
-            if ln.allows("pedestrian"):
-                lane_allow.append("ped")
-                allow.add("ped")
+            for vclass, label in (
+                ("passenger", "car"), ("bus", "bus"), ("pedestrian", "ped"),
+                ("bicycle", "bicycle"), ("delivery", "delivery"), ("truck", "truck"),
+            ):
+                if ln.allows(vclass):
+                    lane_allow.append(label)
+                    allow.add(label)
             lanes.append({"shape": flat(frame.net_to_world(x, y) for x, y in ln.getShape()), "w": q(ln.getWidth()), "allow": lane_allow})
         rtype = e.getType() or ""
-        kind = "path" if allow == {"ped"} else ("rail" if "railway" in rtype else "road")
+        kind = "path" if allow and allow <= {"ped", "bicycle"} else ("rail" if "railway" in rtype else "road")
         rec: dict = {
             "id": e.getID(),
             "shape": flat(shape),
@@ -414,10 +412,9 @@ def compile_network(net: sumolib.net.Net, frame: WorldFrame) -> tuple[list[dict]
             "from": e.getFromNode().getID(),
             "to": e.getToNode().getID(),
         }
-        if kind != "path":
-            rec["lanes"] = lanes
-            if e.getName():
-                rec["name"] = e.getName()
+        rec["lanes"] = lanes
+        if kind != "path" and e.getName():
+            rec["name"] = e.getName()
         roads.append(rec)
         probes.append(Point(shape[len(shape) // 2]))
     junctions: list[dict] = []
@@ -430,7 +427,7 @@ def compile_network(net: sumolib.net.Net, frame: WorldFrame) -> tuple[list[dict]
         poly = Polygon(shp)
         if not poly.is_valid or poly.area < 2.0:
             continue
-        ped_only = all(not (e.allows("passenger") or e.allows("bus")) for e in [*n.getIncoming(), *n.getOutgoing()])
+        ped_only = all(not any(e.allows(vclass) for vclass in ("passenger", "bus", "delivery", "truck")) for e in [*n.getIncoming(), *n.getOutgoing()])
         junctions.append({"id": n.getID(), "ring": flat(shp), "type": n.getType(), "kind": "path" if ped_only else "road", "x": q(n.getCoord()[0] - frame.origin[0]), "z": q(n.getCoord()[1] - frame.origin[1])})
     return roads, junctions, probes
 

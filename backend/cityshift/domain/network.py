@@ -48,7 +48,7 @@ def _first_hops(src, vclass: str, from_lane: int | None, max_lane_shift: int = 1
     """Outgoing edges reachable from `from_lane` (or a lane within `max_lane_shift`).  A bus leaving a
     curb-side stop cannot cut across three lanes to make a turn; SUMO would stall and teleport it."""
     out = []
-    for e2, conns in src.getOutgoing().items():
+    for e2, conns in src.getAllowedOutgoing(vclass).items():
         if not e2.allows(vclass):
             continue
         if from_lane is None:
@@ -62,9 +62,16 @@ def _first_hops(src, vclass: str, from_lane: int | None, max_lane_shift: int = 1
 def route(net, from_edge_id: str, to_edge_id: str, vclass: str, closed: set[str], vmax: float = 15.0, from_lane: int | None = None):
     """Fastest path (seconds) avoiding closed edges.  Returns (edge_id list, seconds) or (None, inf).
     If from == to the route is a loop through the network back to the same edge."""
-    src = net.getEdge(from_edge_id)
-    dst = net.getEdge(to_edge_id)
-    if not src.allows(vclass) or not dst.allows(vclass):
+    try:
+        src = net.getEdge(from_edge_id)
+        dst = net.getEdge(to_edge_id)
+    except KeyError:
+        return None, math.inf
+    if from_edge_id in closed or to_edge_id in closed or not src.allows(vclass) or not dst.allows(vclass):
+        return None, math.inf
+    if from_lane is not None and (
+        not 0 <= from_lane < len(src.getLanes()) or not src.getLanes()[from_lane].allows(vclass)
+    ):
         return None, math.inf
 
     def cost(e) -> float:
@@ -114,11 +121,10 @@ def route(net, from_edge_id: str, to_edge_id: str, vclass: str, closed: set[str]
 
 
 @lru_cache(maxsize=4)
-def _walk_graph(pack_id: str) -> dict[str, list[tuple[str, float]]]:
-    net = load_net(pack_id)
+def _walk_graph(net, vclass: str = "pedestrian") -> dict[str, list[tuple[str, float]]]:
     adj: dict[str, list[tuple[str, float]]] = {}
     for e in net.getEdges():
-        if e.isSpecial() or not e.allows("pedestrian"):
+        if e.isSpecial() or not e.allows(vclass):
             continue
         a, b, length = e.getFromNode().getID(), e.getToNode().getID(), e.getLength()
         adj.setdefault(a, []).append((b, length))
@@ -126,21 +132,26 @@ def _walk_graph(pack_id: str) -> dict[str, list[tuple[str, float]]]:
     return adj
 
 
-_walk_cache: dict[tuple[str, str], dict[str, float]] = {}
+_walk_cache: dict[tuple[sumolib.net.Net, str, str], dict[str, float]] = {}
 
 
 def walk_distance_m(pack_id: str, from_edge_id: str, to_edge_id: str) -> float | None:
     """Pedestrian network distance (metres) between the far node of `from` and the near node of `to`;
     sidewalks are walked in both directions."""
     net = load_net(pack_id)
-    adj = _walk_graph(pack_id)
     try:
-        src = net.getEdge(from_edge_id).getFromNode().getID()
+        src_edge = net.getEdge(from_edge_id)
         dst_edge = net.getEdge(to_edge_id)
     except KeyError:
         return None
-    key = (pack_id, src)
+    if any(e.isSpecial() or not e.allows("pedestrian") for e in (src_edge, dst_edge)):
+        return None
+    adj = _walk_graph(net, "pedestrian")
+    src = src_edge.getFromNode().getID()
+    key = (net, "pedestrian", src)
     if key not in _walk_cache:
+        if len(_walk_cache) >= 256:
+            _walk_cache.pop(next(iter(_walk_cache)))
         dist: dict[str, float] = {src: 0.0}
         q = [(0.0, src)]
         while q:

@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { clock } from '../world/playback'
-import { entitiesAt, personStateAt, lonLatAt, seriesAt, type PersonState } from '../replay'
-import { fmt } from '../util'
+import { entitiesAt, personStateAt, seriesAt, type PersonState } from '../replay'
+import { bindingsForEntityAt, brainColor, residentViewAt } from '../population'
+import { selectedResidentId, selectionEntityId, selectionPosition } from '../selection'
+import { bubblePlacement, fmt } from '../util'
 import { cameraTo, leadMap } from '../world/registry'
 import { agentPose, currentPose } from '../world/camera'
 
@@ -28,8 +30,25 @@ export default function AgentBubble() {
   const cameraMode = useStore((s) => s.cameraMode)
   const t = useStore((s) => s.t)
   const [pt, setPt] = useState<{ x: number; y: number } | null>(null)
+  const bubble = useRef<HTMLDivElement>(null)
+  const [bounds, setBounds] = useState({ width: 300, height: 300, viewportWidth: 1024, viewportHeight: 768 })
 
   const id = selection && selection.kind !== 'restriction' && selection.kind !== 'stop' ? selection.id : null
+
+  useLayoutEffect(() => {
+    const element = bubble.current
+    if (!element) return
+    const measure = () => {
+      const rect = element.getBoundingClientRect()
+      const next = { width: rect.width, height: rect.height, viewportWidth: innerWidth, viewportHeight: innerHeight }
+      setBounds((previous) => Object.keys(next).every((key) => previous[key as keyof typeof next] === next[key as keyof typeof next]) ? previous : next)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    window.addEventListener('resize', measure)
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure) }
+  }, [id, rx])
 
   // Follow the entity on screen (per frame, off the React tree except for the final set when it moves).
   useEffect(() => {
@@ -38,9 +57,8 @@ export default function AgentBubble() {
     let lastFollow = 0
     const update = (tt: number, follow: boolean) => {
       const lead = leadMap()
-      const ix = rx.tracks[id]
-      const stop = pack?.stops.find((s) => s.stop_id === waitingStop(rx.personEvents[id], tt))
-      const pos: [number, number] | null = ix ? lonLatAt(ix, tt) : stop ? [stop.lon, stop.lat] : null
+      const stop = rx.bundle.run.run_kind !== 'population' ? pack?.stops.find((s) => s.stop_id === waitingStop(rx.personEvents[id], tt)) : null
+      const pos: [number, number] | null = selectionPosition(rx, selection, tt) ?? (stop ? [stop.lon, stop.lat] : null)
       if (!lead || !pos) {
         if (last !== 'none') {
           last = 'none'
@@ -76,21 +94,43 @@ export default function AgentBubble() {
       off()
       lead?.off('move', onMove)
     }
-  }, [id, rx, pack, cameraMode])
+  }, [id, rx, pack, cameraMode, selection])
 
   if (!selection || !id || !rx) return null
-  const ent = entitiesAt(rx, t).find((e) => e.id === id)
-  const style = pt ? { left: pt.x, top: pt.y } : undefined
-  const cls = `bubble ${pt ? '' : 'docked'}`
+  const entityId = selectionEntityId(rx, selection, t)
+  const ent = entitiesAt(rx, t).find((e) => e.id === entityId)
+  const placement = pt ? bubblePlacement(pt, bounds, { width: bounds.viewportWidth, height: bounds.viewportHeight }) : null
+  const style = placement ? { left: placement.left, top: placement.top, transform: 'translateX(-50%)' } : undefined
+  const cls = `bubble ${pt ? placement?.shifted ? 'shifted' : '' : 'docked'}`
 
   const follow = () => {
     const lead = leadMap()
-    const ix = rx.tracks[id]
-    const pos = ix ? lonLatAt(ix, t) : null
+    const pos = selectionPosition(rx, selection, t)
     if (lead && pos) cameraTo(agentPose([pos[0], pos[1]], ent?.angle ?? null, currentPose(lead)), 'agent')
   }
 
-  if (selection.kind === 'person') {
+  const residentId = selectedResidentId(rx, selection, t)
+  const resident = rx.population && residentId ? residentViewAt(rx.population, residentId, t) : null
+  if (resident) {
+    const { profile, state, assignment, decision, provenance, binding } = resident
+    return <div ref={bubble} className={`${cls} population-bubble`} style={style}>
+      <div className="bubble-head"><i className="brain-dot" style={{ background: `rgb(${brainColor(assignment).join(',')})` }} /><b>{profile.name}</b><button className="iconbtn small" onClick={() => select(null)} aria-label="Close">×</button></div>
+      <div className="small">{state?.role.replaceAll('_', ' ') ?? profile.roles.join(', ')} · <b>{state?.activity ?? 'no state'}</b> · {binding?.mode ?? state?.mobility_mode ?? '—'}</div>
+      <div className="small population-persona">{profile.persona}</div>
+      <div className="small dim">{binding?.ownership === 'abstract' ? `Abstract presence · ${rx.population?.anchors[binding.anchor_id ?? '']?.name ?? binding.anchor_id}` : binding?.ownership === 'shared' ? `Shared vehicle ${binding.entity_id}` : ent ? `Measured ${ent.kind} · ${(ent.speed * 3.6).toFixed(0)} km/h` : 'No recorded position at this time'}</div>
+      <div className="small">{state?.commitments.length ?? 0} commitments · {resident.tasks.length} relevant tasks</div>
+      <div className="small dim population-ellipsis" title={`Assigned ${assignment?.model_family} / ${provenance.assignedModel}`}>Assigned {assignment?.model_family} / {provenance.assignedModel}</div>
+      <div className="small population-ellipsis" title={`Actual source ${provenance.source} / ${provenance.actualModel ?? 'no model recorded'}`}>Actual: <b>{provenance.source === 'none' ? 'no decision yet' : provenance.source}</b>{provenance.actualModel ? ` / ${provenance.actualModel}` : ''}{decision ? ` · +${fmt(decision.t)}` : ''}</div>
+      {decision && <div className="small population-summary"><b>{decision.source === 'jiuwenswarm' ? 'Recorded generated summary' : 'Recorded summary'}:</b> {decision.summary}</div>}
+      {decision?.proposal && <div className="small">Proposal: {decision.proposal.action} · {decision.accepted ? 'accepted' : 'not accepted'} (not proof of completion)</div>}
+      {provenance.fallbackReason && <div className="small warn">Fallback: {provenance.fallbackReason}</div>}
+      <div className="row"><button className="ghostbtn" onClick={follow} disabled={!selectionPosition(rx, selection, t)}>Follow</button><button className="ghostbtn" onClick={() => setLens('people')}>Inspect brain</button></div>
+      <div className="small dim">Replay-only records · no new inference</div>
+    </div>
+  }
+  if (selection.kind === 'resident') return null
+
+  if (selection.kind === 'person' && rx.bundle.run.run_kind !== 'population') {
     const ev = rx.personEvents[id]
     const state = personStateAt(ev, t, travelers[id]?.has_car ? 'car' : undefined)
     const trav = travelers[id]
@@ -98,7 +138,7 @@ export default function AgentBubble() {
     const wait = waitedSoFar(ev, t)
     const num = Number(id.replace(/\D/g, ''))
     return (
-      <div className={cls} style={style}>
+      <div ref={bubble} className={cls} style={style}>
         <div className="bubble-head">
           <b>Traveler {Number.isFinite(num) ? num : id}</b>
           <span className={`pill ${state}`}>{STATE_LABEL[state]}</span>
@@ -128,12 +168,13 @@ export default function AgentBubble() {
   if (selection.kind === 'bus') {
     const occ = seriesAt(rx.occupancy[id], t)
     const cap = scenario?.constraints.fleet.find((f) => f.vehicle_id === id)?.capacity
-    const riders = Object.entries(rx.personEvents).filter(([, ev]) => onboard(ev, t, id)).length
+    const bindings = rx.population ? bindingsForEntityAt(rx.population, id, t) : []
+    const riders = rx.population ? bindings.length : Object.entries(rx.personEvents).filter(([, ev]) => onboard(ev, t, id)).length
     return (
-      <div className={cls} style={style}>
+      <div ref={bubble} className={cls} style={style}>
         <div className="bubble-head">
           <b>{id.replace('_', ' ').toUpperCase()}</b>
-          <span className="pill bus">shuttle</span>
+          <span className="pill bus">{rx.bundle.run.run_kind === 'population' ? 'shared bus' : 'shuttle'}</span>
           <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
             ✕
           </button>
@@ -142,6 +183,7 @@ export default function AgentBubble() {
           {occ ?? riders} aboard{cap ? ` / ${cap} seats` : ''}
           {ent ? ` · ${(ent.speed * 3.6).toFixed(0)} km/h` : ' · not on the road right now'}
         </div>
+        {rx.population && <div className="wrap">{bindings.slice(0, 6).map((b) => <button key={b.resident_id} className="tiny" onClick={() => select({ kind: 'resident', id: b.resident_id })}>{rx.population?.profiles[b.resident_id]?.name ?? b.resident_id}</button>)}</div>}
         <div className="row">
           <button className="ghostbtn" onClick={follow}>
             Follow
@@ -154,12 +196,12 @@ export default function AgentBubble() {
     )
   }
 
-  const owner = id.startsWith('car_p') ? id.slice(4) : null
+  const owner = rx.bundle.run.run_kind !== 'population' && selection.kind === 'car' && id.startsWith('car_p') ? id.slice(4) : null
   return (
-    <div className={cls} style={style}>
+    <div ref={bubble} className={cls} style={style}>
       <div className="bubble-head">
-        <b>{owner ? `Traveler ${Number(owner.replace(/\D/g, ''))}'s car` : 'Background car'}</b>
-        <span className="pill car">car</span>
+        <b>{owner ? `Traveler ${Number(owner.replace(/\D/g, ''))}'s car` : rx.bundle.run.run_kind === 'population' ? `Unowned ${selection.kind}` : selection.kind === 'car' ? 'Background car' : `Recorded ${selection.kind}`}</b>
+        <span className="pill car">{selection.kind}</span>
         <button className="iconbtn small" onClick={() => select(null)} aria-label="Close">
           ✕
         </button>

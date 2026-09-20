@@ -5,6 +5,9 @@ import type { Corridor, ServicePlan } from '../types'
 import { fmt } from '../util'
 import { ghostFromProposal } from './ghost'
 import ProposalCard from './ProposalCard'
+import PopulationRunControl from './PopulationRunControl'
+import { defaultPopulationSpec, populationCostLimit, populationScaleReason, populationUnavailableReason } from '../populationControls'
+import { brainColor } from '../population'
 
 const TITLES: Record<ToolId, string> = {
   closure: 'Close or reopen a street',
@@ -311,6 +314,59 @@ function StopTool() {
 }
 
 function PopulationTool() {
+  const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
+  const [mode, setMode] = useState<'residents' | 'transport'>(scenario && scenario.scenario_kind !== 'population' ? 'transport' : 'residents')
+  return <div className="tool">
+    <div className="seg"><button className={mode === 'residents' ? 'on' : ''} onClick={() => setMode('residents')}>Resident society</button><button className={mode === 'transport' ? 'on' : ''} onClick={() => setMode('transport')}>Venue travelers</button></div>
+    {mode === 'residents' ? <ResidentPopulationTool /> : <TransportPopulationTool />}
+  </div>
+}
+
+function ResidentPopulationTool() {
+  const pack = useStore((s) => s.pack)
+  const status = useStore((s) => s.populationStatus)
+  const statusError = useStore((s) => s.populationStatusError)
+  const refresh = useStore((s) => s.refreshPopulationStatus)
+  const create = useStore((s) => s.createPopulation)
+  const setError = useStore((s) => s.setError)
+  const building = useStore((s) => s.building)
+  const [count, setCount] = useState(12)
+  const [seed, setSeed] = useState(7)
+  const [horizon, setHorizon] = useState(3600)
+  const [cost, setCost] = useState(20)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { void refresh() }, [refresh])
+  const reason = populationUnavailableReason(status, statusError)
+  const maxCost = populationCostLimit(status)
+  const scaleReason = populationScaleReason(status, count)
+  const build = async () => {
+    if (!status || reason) return
+    setBusy(true)
+    try {
+      await create(defaultPopulationSpec(status, { count, seed, horizon, packId: pack?.pack_id ?? 'toronto', maxCostUsd: cost }))
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <div className="tool">
+    <div className="small dim">Define persistent synthetic residents with linked everyday tasks in {pack?.name ?? 'Toronto'}. Walking, bicycle, passenger car, delivery van, and truck classes are enabled. This is not venue-egress demand.</div>
+    <div className={`small ${reason ? 'warn' : 'ok'}`}>{reason ?? 'Native JiuwenSwarm service available; runs remain explicit.'}</div>
+    <button className="ghostbtn" onClick={() => void refresh()} disabled={busy}>Refresh availability</button>
+    <label className="small">Residents<select value={count} onChange={(e) => setCount(Number(e.target.value))}>{[12, 60, 120, 240, 300].map((n) => <option value={n} key={n}>{n}</option>)}</select></label>
+    <div className="row"><label className="small">Seed<input type="number" step={1} value={seed} onChange={(e) => setSeed(Number(e.target.value))} /></label><label className="small">Horizon<select value={horizon} onChange={(e) => setHorizon(Number(e.target.value))}>{[900, 1800, 3600, 7200].map((n) => <option value={n} key={n}>{n / 60} min</option>)}</select></label></div>
+    <label className="small">Run budget cap (USD, at most ${maxCost.toFixed(2)})<input type="number" min={0} max={maxCost} step={0.5} value={Math.min(cost, maxCost)} onChange={(e) => setCost(Number(e.target.value))} /></label>
+    <div className="small">Configured resident brains:</div>
+    {(status?.models ?? []).map((brain) => <div className="small" key={brain.config_ref}><i className="brain-dot" style={{ background: `rgb(${brainColor(brain).join(',')})` }} />{brain.model_family} · {brain.model_id}<div className="dim">{brain.api_provider} · {brain.control_mode}</div></div>)}
+    <button className="primary" onClick={() => void build()} disabled={busy || Boolean(building) || Boolean(reason) || !Number.isFinite(cost) || cost < 0 || !Number.isSafeInteger(seed)}>{busy ? 'Defining residents…' : `Build definition for ${count} residents`}</button>
+    <div className="small dim">Build creates a definition only, without inference. Then explicitly Run the society below or from Scenarios.</div>
+    {scaleReason && <div className="small warn">{scaleReason}</div>}
+    <PopulationRunControl />
+  </div>
+}
+
+function TransportPopulationTool() {
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
   const createFlagship = useStore((s) => s.createFlagship)
   const building = useStore((s) => s.building)

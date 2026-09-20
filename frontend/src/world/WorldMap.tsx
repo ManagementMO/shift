@@ -9,6 +9,7 @@ import { clock } from './playback'
 import { buildWorldLayers, SLOT_NAMES, slotAnchorId } from './layers'
 import { cityPose, TORONTO_CITY, type CameraPose } from './camera'
 import { registerMap, renderStats } from './registry'
+import { MAPBOX_TOKEN, MAPLIBRE_WORKER_URL, OPENFREEMAP_STYLE, USE_INTERLEAVED_MAPBOX_LAYERS } from './mapConfig'
 
 type MapLike = {
   addControl: (c: maplibregl.IControl, pos?: string) => unknown
@@ -24,9 +25,6 @@ type MapLike = {
   setConfigProperty?: (imp: string, key: string, value: unknown) => unknown
   jumpTo: (o: Partial<CameraPose>) => unknown
 } & Parameters<typeof registerMap>[1]
-
-const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/positron'
-export const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined
 
 // Mapbox Standard, art-directed: no POI/transit/road-label clutter, faded palette, warm daylight.
 const STANDARD_CONFIG: Record<string, unknown> = {
@@ -95,13 +93,26 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
     let unregister = () => {}
     let stopFrame = () => {}
     let unsub = () => {}
+    let detachError = () => {}
+    let lastError: string | null = null
+    const reportError = (error: unknown, sourceId?: string) => {
+      if (disposed) return
+      let detail = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error ?? 'Unknown map error')
+      if (MAPBOX_TOKEN) detail = detail.replaceAll(MAPBOX_TOKEN, '[redacted]')
+      detail = detail.replace(/([?&](?:access_token|token|api_key|key)=)[^&\s]*/gi, '$1[redacted]')
+      const message = `${MAPBOX_TOKEN ? 'Mapbox' : 'MapLibre'} basemap${sourceId ? ` (${sourceId})` : ''}: ${detail}`
+      if (message === lastError) return
+      lastError = message
+      useStore.getState().setError(message)
+    }
 
-    patchTexImage3D()
+    if (USE_INTERLEAVED_MAPBOX_LAYERS) patchTexImage3D()
     const overlay = new MapboxOverlay({
-      interleaved: true,
+      interleaved: USE_INTERLEAVED_MAPBOX_LAYERS,
       layers: [],
       effects: [LIGHTING],
       useDevicePixels: true,
+      pickingRadius: 6,
     })
     overlayRef.current = overlay
 
@@ -129,6 +140,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
         m.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right')
         map = m as unknown as MapLike
       } else {
+        maplibregl.setWorkerUrl(MAPLIBRE_WORKER_URL)
         const m = new maplibregl.Map({
           container,
           style: OPENFREEMAP_STYLE,
@@ -145,6 +157,10 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
         map.remove()
         return
       }
+      mapRef.current = map
+      const onMapError = (event: { error?: unknown; sourceId?: string }) => reportError(event.error, event.sourceId)
+      map.on('error', onMapError as (e: never) => void)
+      detachError = () => { map.off('error', onMapError as (e: never) => void) }
       // Invisible per-slot anchor layers that deck layer groups are inserted before (see SLOT in layers.ts).
       let anchorsReady = false
       const ensureAnchors = () => {
@@ -159,7 +175,6 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
       if (map.isStyleLoaded()) ensureAnchors()
 
       map.addControl(overlay as unknown as maplibregl.IControl)
-      mapRef.current = map
       unregister = registerMap(side, map)
 
       let dirty = true
@@ -188,7 +203,7 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
             ghostStops: s.ghost?.stops,
             ghostHazard: s.ghost?.hazard,
             focusCorridorEdges: focusEdges,
-            dimOthers: s.selection?.kind === 'person',
+            dimOthers: s.selection?.kind === 'person' || s.selection?.kind === 'resident',
             side: side === 'solo' ? undefined : side,
           }),
         })
@@ -210,14 +225,17 @@ export default function WorldMap({ runId, side }: { runId: string | null; side: 
       map.on('style.load', redraw as (e: never) => void)
       map.getCanvas().style.cursor = 'default'
     }
-    void init()
+    void init().catch((error: unknown) => reportError(error))
     return () => {
       disposed = true
       stopFrame()
       unsub()
       unregister()
+      detachError()
       mapRef.current?.remove()
       mapRef.current = null
+      overlayRef.current = null
+      redrawRef.current = () => {}
     }
   }, [side])
 

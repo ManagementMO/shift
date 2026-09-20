@@ -216,7 +216,6 @@ def compile_scenario(
             z = zone_for_stop(pack, stops[sid])
             if z:
                 zone_service.setdefault(z, []).append((s, sid))
-    venue_car_edge = _nearest_allowed(net, pack.venue_lonlat, "passenger")
     persons: list[PersonTrip] = []
     cars: list[CarTrip] = []
     cohort_ids: list[str] = []
@@ -224,21 +223,31 @@ def compile_scenario(
     cohort_vehicles: dict[str, str] = {}
     unroutable: dict[str, str] = {}
     mode: dict[str, str] = {}
-    walk_cache: dict[str, float | None] = {}
+    walk_cache: dict[tuple[str, str, str, str], float | None] = {}
     window_end = scenario.constraints.service_window_s[1]
     for tr in demand.travelers:
         cohort_ids.append(tr.person_id)
         desired[tr.person_id] = tr.depart_s
         if tr.has_car:
+            origin_car_edge = _nearest_allowed_edge_to_edge(net, tr.origin_edge, "passenger")
             dest_car_edge = _nearest_allowed_edge_to_edge(net, tr.dest_edge, "passenger")
-            if dest_car_edge is None:
-                unroutable[tr.person_id] = "no drivable edge near destination"
+            if origin_car_edge is None or dest_car_edge is None:
+                unroutable[tr.person_id] = "no drivable edge near origin or destination"
+                mode[tr.person_id] = "unroutable"
+                continue
+            path, _ = net.getShortestPath(net.getEdge(origin_car_edge), net.getEdge(dest_car_edge), vClass="passenger")
+            if path is None:
+                unroutable[tr.person_id] = "no passenger path from origin to destination"
                 mode[tr.person_id] = "unroutable"
                 continue
             vid = f"car_{tr.person_id}"
-            cars.append(CarTrip(vid, venue_car_edge, dest_car_edge, tr.depart_s))
+            cars.append(CarTrip(vid, origin_car_edge, dest_car_edge, tr.depart_s))
             cohort_vehicles[vid] = tr.person_id
             mode[tr.person_id] = "car"
+            continue
+        if any(not net.hasEdge(eid) or not net.getEdge(eid).allows("pedestrian") for eid in (tr.origin_edge, tr.dest_edge)):
+            unroutable[tr.person_id] = "no pedestrian access at origin or destination"
+            mode[tr.person_id] = "unroutable"
             continue
         served = [(s, sid) for s, sid in zone_service.get(tr.dest_zone, []) if s.duty.depart_s + 1800 >= tr.depart_s and s.duty.depart_s <= window_end]
         if served:
@@ -248,7 +257,7 @@ def compile_scenario(
             persons.append(PersonTrip(tr.person_id, tr.origin_edge, pickup, alight, tr.dest_edge, tr.depart_s, lines=" ".join(lines)))
             mode[tr.person_id] = "ride"
             continue
-        key = tr.dest_edge
+        key = (pack.network_fingerprint, tr.origin_edge, tr.dest_edge, "pedestrian")
         if key not in walk_cache:
             walk_cache[key] = walk_distance_m(pack.pack_id, tr.origin_edge, tr.dest_edge)
         dist = walk_cache[key]
@@ -316,7 +325,12 @@ def _nearest_allowed(net, lonlat: tuple[float, float], vclass: str, radius: floa
 
 
 def _nearest_allowed_edge_to_edge(net, edge_id: str, vclass: str) -> str | None:
-    e = net.getEdge(edge_id)
+    try:
+        e = net.getEdge(edge_id)
+    except KeyError:
+        return None
+    if e.isSpecial():
+        return None
     if e.allows(vclass):
         return edge_id
     shape = e.getShape()

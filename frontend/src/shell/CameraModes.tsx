@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { cameraTo, leadMap, watchCameraMode } from '../world/registry'
 import { cityPose, corridorPose, currentPose, districtPose, incidentPose, type CameraMode } from '../world/camera'
-import { lonLatAt, hazardFootprint } from '../replay'
+import { entitiesAt, hazardFootprint } from '../replay'
+import { selectionForEntity, selectionPosition } from '../selection'
 
 const MODES: { id: CameraMode; label: string; key: string }[] = [
   { id: 'city', label: 'City', key: '1' },
@@ -23,7 +24,11 @@ export default function CameraModes() {
 
   // The Babylon world offers the Blue Jays egress framing once a replay with recorded releases is loaded.
   useEffect(() => {
-    const id = setInterval(() => setHero(Boolean(leadMap()?.egress)), 500)
+    const id = setInterval(() => {
+      const s = useStore.getState()
+      const population = s.scenarios.find((sc) => sc.scenario_id === s.scenarioId)?.scenario_kind === 'population'
+      setHero(!population && Boolean(leadMap()?.egress))
+    }, 500)
     return () => clearInterval(id)
   }, [primaryRunId])
 
@@ -72,7 +77,8 @@ function go(mode: CameraMode) {
   const base = currentPose(lead)
   const scenario = s.scenarios.find((x) => x.scenario_id === s.scenarioId)
   const rx = s.primaryRunId ? s.replays[s.primaryRunId] : null
-  const venue: [number, number] | null = pack ? [pack.venue_lonlat[0], pack.venue_lonlat[1]] : null
+  const anchor = rx?.population?.definition.anchors[0] ?? s.populationDefinition?.anchors[0]
+  const venue: [number, number] | null = scenario?.scenario_kind === 'population' && anchor ? [anchor.lon, anchor.lat] : pack ? [pack.venue_lonlat[0], pack.venue_lonlat[1]] : null
 
   switch (mode) {
     case 'city':
@@ -91,14 +97,14 @@ function go(mode: CameraMode) {
     case 'agent': {
       const sel = s.selection
       let pos: [number, number] | null = null
-      if (rx && sel && sel.kind !== 'restriction' && sel.kind !== 'stop' && rx.tracks[sel.id]) pos = lonLatAt(rx.tracks[sel.id], s.t)
-      if (!pos && rx) {
+      if (rx && sel) pos = selectionPosition(rx, sel, s.t)
+      if (!pos && rx && sel?.kind !== 'resident') {
         // Nothing selected: follow the first shuttle that is on the road right now, else any moving entity.
-        const bus = Object.values(rx.tracks).find((ix) => ix.track.kind === 'bus' && lonLatAt(ix, s.t))
-        const any = bus ?? Object.values(rx.tracks).find((ix) => lonLatAt(ix, s.t))
+        const entities = entitiesAt(rx, s.t)
+        const any = entities.find((e) => e.kind === 'bus') ?? entities[0]
         if (any) {
-          pos = lonLatAt(any, s.t)
-          s.select({ kind: any.track.kind, id: any.track.entity_id })
+          pos = [any.lon, any.lat]
+          s.select(selectionForEntity(rx, any.id, any.kind, s.t))
         }
       }
       if (pos) cameraTo({ center: [pos[0], pos[1]], zoom: 17.6, pitch: 66, bearing: base.bearing }, 'agent')

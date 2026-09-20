@@ -10,27 +10,32 @@ function runStatus(status: string | undefined, progress: number | undefined, loa
   if (status === 'completed') return { label: 'Measured replay', cls: 'ok' }
   if (status === 'running') return { label: `Simulating ${Math.round((progress ?? 0) * 100)}%`, cls: 'busy' }
   if (status === 'queued') return { label: 'Queued', cls: 'busy' }
+  if (status === 'paused') return { label: 'Execution paused', cls: 'idle' }
   return { label: status, cls: 'bad' }
 }
 
 export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => void }) {
   const pack = useStore((s) => s.pack)
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
-  const run = useStore((s) => s.runs.find((r) => r.run_id === s.primaryRunId) ?? s.runs.find((r) => r.status === 'running' || r.status === 'queued'))
+  const run = useStore((s) => s.runs.find((r) => r.run_id === s.primaryRunId) ?? s.runs.find((r) => r.status === 'running' || r.status === 'queued') ?? (s.scenarios.find((sc) => sc.scenario_id === s.scenarioId)?.scenario_kind === 'population' ? s.runs.at(-1) : undefined))
   const loading = useStore((s) => s.loadingReplay !== null)
+  const populationDefinition = useStore((s) => s.populationDefinition)
   const compareMode = useStore((s) => s.compareMode)
   const setCompareMode = useStore((s) => s.setCompareMode)
   const lens = useStore((s) => s.lens)
   const setLens = useStore((s) => s.setLens)
   const primaryRunId = useStore((s) => s.primaryRunId)
+  const hasReplay = useStore((s) => Boolean(s.primaryRunId && s.replays[s.primaryRunId]))
   const setError = useStore((s) => s.setError)
   const [shared, setShared] = useState<{ href: string; label: string } | null>(null)
 
   const st = runStatus(run?.status, run?.progress, loading)
+  const population = scenario?.scenario_kind === 'population'
+  if (population && run?.status === 'completed' && !loading) st.label = populationDefinition?.spec.brains.some((brain) => brain.control_mode === 'rules') ? 'Rules fixture replay' : 'Recorded society'
   const title = scenario ? shortLabel(scenario.label) : 'No scenario'
 
   const share = async () => {
-    if (!primaryRunId) return
+    if (!primaryRunId || !hasReplay) return
     try {
       const r = await api.exportReplay(primaryRunId)
       const href = r.url ?? `/api/exports/${primaryRunId}.zip`
@@ -56,10 +61,10 @@ export default function TopStrip({ onOpenScenarios }: { onOpenScenarios: () => v
         {st.label}
       </div>
       <div className="strip-actions">
-        <button className={`ghostbtn ${compareMode ? 'on' : ''}`} onClick={() => setCompareMode(!compareMode)}>
+        <button className={`ghostbtn ${compareMode ? 'on' : ''}`} onClick={() => setCompareMode(!compareMode)} disabled={population} title={population ? 'Transport comparison is not used for resident society runs' : undefined}>
           Compare
         </button>
-        <button className="ghostbtn" onClick={() => void share()} disabled={!primaryRunId}>
+        <button className="ghostbtn" onClick={() => void share()} disabled={!hasReplay}>
           {shared ? 'Exported' : 'Share'}
         </button>
         <button className={`ghostbtn ${lens && lens !== 'diagnostics' ? 'on' : ''}`} onClick={() => setLens(lens && lens !== 'diagnostics' ? null : 'people')}>

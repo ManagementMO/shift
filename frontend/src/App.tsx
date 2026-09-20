@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { useStore } from './store'
+import { shouldPollRuns } from './populationLifecycle'
 import WorldMap from './world/WorldMap'
 import TopStrip from './shell/TopStrip'
 import SimDock from './shell/SimDock'
@@ -29,6 +30,7 @@ export default function App({ renderer = 'mapbox' }: { renderer?: Renderer }) {
   const refreshRuns = useStore((s) => s.refreshRuns)
   const openRun = useStore((s) => s.openRun)
   const scenarioId = useStore((s) => s.scenarioId)
+  const population = useStore((s) => s.scenarios.find((sc) => sc.scenario_id === s.scenarioId)?.scenario_kind === 'population')
   const pack = useStore((s) => s.pack)
   const [drawer, setDrawer] = useState(false)
 
@@ -38,16 +40,18 @@ export default function App({ renderer = 'mapbox' }: { renderer?: Renderer }) {
 
   // Poll while SUMO is running; when the newest run lands, show it.
   useEffect(() => {
-    const active = runs.some((r) => r.status === 'running' || r.status === 'queued')
+    const active = shouldPollRuns(runs)
     if (!active) return
     const id = setInterval(() => void refreshRuns(), 1500)
     return () => clearInterval(id)
   }, [runs, refreshRuns])
   useEffect(() => {
-    if (primaryRunId) return
-    const done = runs.filter((r) => r.status === 'completed' && r.scenario_id === scenarioId)
+    if (primaryRunId || shouldPollRuns(runs)) return
+    const own = runs.filter((r) => r.scenario_id === scenarioId)
+    if (population && !['completed', 'paused'].includes(own.at(-1)?.status ?? '')) return
+    const done = own.filter((r) => r.status === 'completed' || (population && r.status === 'paused'))
     if (done.length) void openRun(done[done.length - 1].run_id, 'primary')
-  }, [runs, primaryRunId, scenarioId, openRun])
+  }, [runs, primaryRunId, scenarioId, openRun, population])
 
   const noRun = pack && scenarioId && !primaryRunId && !runs.some((r) => r.status === 'running' || r.status === 'queued')
 
@@ -81,7 +85,7 @@ export default function App({ renderer = 'mapbox' }: { renderer?: Renderer }) {
 
       {noRun && (
         <div className="hint">
-          No measured run for this scenario yet — open <button onClick={() => setDrawer(true)}>Scenarios</button> and run a plan in SUMO.
+          {population ? 'No population replay open — use ' : 'No measured run for this scenario yet — open '}<button onClick={() => setDrawer(true)}>Scenarios</button>{population ? ' to explicitly run the society or view saved artifacts.' : ' and run a plan in SUMO.'}
         </div>
       )}
 
@@ -90,7 +94,7 @@ export default function App({ renderer = 'mapbox' }: { renderer?: Renderer }) {
           <div className="building-card">
             <i />
             <b>{building}</b>
-            <span className="small dim">The current world is frozen. A new compiled scenario will load when the branch is ready.</span>
+            <span className="small dim">The current world is paused while the new scenario is prepared. Execution remains a separate action.</span>
           </div>
         </div>
       )}

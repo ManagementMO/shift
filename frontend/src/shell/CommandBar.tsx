@@ -14,6 +14,7 @@ const SUGGESTIONS = [
 
 export default function CommandBar() {
   const scenarioId = useStore((s) => s.scenarioId)
+  const population = useStore((s) => s.scenarios.find((sc) => sc.scenario_id === s.scenarioId)?.scenario_kind === 'population')
   const pack = useStore((s) => s.pack)
   const tool = useStore((s) => s.tool)
   const ghost = useStore((s) => s.ghost)
@@ -24,7 +25,7 @@ export default function CommandBar() {
   const [focused, setFocused] = useState(false)
 
   const submit = async (prompt: string) => {
-    if (!scenarioId || !prompt.trim()) return
+    if (!scenarioId || !prompt.trim() || population) return
     setBusy(true)
     try {
       setGhost(ghostFromProposal(await api.previewEdit(scenarioId, prompt), pack))
@@ -42,7 +43,7 @@ export default function CommandBar() {
           <ProposalCard />
         </div>
       )}
-      {focused && !text && (
+      {focused && !text && !population && (
         <div className="suggestions">
           {SUGGESTIONS.map((s) => (
             <button key={s} onMouseDown={(e) => e.preventDefault()} onClick={() => void submit(s)}>
@@ -63,10 +64,10 @@ export default function CommandBar() {
           onChange={(e) => setText(e.target.value)}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          placeholder="Describe an intervention — the agent proposes, you confirm"
-          disabled={!scenarioId || busy}
+          placeholder={population ? 'Resident society: use Population to configure, Lens to inspect' : 'Describe an intervention — the agent proposes, you confirm'}
+          disabled={!scenarioId || busy || population}
         />
-        <button type="submit" disabled={busy || !text.trim()}>
+        <button type="submit" disabled={busy || !text.trim() || population}>
           Propose
         </button>
       </form>

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef } from 'react'
 
 import { useStore } from '../store'
+import { selectionEntityId, selectionForEntity } from '../selection'
+import type { ReplayIndex } from '../replay'
 import { clock } from '../world/playback'
 import { registerMap } from '../world/registry'
 import { BabylonSyncMap } from './mapAdapter'
@@ -34,19 +36,22 @@ export default function WorldBabylon({ runId, side }: { runId: string | null; si
       const overlay = new Overlay(ws.scene, ws.roads, ws.frame)
       const unregister = registerMap(side, map)
 
-      let rxKey: string | null = null
+      let activeReplay: ReplayIndex | null = null
+      const syncSelection = (t: number): void => {
+        const s = useStore.getState()
+        const rx = runIdRef.current ? s.replays[runIdRef.current] : null
+        ws.traffic.selectedId = rx ? selectionEntityId(rx, s.selection, t) : null
+        ws.traffic.dimOthers = s.selection?.kind === 'person' || s.selection?.kind === 'resident'
+      }
       const sync = (): void => {
         const s = useStore.getState()
         const rid = runIdRef.current
         const rx = rid ? s.replays[rid] ?? null : null
-        const key = rid && rx ? rid : null
-        if (key !== rxKey) {
-          rxKey = key
+        if (rx !== activeReplay) {
+          activeReplay = rx
           ws.traffic.setReplay(rx)
         }
-        const sel = s.selection
-        ws.traffic.selectedId = sel && sel.kind !== 'restriction' && sel.kind !== 'stop' ? sel.id : null
-        ws.traffic.dimOthers = sel?.kind === 'person'
+        syncSelection(clock.t)
         marks(overlay, clock.t)
       }
       syncRef.current = sync
@@ -54,6 +59,7 @@ export default function WorldBabylon({ runId, side }: { runId: string | null; si
       ws.simT = clock.t
       const offFrame = clock.onFrame((t) => {
         ws.simT = t
+        syncSelection(t)
         marks(overlay, t)
       })
       const unsub = useStore.subscribe(sync)
@@ -75,7 +81,9 @@ export default function WorldBabylon({ runId, side }: { runId: string | null; si
         const project = (x: number, y: number, z: number) => map.projectWorld(x, y, z)
         const hit = ws.traffic.pick(sx, sy, project)
         if (hit) {
-          useStore.getState().select({ kind: hit.kind, id: hit.id })
+          const s = useStore.getState()
+          const rx = runIdRef.current ? s.replays[runIdRef.current] : null
+          s.select(rx ? selectionForEntity(rx, hit.id, hit.kind, clock.t) : { kind: hit.kind, id: hit.id })
           return
         }
         let best: string | null = null

@@ -5,11 +5,13 @@
 import { GeoJsonLayer, PathLayer, PolygonLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers'
 import { SimpleMeshLayer } from '@deck.gl/mesh-layers'
 import { TripsLayer } from '@deck.gl/geo-layers'
-import { ConeGeometry, CubeGeometry, CylinderGeometry } from '@luma.gl/engine'
+import { ConeGeometry, CubeGeometry, CylinderGeometry, Geometry } from '@luma.gl/engine'
 import type { Layer, PickingInfo } from '@deck.gl/core'
 import type { Selection } from '../store'
-import type { CityPack, HazardTrack, ScenarioSpec, StopCandidate } from '../types'
+import type { CityPack, EntityTrack, HazardTrack, ScenarioSpec, StopCandidate } from '../types'
 import { entitiesAt, hazardFootprint, MAX_GAP_S, type EntityAt, type PersonState, type ReplayIndex, type TrackIndex } from '../replay'
+import { NEUTRAL_BRAIN_COLOR, populationColorAt } from '../population'
+import { selectionEntityId, selectionForEntity } from '../selection'
 
 export type RGBA = [number, number, number, number]
 
@@ -58,9 +60,52 @@ const CAR_MESH = new CubeGeometry()
 const PERSON_MESH = new CylinderGeometry({ radius: 1, height: 1, nradial: 8, topCap: true, bottomCap: true })
 const CONE_MESH = new ConeGeometry({ radius: 1, height: 1, nradial: 14, cap: false })
 
-export type Trip = { id: string; path: [number, number][]; timestamps: number[] }
+type BoxPart = { center: [number, number, number]; size: [number, number, number] }
 
-const tripCache = new WeakMap<ReplayIndex, { bus: Trip[]; car: Trip[] }>()
+function mobilityMesh(id: string, parts: BoxPart[]): Geometry {
+  const positions: number[] = []
+  const normals: number[] = []
+  const indices: number[] = []
+  const faces = [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]]
+  const faceNormals = [[0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0], [0, 1, 0], [0, -1, 0]]
+  for (const { center, size } of parts) {
+    const corners = [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]]
+    faces.forEach((face, f) => {
+      const base = positions.length / 3
+      for (const i of face) {
+        positions.push(...corners[i].map((v, axis) => center[axis] + v * size[axis] / 2))
+        normals.push(...faceNormals[f])
+      }
+      indices.push(base, base + 2, base + 1, base, base + 3, base + 2)
+    })
+  }
+  return new Geometry({ id, topology: 'triangle-list', attributes: { POSITION: { size: 3, value: new Float32Array(positions) }, NORMAL: { size: 3, value: new Float32Array(normals) } }, indices: new Uint16Array(indices) })
+}
+
+const MOBILITY = {
+  bicycle: { id: 'bicycles', length: 2, mesh: mobilityMesh('bicycle', [
+    { center: [0, 0, 0.6], size: [1.7, 0.16, 0.25] }, { center: [-0.1, 0, 1.15], size: [0.35, 0.4, 0.8] },
+    { center: [-0.7, 0, 0.32], size: [0.64, 0.12, 0.64] }, { center: [0.7, 0, 0.32], size: [0.64, 0.12, 0.64] },
+    { center: [0.65, 0, 1], size: [0.14, 0.7, 0.12] },
+  ]) },
+  delivery: { id: 'deliveries', length: 5.8, mesh: mobilityMesh('delivery', [
+    { center: [-0.6, 0, 1.4], size: [4.4, 2, 2.2] }, { center: [2.2, 0, 1], size: [1.4, 1.9, 1.8] },
+  ]) },
+  truck: { id: 'trucks', length: 8.5, mesh: mobilityMesh('truck', [
+    { center: [-1, 0, 1.9], size: [6.4, 2.5, 2.8] }, { center: [3.2, 0, 1.4], size: [2.1, 2.3, 2.3] },
+  ]) },
+}
+
+export function deckColorAt(rx: ReplayIndex, id: string, t: number, legacy: RGBA): RGBA {
+  if (rx.bundle.run.run_kind !== 'population') return legacy
+  const color = rx.population ? populationColorAt(rx.population, id, t) : NEUTRAL_BRAIN_COLOR
+  return [color[0], color[1], color[2], legacy[3]]
+}
+
+export type Trip = { id: string; path: [number, number][]; timestamps: number[] }
+type VehicleTrips = Record<Exclude<EntityTrack['kind'], 'person'>, Trip[]>
+
+const tripCache = new WeakMap<ReplayIndex, VehicleTrips>()
 
 function tripsFor(ix: TrackIndex): Trip[] {
   const out: Trip[] = []
@@ -80,13 +125,12 @@ function tripsFor(ix: TrackIndex): Trip[] {
   return out
 }
 
-export function tripsOf(rx: ReplayIndex): { bus: Trip[]; car: Trip[] } {
+export function tripsOf(rx: ReplayIndex): VehicleTrips {
   let c = tripCache.get(rx)
   if (!c) {
-    c = { bus: [], car: [] }
+    c = { bus: [], car: [], bicycle: [], delivery: [], truck: [] }
     for (const ix of Object.values(rx.tracks)) {
-      if (ix.track.kind === 'bus') c.bus.push(...tripsFor(ix))
-      else if (ix.track.kind === 'car') c.car.push(...tripsFor(ix))
+      if (ix.track.kind !== 'person') c[ix.track.kind].push(...tripsFor(ix))
     }
     tripCache.set(rx, c)
   }
@@ -135,8 +179,9 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
   const { pack, roads, scenario, replay, t, zoom, selection, select } = w
   const sfx = w.side ? `-${w.side}` : ''
   const out: Layer[] = []
-  const selectedId = selection?.id ?? null
-  const dim = w.dimOthers && selection && (selection.kind === 'person' || selection.kind === 'bus' || selection.kind === 'car')
+  const selectedId = replay ? selectionEntityId(replay, selection, t) ?? selection?.id ?? null : selection?.id ?? null
+  const dim = w.dimOthers && selection && selection.kind !== 'restriction' && selection.kind !== 'stop'
+  const populationRun = replay?.bundle.run.run_kind === 'population' || scenario?.scenario_kind === 'population'
 
   // --- closures & focus corridors (ground, below buildings) ---
   const closedNow = new Set<string>()
@@ -353,7 +398,7 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
         }),
       )
     }
-    out.push(
+    if (!populationRun) out.push(
       new ScatterplotLayer({
         ...SLOT.middle,
         id: `venue${sfx}`,
@@ -377,7 +422,9 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
   const ents = entitiesAt(replay, t)
   const buses = ents.filter((e) => e.kind === 'bus')
   const cars = ents.filter((e) => e.kind === 'car')
-  const persons = ents.filter((e) => e.kind === 'person')
+  const persons = ents.filter((e) => e.kind === 'person' && e.ownership !== 'abstract')
+  const abstract = ents.filter((e) => e.ownership === 'abstract')
+  const pickEntity = (info: PickingInfo<EntityAt>) => info.object && select(selectionForEntity(replay, info.object.id, info.object.kind, t))
   const capOf = (id: string) => scenario?.constraints.fleet.find((f) => f.vehicle_id === id)?.capacity ?? 60
   const trips = tripsOf(replay)
   const alpha = (id: string, base: number) => (dim && id !== selectedId ? Math.round(base * 0.3) : base)
@@ -400,7 +447,7 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
       jointRounded: true,
     }),
   )
-  if (selection?.kind === 'car' || selection?.kind === 'person') {
+  if (!populationRun && (selection?.kind === 'car' || selection?.kind === 'person')) {
     const id = selection.kind === 'car' ? selection.id : `car_${selection.id}`
     const own = trips.car.filter((d) => d.id === id)
     if (own.length) {
@@ -424,8 +471,8 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
       )
     }
   }
-  if (selection?.kind === 'person') {
-    const ix = replay.tracks[selection.id]
+  if (selection?.kind === 'person' || selection?.kind === 'resident' || selection?.kind === 'bicycle' || selection?.kind === 'delivery' || selection?.kind === 'truck') {
+    const ix = selectedId ? replay.tracks[selectedId] : null
     if (ix) {
       const own = tripsFor(ix)
       out.push(
@@ -475,6 +522,37 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
     )
   }
 
+  for (const kind of ['bicycle', 'delivery', 'truck'] as const) {
+    const config = MOBILITY[kind]
+    const data = ents.filter((e) => e.kind === kind)
+    const k = Math.min(3.5, presentational(config.length, 10, zoom) / config.length)
+    const getColor = (e: EntityAt) => deckColorAt(replay, e.id, t, withA(PALETTE.car, alpha(e.id, 245)))
+    if (zoom >= 13.2) out.push(new SimpleMeshLayer<EntityAt>({
+      ...SLOT.middle, id: `${config.id}${sfx}`, data, mesh: config.mesh,
+      getPosition: (e) => [e.lon, e.lat, 0.15], getOrientation: (e) => [0, sumoYaw(e.angle), 0], getScale: [k, k, k], getColor,
+      material: { ambient: 0.6, diffuse: 0.5, shininess: 12, specularColor: [60, 60, 60] }, pickable: true, onClick: pickEntity,
+      updateTriggers: { getColor: [t, selectedId, dim], getScale: [k] },
+    }))
+    else out.push(new ScatterplotLayer<EntityAt>({
+      ...SLOT.middle, id: `${config.id}-far${sfx}`, data, getPosition: (e) => [e.lon, e.lat, 0.5],
+      getRadius: kind === 'bicycle' ? 2 : kind === 'truck' ? 4 : 3, radiusUnits: 'meters', radiusMinPixels: 2.5,
+      getFillColor: getColor, pickable: true, onClick: pickEntity, updateTriggers: { getFillColor: [t, selectedId, dim] },
+    }))
+  }
+  if (abstract.length) {
+    out.push(new ScatterplotLayer<EntityAt>({
+      ...SLOT.middle, id: `population-abstract${sfx}`, data: abstract, getPosition: (e) => [e.lon, e.lat, 0.3],
+      getRadius: 2.2, radiusUnits: 'meters', radiusMinPixels: 4, radiusMaxPixels: 10, filled: false, stroked: true,
+      getLineColor: (e) => deckColorAt(replay, e.id, t, withA(PALETTE.stone, alpha(e.id, 255))),
+      lineWidthMinPixels: 2, pickable: true, onClick: pickEntity, updateTriggers: { getLineColor: [t, selectedId, dim] },
+    }))
+    out.push(new TextLayer<EntityAt>({
+      ...SLOT.top, id: `population-abstract-label${sfx}`, data: abstract.filter((e) => e.id === selectedId),
+      getPosition: (e) => [e.lon, e.lat, 1], getText: () => 'Abstract presence', getSize: 11, getPixelOffset: [0, 16], getColor: [30, 40, 50, 255],
+      fontFamily: 'Inter, ui-sans-serif, system-ui', characterSet: 'auto',
+    }))
+  }
+
   const carK = Math.min(3.5, presentational(4.4, 12, zoom) / 4.4)
   const personK = Math.min(7, presentational(0.68, 5, zoom) / 0.68)
   const busK = Math.min(2.6, presentational(12, 18, zoom) / 12)
@@ -490,12 +568,12 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
         getOrientation: (d) => [0, sumoYaw(d.angle), 0],
         getScale: [2.2 * carK, 0.9 * carK, 0.7 * carK],
         getColor: (d) => {
-          const c = d.id.startsWith('car_p') ? PALETTE.cohortCar : PALETTE.car
+          const c = deckColorAt(replay, d.id, t, d.id.startsWith('car_p') ? PALETTE.cohortCar : PALETTE.car)
           return [c[0], c[1], c[2], alpha(d.id, c[3])] as RGBA
         },
         material: { ambient: 0.5, diffuse: 0.6, shininess: 24, specularColor: [90, 90, 90] },
         pickable: true,
-        onClick: (info: PickingInfo<EntityAt>) => info.object && select({ kind: 'car', id: info.object.id }),
+        onClick: pickEntity,
         updateTriggers: { getColor: [selectedId, dim], getPosition: [carK] },
       }),
     )
@@ -509,7 +587,10 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
         getRadius: 2.6,
         radiusUnits: 'meters',
         radiusMinPixels: 1.8,
-        getFillColor: (d) => (d.id.startsWith('car_p') ? PALETTE.cohortCar : PALETTE.car),
+        getFillColor: (d) => deckColorAt(replay, d.id, t, withA(d.id.startsWith('car_p') ? PALETTE.cohortCar : PALETTE.car, alpha(d.id, 240))),
+        pickable: true,
+        onClick: pickEntity,
+        updateTriggers: { getFillColor: [t, selectedId, dim] },
       }),
     )
   }
@@ -526,12 +607,12 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
         getOrientation: (d) => [0, sumoYaw(d.angle), 0],
         getScale: (d) => (selectedId === d.id ? [0.5 * personK, 0.5 * personK, 1.1 * personK] : [0.34 * personK, 0.34 * personK, 0.9 * personK]),
         getColor: (d) => {
-          const c = selectedId === d.id ? PALETTE.gold : PERSON_COLORS[d.state ?? 'walking']
+          const c = deckColorAt(replay, d.id, t, selectedId === d.id ? PALETTE.gold : PERSON_COLORS[d.state ?? 'walking'])
           return [c[0], c[1], c[2], alpha(d.id, c[3])] as RGBA
         },
         material: { ambient: 0.6, diffuse: 0.5, shininess: 6, specularColor: [30, 30, 30] },
         pickable: true,
-        onClick: (info: PickingInfo<EntityAt>) => info.object && select({ kind: 'person', id: info.object.id }),
+        onClick: pickEntity,
         updateTriggers: { getColor: [selectedId, dim], getScale: [selectedId, personK], getPosition: [personK] },
       }),
     )
@@ -547,12 +628,12 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
         radiusMinPixels: 2.8,
         radiusMaxPixels: 7,
         getFillColor: (d) => {
-          const c = selectedId === d.id ? PALETTE.gold : PERSON_COLORS[d.state ?? 'walking']
+          const c = deckColorAt(replay, d.id, t, selectedId === d.id ? PALETTE.gold : PERSON_COLORS[d.state ?? 'walking'])
           return [c[0], c[1], c[2], alpha(d.id, c[3])] as RGBA
         },
         billboard: true,
         pickable: true,
-        onClick: (info: PickingInfo<EntityAt>) => info.object && select({ kind: 'person', id: info.object.id }),
+        onClick: pickEntity,
         updateTriggers: { getFillColor: [selectedId, dim], getRadius: [selectedId] },
       }),
     )
@@ -572,12 +653,12 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
         radiusMaxPixels: 18,
         stroked: true,
         filled: true,
-        getFillColor: (d) => withA(busColor(d.occupancy ?? 0, capOf(d.id)), 70),
-        getLineColor: (d) => withA(busColor(d.occupancy ?? 0, capOf(d.id)), 230),
+        getFillColor: (d) => withA(deckColorAt(replay, d.id, t, busColor(d.occupancy ?? 0, capOf(d.id))), 70),
+        getLineColor: (d) => withA(deckColorAt(replay, d.id, t, busColor(d.occupancy ?? 0, capOf(d.id))), 230),
         getLineWidth: 2,
         lineWidthUnits: 'pixels',
         pickable: true,
-        onClick: (info: PickingInfo<EntityAt>) => info.object && select({ kind: 'bus', id: info.object.id }),
+        onClick: pickEntity,
         updateTriggers: { getFillColor: [t], getLineColor: [t] },
       }),
     )
@@ -592,10 +673,10 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
       getPosition: (d) => [d.lon, d.lat, 1.6 * busK],
       getOrientation: (d) => [0, sumoYaw(d.angle), 0],
       getScale: [6 * busK, 1.3 * busK, 1.55 * busK],
-      getColor: (d) => busColor(d.occupancy ?? 0, capOf(d.id)),
+      getColor: (d) => deckColorAt(replay, d.id, t, busColor(d.occupancy ?? 0, capOf(d.id))),
       material: { ambient: 0.45, diffuse: 0.65, shininess: 32, specularColor: [120, 120, 120] },
       pickable: true,
-      onClick: (info: PickingInfo<EntityAt>) => info.object && select({ kind: 'bus', id: info.object.id }),
+      onClick: pickEntity,
       updateTriggers: { getPosition: [busK] },
     }),
   )

@@ -12,15 +12,17 @@ import type { CascadedShadowGenerator } from '@babylonjs/core/Lights/Shadows/cas
 import type { Scene } from '@babylonjs/core/scene'
 
 import { personStateAt, STATE_COLORS, type PersonState, type ReplayIndex, type TrackIndex } from '../replay'
+import { NEUTRAL_BRAIN_COLOR, populationColorAt, populationTrackVisible, stationaryPresenceAt } from '../population'
+import type { EntityTrack } from '../types'
 import { PALETTE, Y } from './city'
 import type { WorldFrame } from './coords'
 import { activeReleases, lodFor, pulse, releasesFrom, type Release } from './crowd'
 import { Batch, hash01, type RGB } from './geometry'
 import { interpAt, type Interp } from './interp'
 
-export type Kind = 'bus' | 'car' | 'person'
+export type Kind = EntityTrack['kind']
 /** Prototype sets: entity kinds plus the far-LOD pedestrian marker and the venue release ring. */
-type SetKind = Kind | 'marker' | 'pulse' | 'halo'
+type SetKind = Kind | 'marker' | 'pulse' | 'halo' | 'presence'
 
 const CAR_PALETTE: RGB[] = [
   [0.86, 0.87, 0.89], // white
@@ -36,7 +38,13 @@ const CAR_PALETTE: RGB[] = [
 const BUS_RED: RGB = [0.8, 0.09, 0.16]
 const PULSE_COLOR: RGB = [1.0, 0.62, 0.2]
 const HALO_COLOR: RGB = [0.18, 0.77, 0.91]
-const HALO_RADIUS: Record<Kind, number> = { bus: 8.5, car: 3.6, person: 1.6 }
+const HALO_RADIUS: Record<Kind, number> = { bus: 8.5, car: 3.6, person: 1.6, bicycle: 2.2, delivery: 4.2, truck: 6 }
+
+export function trafficColorAt(rx: ReplayIndex, id: string, t: number, legacy: RGB): RGB {
+  if (rx.bundle.run.run_kind !== 'population') return legacy
+  const c = rx.population ? populationColorAt(rx.population, id, t) : NEUTRAL_BRAIN_COLOR
+  return [c[0] / 255, c[1] / 255, c[2] / 255]
+}
 /** Screen-space pick tolerance (CSS px). */
 export const PICK_PX = 22
 
@@ -181,6 +189,18 @@ class InstanceSet {
   }
 }
 
+type PresencePose = { id: string; kind: Kind; px: number; py: number; pz: number; yaw: number; seen: boolean }
+
+function cargoSet(scene: Scene, name: string, width: number, height: number, length: number, shadows: CascadedShadowGenerator | null): InstanceSet {
+  return new InstanceSet(scene, name, (b) => {
+    box(b, 0, 0.5, -length * 0.1, width, height, length * 0.75, CAR_PALETTE[0])
+    box(b, 0, 0.4, length * 0.38, width * 0.9, height * 0.7, length * 0.25, CAR_PALETTE[0])
+  }, (b) => {
+    box(b, 0, height * 0.5, length * 0.505, width * 0.8, height * 0.3, 0.08, GLASS)
+    for (const z of [-length * 0.3, length * 0.3]) for (const x of [-width * 0.45, width * 0.45]) box(b, x, 0, z, 0.3, 0.8, 0.8, TYRE)
+  }, shadows)
+}
+
 interface Entity {
   id: string
   ix: TrackIndex
@@ -220,6 +240,7 @@ export class Traffic {
   readonly frame: WorldFrame
   private sets: Record<SetKind, InstanceSet>
   private entities: Entity[] = []
+  private abstractPoses: PresencePose[] = []
   private releases: Release[] = []
   private rx: ReplayIndex | null = null
   private scratch: Interp = { lon: 0, lat: 0, angle: 0, speed: 0, i: -1, k: 0 }
@@ -270,6 +291,17 @@ export class Traffic {
         },
         null,
       ),
+      bicycle: new InstanceSet(scene, 'bicycle', (b) => {
+        box(b, 0, 0.5, 0, 0.18, 0.35, 1.7, CAR_PALETTE[0])
+        box(b, 0, 0.85, -0.2, 0.4, 0.65, 0.3, CAR_PALETTE[0])
+        box(b, 0, 0.95, 0.6, 0.7, 0.12, 0.12, CAR_PALETTE[0])
+      }, (b) => {
+        for (const z of [-0.65, 0.65]) box(b, 0, 0, z, 0.12, 0.65, 0.65, TYRE)
+        box(b, 0, 1.5, -0.2, 0.24, 0.26, 0.24, SKIN)
+      }, null),
+      delivery: cargoSet(scene, 'delivery', 2, 1.8, 5.8, shadows),
+      truck: cargoSet(scene, 'truck', 2.5, 2.6, 8.5, shadows),
+      presence: new InstanceSet(scene, 'abstract-presence', (b) => ring(b, 2.2, 0.5, 0.08, SKIN, 12), null, null),
       marker: new InstanceSet(scene, 'crowd-marker', (b) => b.disc(0, 0, 1.5, 0.06, SKIN, 8), null, null),
       pulse: new InstanceSet(scene, 'release-pulse', (b) => ring(b, 1, 0.12, 0.05, SKIN), null, null),
       halo: new InstanceSet(scene, 'selection-halo', (b) => ring(b, 1, 0.22, 0.05, SKIN), null, null),
@@ -280,11 +312,12 @@ export class Traffic {
   setReplay(rx: ReplayIndex | null): void {
     this.rx = rx
     this.entities = []
+    this.abstractPoses = []
     if (!rx) {
       for (const s of Object.values(this.sets)) s.commit(0)
       return
     }
-    const counts: Record<Kind, number> = { bus: 0, car: 0, person: 0 }
+    const counts: Record<Kind, number> = { bus: 0, car: 0, person: 0, bicycle: 0, delivery: 0, truck: 0 }
     for (const [id, ix] of Object.entries(rx.tracks)) {
       const kind = ix.track.kind
       counts[kind]++
@@ -294,7 +327,8 @@ export class Traffic {
     }
     for (const k of Object.keys(counts) as Kind[]) this.sets[k].reserve(counts[k])
     this.sets.marker.reserve(counts.person)
-    this.releases = releasesFrom(rx, this.frame)
+    this.sets.presence.reserve(rx.population?.definition.profiles.length ?? 0)
+    this.releases = rx.bundle.run.run_kind === 'population' ? [] : releasesFrom(rx, this.frame)
     this.sets.pulse.reserve(64)
   }
 
@@ -322,7 +356,7 @@ export class Traffic {
   update(t: number, view: Viewpoint): void {
     const rx = this.rx
     if (!rx) return
-    const n: Record<SetKind, number> = { bus: 0, car: 0, person: 0, marker: 0, pulse: 0, halo: 0 }
+    const n: Record<SetKind, number> = { bus: 0, car: 0, person: 0, bicycle: 0, delivery: 0, truck: 0, marker: 0, pulse: 0, halo: 0, presence: 0 }
     const modes = rx.bundle.compile?.mode_assignment ?? {}
     const s = this.scratch
     const sel = this.selectedId
@@ -330,20 +364,19 @@ export class Traffic {
     let people = 0
     for (const e of this.entities) {
       const r = interpAt(e.ix, t, s)
-      if (!r) {
+      if (!r || (rx.population && !populationTrackVisible(rx.population, e.ix.track, t))) {
         e.seen = false
         continue
       }
-      let color = e.color
-      let y = Y.road
-      if (e.kind === 'person') {
+      let color = trafficColorAt(rx, e.id, t, e.color)
+      const y = e.kind === 'person' ? Y.path : Y.road
+      if (e.kind === 'person' && rx.bundle.run.run_kind !== 'population') {
         const state: PersonState = personStateAt(rx.personEvents[e.id], t, modes[e.id])
         if (state === 'riding' || state === 'arrived' || state === 'not_departed') {
           e.seen = false
           continue
         }
         color = stateColor(state)
-        y = Y.path
       }
       const [x, z] = this.frame.lonLatToWorld(r.lon, r.lat)
       if (e.kind === 'person') {
@@ -368,8 +401,18 @@ export class Traffic {
         if (!isSel && lodFor(d, view.radius) === 'marker') set = 'marker'
       }
       if (isSel) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, HALO_RADIUS[e.kind])
-      else if (dim) color = mix(color, PALETTE.pavement, 0.72)
+      else if (dim && rx.bundle.run.run_kind !== 'population') color = mix(color, PALETTE.pavement, 0.72)
       this.sets[set].set(n[set]++, x, y, z, e.yaw, color)
+    }
+    this.abstractPoses = []
+    if (rx.population) for (const presence of stationaryPresenceAt(rx.population, t)) {
+      const [x, z] = this.frame.lonLatToWorld(presence.lon, presence.lat)
+      const isSel = presence.id === sel
+      let color = trafficColorAt(rx, presence.id, t, [0.5, 0.5, 0.5])
+      if (isSel) this.sets.halo.set(n.halo++, x, Y.junction + 0.12, z, 0, HALO_COLOR, 3.3)
+      else if (dim && rx.bundle.run.run_kind !== 'population') color = mix(color, PALETTE.pavement, 0.72)
+      this.sets.presence.set(n.presence++, x, Y.path, z, 0, color)
+      this.abstractPoses.push({ id: presence.id, kind: 'person', px: x, py: Y.path, pz: z, yaw: 0, seen: true })
     }
     const live = activeReleases(this.releases, t)
     this.sets.pulse.reserve(live.length)
@@ -389,7 +432,7 @@ export class Traffic {
 
   /** Last drawn world pose of an entity (for follow cameras / inspection); null if unknown or not visible. */
   poseOf(id: string): { x: number; z: number; yaw: number; kind: Kind } | null {
-    const e = this.entities.find((v) => v.id === id)
+    const e = this.entities.find((v) => v.id === id) ?? this.abstractPoses.find((v) => v.id === id)
     return e && e.seen ? { x: e.px, z: e.pz, yaw: e.yaw, kind: e.kind } : null
   }
 
@@ -400,7 +443,7 @@ export class Traffic {
   pick(sx: number, sy: number, project: (x: number, y: number, z: number) => { x: number; y: number }, tol = PICK_PX): Picked | null {
     let best: Picked | null = null
     let bestD = tol * tol
-    for (const e of this.entities) {
+    for (const e of [...this.entities, ...this.abstractPoses]) {
       if (!e.seen) continue
       const p = project(e.px, e.py + (e.kind === 'bus' ? 1.8 : e.kind === 'car' ? 0.7 : 0.9), e.pz)
       const d = (p.x - sx) * (p.x - sx) + (p.y - sy) * (p.y - sy)

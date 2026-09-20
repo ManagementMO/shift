@@ -6,13 +6,15 @@ import json
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from cityshift.api.service import get_service
+from cityshift.api.population_gateway_router import router as population_gateway_router
+from cityshift.api.population_router import router as population_router
+from cityshift.api.service import PopulationScenarioError, get_service
 from cityshift.contracts import SCHEMA_VERSION, DemandSet, ScenarioSpec, ServicePlan
 from cityshift.domain.network import pack_dir
 from cityshift.domain.runs import RUN_ROOT
@@ -38,6 +40,8 @@ RUN_ARTIFACTS = {
     "validation": "validation.json",
     "manifest": "manifest.json",
     "tripinfo_summary": "tripinfo_summary.json",
+    "population": "population.json",
+    "native": "native.json",
 }
 PACK_ARTIFACTS = {"roads": "roads.geojson", "walk": "walk.geojson", "corridors": "corridors.json", "world": "world.json"}
 
@@ -256,6 +260,14 @@ def _include_optional_routers() -> None:
 
 
 _include_optional_routers()
+app.include_router(population_router)
+app.include_router(population_gateway_router)
+
+
+@app.exception_handler(PopulationScenarioError)
+def population_boundary_error(request: Request, exc: PopulationScenarioError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
 
 STATIC_DIR = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 if STATIC_DIR.exists():

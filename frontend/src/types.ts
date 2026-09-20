@@ -95,6 +95,8 @@ export type ScenarioSpec = {
   scenario_id: string
   pack_id: string
   demand_id: string
+  scenario_kind?: 'transport' | 'population'
+  population_id?: string | null
   evidence_bundle_id: string | null
   evidence_hash: string | null
   restrictions: Restriction[]
@@ -131,7 +133,9 @@ export type ValidationReport = { plan_id: string; valid: boolean; issues: Valida
 
 export type PlanWithValidation = { plan: ServicePlan; validation: ValidationReport | null }
 
-export type RunStatus = 'draft' | 'validated' | 'queued' | 'running' | 'completed' | 'invalid' | 'failed' | 'canceled'
+export type RunStatus = 'draft' | 'validated' | 'queued' | 'running' | 'paused' | 'completed' | 'invalid' | 'failed' | 'canceled'
+
+export type PopulationPauseResponse = { requested: true; run_id: string }
 
 export type RunMetrics = {
   cohort_size: number
@@ -157,6 +161,8 @@ export type SimulationRun = {
   scenario_id: string
   plan_id: string
   seed: number
+  run_kind?: 'transport' | 'population'
+  population_id?: string | null
   status: RunStatus
   engine_version: string
   progress: number
@@ -170,9 +176,11 @@ export type SimulationRun = {
 
 export type EntityTrack = {
   entity_id: string
-  kind: 'bus' | 'car' | 'person'
+  kind: 'bus' | 'car' | 'person' | 'bicycle' | 'delivery' | 'truck'
   samples: number[][] // [t, lon, lat, angle, speed]
   breaks: number[]
+  resident_id?: string | null
+  vehicle_class?: string | null
 }
 
 export type PersonEvent = {
@@ -209,6 +217,7 @@ export type RunBundle = {
   occupancy: Record<string, [number, number][]>
   stopQueue: Record<string, [number, number][]>
   compile: CompileInfo | null
+  population?: PopulationArtifact | null
 }
 
 export type InterventionProposal = {
@@ -275,4 +284,303 @@ export type EvidenceBundle = {
   unresolved: string[]
   frozen_at: string
   content_hash: string
+}
+
+export type TravelClass = 'pedestrian' | 'bicycle' | 'passenger' | 'delivery' | 'truck'
+export type PopulationAction = 'request_service' | 'accept' | 'decline' | 'travel' | 'prepare' | 'pickup' | 'deliver' | 'visit' | 'serve' | 'report_delay' | 'message' | 'wait' | 'rest' | 'revise_commitment'
+export type ResidentRole = 'customer' | 'shop_worker' | 'service_worker' | 'courier' | 'driver'
+export type MobilityMode = 'stationary' | 'walk' | 'cycle' | 'drive' | 'transit'
+
+export type ActionProposal = {
+  action: PopulationAction
+  target_id: string | null
+  travel_class: TravelClass | null
+  request_kind: 'delivery' | 'visit' | null
+  duration_s: number
+  text: string
+  idempotency_key: string
+  observation_refs: string[]
+}
+
+export type ActionIntent = ActionProposal & {
+  run_id: string
+  resident_id: string
+  epoch: number
+  world_version: number
+  effective_t: number
+  expires_t: number
+}
+
+export type ResidentDecision = {
+  proposal: ActionProposal
+  summary: string
+  plan: string[]
+  beliefs: string[]
+}
+
+export type BrainAssignment = {
+  model_family: string
+  model_id: string
+  api_provider: string
+  config_ref: string
+  control_mode: 'jiuwenswarm' | 'rules'
+  color: string | null
+}
+
+export type PopulationBudget = {
+  max_concurrency: number
+  max_iterations: number
+  decision_timeout_s: number
+  max_calls: number
+  max_tokens: number
+  max_output_tokens: number
+  max_cost_usd: number
+  requests_per_minute: number
+  tokens_per_minute: number
+}
+
+export type AnchorAccess = { edge_id: string; position_m: number; lane_index: number }
+
+export type ActivityAnchor = {
+  anchor_id: string
+  name: string
+  purpose: 'home' | 'shop' | 'service' | 'work' | 'rest'
+  lon: number
+  lat: number
+  access: Partial<Record<TravelClass, AnchorAccess>>
+  capacity: number
+  opens_s: number
+  closes_s: number
+  service_duration_s: number
+  synthetic: true
+}
+
+export type RoutineStep = { activity: 'work' | 'errand' | 'rest' | 'home'; anchor_id: string; earliest_s: number; duration_s: number }
+
+export type ResidentProfile = {
+  resident_id: string
+  name: string
+  persona: string
+  roles: ResidentRole[]
+  preferences: Record<string, number | string>
+  home_anchor_id: string
+  work_anchor_id: string | null
+  contacts: string[]
+  household_id: string
+  organization_id: string | null
+  available_classes: TravelClass[]
+  carrying_capacity: number
+  routine: RoutineStep[]
+  synthetic: true
+}
+
+export type MemoryEntry = {
+  event_id: string
+  t: number
+  kind: 'observation' | 'outcome' | 'message' | 'belief'
+  text: string
+  related_residents: string[]
+}
+
+export type ResidentState = {
+  resident_id: string
+  role: ResidentRole
+  activity: 'idle' | 'traveling' | 'working' | 'preparing' | 'serving' | 'waiting' | 'resting'
+  anchor_id: string | null
+  destination_id: string | null
+  mobility_mode: MobilityMode
+  travel_class: TravelClass | null
+  needs: Record<string, number>
+  commitments: string[]
+  current_task_id: string | null
+  plan: string[]
+  beliefs: string[]
+  memories: MemoryEntry[]
+  relationships: Record<string, number>
+  vehicle_locations: Partial<Record<TravelClass, string>>
+  busy_until_s: number
+  next_decision_s: number
+  next_need_s: number
+  last_decision_s: number | null
+  fallback_reason: string | null
+  version: number
+}
+
+export type SocietyTask = {
+  task_id: string
+  kind: 'delivery' | 'visit'
+  requester_id: string
+  service_anchor_id: string
+  destination_anchor_id: string
+  status: 'requested' | 'accepted' | 'preparing' | 'ready' | 'assigned' | 'picked_up' | 'serving' | 'completed' | 'declined' | 'failed' | 'expired'
+  provider_id: string | null
+  assignee_id: string | null
+  required_capacity: number
+  created_s: number
+  deadline_s: number
+  ready_s: number | null
+  completed_s: number | null
+  failure_reason: string | null
+  declined_by: string[]
+  version: number
+  cause_id: string | null
+}
+
+export type PopulationSpec = {
+  generator_version: 'society-v1'
+  rules_version: 'service-ledger-v1'
+  pack_id: string
+  seed: number
+  count: number
+  horizon_s: number
+  enabled_classes: TravelClass[]
+  brains: BrainAssignment[]
+  budget: PopulationBudget
+  recurring_need_s: number
+  service_duration_s: number
+  decision_interval_s: number
+  district_radius_m: number
+}
+
+export type PopulationDefinition = {
+  population_id: string
+  spec: PopulationSpec
+  network_fingerprint: string
+  anchors: ActivityAnchor[]
+  profiles: ResidentProfile[]
+  initial_states: ResidentState[]
+  initial_tasks: SocietyTask[]
+  assignments: Record<string, BrainAssignment>
+  assumptions: string[]
+}
+
+export type MobilityBinding = {
+  resident_id: string
+  entity_id: string | null
+  mode: MobilityMode
+  vehicle_class: string | null
+  anchor_id: string | null
+  start_s: number
+  end_s: number | null
+  ownership: 'resident' | 'shared' | 'abstract'
+  measured: boolean
+  capacity: number
+}
+
+export type SwarmBinding = {
+  resident_id: string
+  run_id: string
+  team_id: string
+  workflow_id: string
+  session_id: string
+  worker_id: string
+  requested_model_id: string
+  resolved_model_id: string
+  bound_s?: number
+  generation: number
+  restored: boolean
+}
+
+export type PopulationEvent = {
+  event_id: string
+  t: number
+  epoch: number
+  kind: string
+  resident_ids: string[]
+  task_id: string | null
+  cause_id: string | null
+  text: string
+  status: 'proposed' | 'committed' | 'observed'
+}
+
+export type SocialMessage = {
+  message_id: string
+  sender_id: string
+  recipient_id: string
+  sent_s: number
+  delivered_s: number | null
+  text: string
+  task_id: string | null
+  cause_id: string | null
+}
+
+export type PopulationDecisionRecord = {
+  decision_id: string
+  resident_id: string
+  t: number
+  epoch: number
+  source: 'jiuwenswarm' | 'rules' | 'fallback'
+  assigned_model_id: string
+  actual_model_id: string | null
+  summary: string
+  proposal: ActionIntent | null
+  accepted: boolean
+  reason: string
+  plan: string[]
+  beliefs: string[]
+  outcome_event_ids: string[]
+  fallback_reason: string | null
+  latency_ms: number
+  usage: Record<string, number | string>
+}
+
+export type ResidentSnapshot = { t: number; state: ResidentState }
+export type TaskSnapshot = { t: number; task: SocietyTask }
+
+export type PopulationMetrics = {
+  version: 'population-1'
+  resident_count: number
+  horizon_s: number
+  end_time_s: number
+  task_status_counts: Record<string, number>
+  completed_deliveries: number
+  completed_visits: number
+  outstanding_needs: number
+  outstanding_commitments: number
+  accepted_actions: number
+  rejected_actions: number
+  decision_source_counts: Record<string, number>
+  memory_entries: number
+  delivered_messages: number
+  completed_trips: number
+  failed_trips: number
+  calls: number
+  tokens: number
+  cost_usd: number
+  reserved_cost_usd: number
+  artifact_bytes: number
+  wall_time_s: number
+  warnings: string[]
+}
+
+export type PopulationArtifact = {
+  version: 'population-1'
+  run_id: string
+  attempt_id: string
+  definition: PopulationDefinition
+  states: ResidentSnapshot[]
+  tasks: TaskSnapshot[]
+  decisions: PopulationDecisionRecord[]
+  messages: SocialMessage[]
+  events: PopulationEvent[]
+  mobility_bindings: MobilityBinding[]
+  swarm_bindings: SwarmBinding[]
+  metrics: PopulationMetrics
+}
+
+export type PopulationSessionBudget = {
+  session_limit_microdollars: number
+  accounted_microdollars?: number
+  remaining_microdollars?: number
+  request_count?: number
+  blocked: boolean
+}
+
+export type PopulationStatus = {
+  available: boolean
+  reason: string | null
+  models: BrainAssignment[]
+  budget: PopulationSessionBudget
+  native_proof_required?: boolean
+  initial_scale_gate?: number
 }
