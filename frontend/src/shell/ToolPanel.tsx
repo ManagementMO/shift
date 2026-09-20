@@ -153,7 +153,6 @@ function HazardTool() {
   const setGhost = useStore((s) => s.setGhost)
   const setError = useStore((s) => s.setError)
   const applyGhost = useStore((s) => s.applyGhost)
-  const setHazardInfo = useStore((s) => s.setHazardInfo)
   const horizon = scenario?.constraints.horizon_s ?? 2700
   const sid = scenario?.scenario_id
   const [busy, setBusy] = useState(false)
@@ -203,8 +202,6 @@ function HazardTool() {
   const proposal = ghost?.proposal && ghost.hazard && ghost.proposal.base_scenario_id === sid ? ghost.proposal : null
   const canApply = !!proposal && !proposal.ambiguous && !busy && !building
   const reset = () => setSketch(newHazardSketch(horizon, draft.kind))
-  const edgesFor = (trackId: string) => scenario.restrictions.find((r) => r.source_claim_id === `hazard:${trackId}`)?.edge_ids.length ?? 0
-  const sizeOf = (h: { shape?: string; radius_m: number; waypoints: [number, number][] }) => (h.shape === 'polygon' ? `${h.waypoints.length}-corner area` : `${Math.round(h.radius_m)} m`)
 
   return (
     <div className="tool hazard-tool">
@@ -224,18 +221,6 @@ function HazardTool() {
         <button className="primary" disabled={!canApply} onClick={() => void applyGhost()}>{building ? 'Applying…' : sketch.replaces ? 'Apply move' : 'Apply'}</button>
         <button className="ghostbtn" disabled={!!building || (!corners && !sketch.replaces)} onClick={reset}>Cancel</button>
       </div>
-      {!!scenario.hazards.length && (
-        <div className="small hazard-list">
-          <div className="dim">Events in this scenario</div>
-          {scenario.hazards.map((h) => (
-            <div key={h.track_id} className={`hazard-row ${sketch.replaces === h.track_id ? 'moving' : ''}`}>
-              <button className="linkish" onClick={() => setHazardInfo(h.track_id)} title="Select event and show its remove control">
-                <span aria-hidden="true">{KIND_GLYPH[h.kind ?? 'storm']}</span> {HAZARD_KIND_LABEL[h.kind ?? 'storm']} · {sizeOf(h)} · +{fmt(h.start_s)}–+{fmt(h.end_s)} · {edgesFor(h.track_id)} roads
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   )
 }
