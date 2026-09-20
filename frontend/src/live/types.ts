@@ -11,11 +11,49 @@ export interface LiveConfig {
   car_share: number
 }
 
+export type Hazard = 'crash' | 'fire' | 'flood' | 'tornado' | 'gas_leak'
+export const HAZARDS: { id: Hazard; label: string; blocks: string; detail: string }[] = [
+  { id: 'crash', label: 'Vehicle collision', blocks: 'Cars and buses', detail: 'Streets inside the footprint close to traffic. Sidewalks stay open.' },
+  { id: 'fire', label: 'Building fire', blocks: 'Everyone', detail: 'People inside leave for the nearest street outside; informed walkers detour.' },
+  { id: 'flood', label: 'Flash flood', blocks: 'Everyone', detail: 'Streets and sidewalks stay impassable until the water recedes.' },
+  { id: 'tornado', label: 'Tornado', blocks: 'Everyone', detail: 'A wide warning radius: many witnesses, fast word of mouth.' },
+  { id: 'gas_leak', label: 'Gas leak', blocks: 'Everyone', detail: 'The footprint is evacuated and closed to all traffic.' },
+]
+
 export type Intervention =
   | { kind: 'close_road' | 'reopen_road'; edge_ids: string[]; until_s?: number | null }
   | { kind: 'add_bus_route'; bus_id: string; stop_ids: string[] }
   | { kind: 'temperature'; temperature_c: number }
   | { kind: 'population'; count: number; destination_zone_id: string; origin_zone_id?: string | null; release_window_s: number }
+  | { kind: 'incident'; hazard: Hazard; lon: number; lat: number; radius_m: number; duration_s?: number | null; label?: string | null }
+
+export interface LiveIncident {
+  event_id: string
+  command_id: string
+  hazard: Hazard
+  label: string
+  x: number
+  z: number
+  radius_m: number
+  alarm_radius_m: number
+  start_s: number
+  end_s: number
+  blocks: string[]
+  edge_ids: string[]
+  active: boolean
+}
+
+export interface SwarmMetrics {
+  events: { event_id: string; hazard: Hazard; label: string; radius_m: number; ended: boolean; aware: number; edges: number; start_s: number }[]
+  witnessed: number
+  messages: number
+  aware_total: number
+  by_hop: Record<string, number>
+  responded: number
+  in_zone: number
+  broadcasts_last_step: number
+  feed: { t: number; hop: number; text: string }[]
+}
 
 export interface LiveCommand {
   command_id: string
@@ -49,6 +87,7 @@ export interface LiveMetrics {
   stop_queues: Record<string, number>
   rerouted: number
   warnings: string[]
+  swarm?: SwarmMetrics
 }
 
 export interface LiveSession {
@@ -71,6 +110,7 @@ export interface LiveSession {
   metrics?: LiveMetrics
   fleet?: FleetEntry[]
   closed_edge_ids?: string[]
+  incidents?: LiveIncident[]
   error: string | null
 }
 
@@ -83,5 +123,9 @@ export interface LivePreview {
   intervention: Intervention
   cohort_after?: number
   stop_names?: string[]
+  edges?: number
+  alarm_radius_m?: number
+  duration_s?: number
+  blocks?: string[]
   mobility?: { walk_speed_factor: number; walk_tolerance_factor: number; road_speed_factor: number; model_version: string }
 }

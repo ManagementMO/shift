@@ -13,10 +13,13 @@ from cityshift.contracts import CityPack
 from cityshift.live.contracts import MAX_TRAVELERS, PopulationChange, SessionConfig, temperature_response
 from cityshift.live.network import LiveNetwork
 from cityshift.live.recording import COUNT_KEYS, FrameRow
+from cityshift.live.swarm import AgentMessage, Swarm, SwarmEvent
 from cityshift.live.transit import Transit
 
 PERSON_VARS = [tc.VAR_POSITION, tc.VAR_VEHICLE, tc.VAR_SPEED, tc.VAR_ROAD_ID, tc.VAR_LANEPOSITION]
 VEHICLE_VARS = [tc.VAR_POSITION, tc.VAR_ANGLE, tc.VAR_SPEED, tc.VAR_PERSON_NUMBER]
+# Drivers notice brake lights and share alerts further than people talking on a sidewalk.
+VEHICLE_REACH_M = 60.0
 
 
 @dataclass
@@ -41,10 +44,15 @@ class Trip:
 
 
 class Population:
-    def __init__(self, network: LiveNetwork, transit: Transit, pack: CityPack, config: SessionConfig, entities: list[dict]):
+    def __init__(self, network: LiveNetwork, transit: Transit, pack: CityPack, config: SessionConfig, entities: list[dict], swarm: Swarm | None = None):
         self.network = network
         self.connection = network.connection
         self.transit = transit
+        self.swarm = swarm or Swarm(config.seed, pack.pack_id)
+        self.positions: dict[str, tuple[float, float]] = {}
+        self.reach: dict[str, float] = {}
+        self.current_edge: dict[str, str] = {}
+        self.flight_paths: dict[str, list[str]] = {}
         self.pack = pack
         self.config = config
         self.entities = entities
@@ -177,7 +185,84 @@ class Population:
                         best, best_cost = (route, pickup, drop, access, egress), cost
         return best, best_cost
 
-    def _plan(self, trip: Trip, source: str, t: int, replacing: bool = False) -> None:
+    def _sheltering(self, trip: Trip, t: int) -> bool:
+        if not trip.plan.startswith("flee:"):
+            return False
+        event = self.swarm.events.get(trip.plan[5:])
+        return event is not None and event.active(t)
+
+    def respond(self, deliveries: list[AgentMessage], t: int) -> None:
+        for exposed in self.swarm.in_zone:
+            trip = self.trips.get(exposed)
+            aw = self.swarm.awareness_of(exposed, t)
+            if trip is None or aw is None or trip.state not in (1, 2) or self._sheltering(trip, t):
+                continue
+            event = self.swarm.events[aw.event_id]
+            if "pedestrian" in event.blocks and not aw.trapped:
+                self._flee(trip, event, t)
+        for message in deliveries:
+            agent = message.recipient
+            event = self.swarm.events[message.metadata["event_id"]]
+            if not agent:
+                continue
+            if agent in self.cars or agent in self.transit.indices:
+                changed = self.network.reroute_vehicle(agent, t)
+                if changed or agent in self.swarm.in_zone:
+                    self.swarm.mark_responded(agent, trapped=not changed)
+                continue
+            trip = self.trips.get(agent)
+            if trip is None or trip.state in (0, 3, 5, 6) or "pedestrian" not in event.blocks:
+                continue
+            if agent in self.swarm.in_zone:
+                self._flee(trip, event, t)
+            elif trip.state == 1:
+                self._detour_on_foot(trip, event, t)
+
+    def _detour_on_foot(self, trip: Trip, event: SwarmEvent, t: int) -> None:
+        edge = self.current_edge.get(trip.person_id, "")
+        if not edge or edge.startswith(":"):
+            self.dirty.add(trip.person_id)
+            return
+        try:
+            ahead = set(self.connection.person.getEdges(trip.person_id)) - {edge}
+            if not ahead & set(event.edge_ids):
+                return
+            self._plan(trip, edge, t, replacing=True, force=True)
+            remaining = set(self.connection.person.getEdges(trip.person_id)) - {edge}
+            avoided = not remaining & set(event.edge_ids)
+            self.swarm.mark_responded(trip.person_id, trapped=not avoided)
+            trip.reason = f"Detoured on foot after hearing about the {event.label.lower()}" if avoided else f"No sidewalk detour around the {event.label.lower()}"
+        except traci.TraCIException as exc:
+            self.swarm.mark_responded(trip.person_id, trapped=True)
+            trip.reason = str(exc)[:200]
+
+    def _flee(self, trip: Trip, event: SwarmEvent, t: int) -> None:
+        edge = self.current_edge.get(trip.person_id, "")
+        if not edge or edge.startswith(":") or self._sheltering(trip, t):
+            return
+        margin = event.radius_m + 10
+        data = self.latest_people.get(trip.person_id) or {}
+        path = self.network.escape_path(edge, set(self.network.blocked_walk) - {edge}, lambda eid: self.network.distance_to(eid, event.x, event.y) > margin, data.get(tc.VAR_LANEPOSITION))
+        if path is None:
+            self.swarm.mark_responded(trip.person_id, trapped=True)
+            trip.reason = f"Trapped inside the {event.label.lower()} footprint"
+            return
+        try:
+            self.connection.person.removeStages(trip.person_id)
+            arrival = self.network.edge(path[-1]).getLength() / 2
+            self.connection.person.appendWalkingStage(trip.person_id, path, arrival, speed=1.3 * 1.35)
+            self.connection.person.appendWaitingStage(trip.person_id, max(1, event.end_s - t + 1), f"sheltering from the {event.label.lower()}")
+            trip.plan = f"flee:{event.event_id}"
+            trip.reason = f"Leaving the {event.label.lower()} footprint for {path[-1]}"
+            self.flight_paths[trip.person_id] = path
+            self.swarm.mark_responded(trip.person_id)
+        except traci.TraCIException as exc:
+            self.swarm.mark_responded(trip.person_id, trapped=True)
+            trip.reason = str(exc)[:200]
+
+    def _plan(self, trip: Trip, source: str, t: int, replacing: bool = False, force: bool = False) -> None:
+        if replacing and self._sheltering(trip, t):
+            return
         response = temperature_response(self.temperature_c)
         speed = 1.3 * response.walk_speed_factor
         tolerance = trip.walk_limit * response.walk_tolerance_factor
@@ -190,7 +275,7 @@ class Population:
             key = f"ride:{route.line}:{pickup.stop_id}:{drop.stop_id}"
         else:
             key = "walk" if can_walk else "wait"
-        if replacing and key == trip.plan:
+        if replacing and key == trip.plan and not force:
             self.connection.person.setSpeed(trip.person_id, speed)
             return
         if replacing:
@@ -229,20 +314,24 @@ class Population:
             ids = self.connection.busstop.getPersonIDs(stop_id)
             self.stop_queues[stop_id] = len(ids)
             waiting.update(ids)
-        rows: list[FrameRow] = []
+        pending: list[tuple[str, int, dict, int, int, float | None]] = []
+        positions: dict[str, tuple[float, float]] = {}
+        self.current_edge = {}
         for vid, data in vehicles.items():
             if not data:
                 continue
             if vid in self.transit.indices:
                 occupancy = int(data.get(tc.VAR_PERSON_NUMBER, 0))
                 self.transit.max_occupancy[vid] = max(self.transit.max_occupancy[vid], occupancy)
-                self._row(rows, self.transit.indices[vid], data, 3, 0)
+                pending.append((vid, self.transit.indices[vid], data, 3, 0, None))
+                positions[vid] = data[tc.VAR_POSITION]
             elif vid in self.cars:
                 trip = self.cars[vid]
                 if trip.state == 0:
                     self.events.append({"t": t, "person_id": trip.person_id, "event": "depart", "vehicle_id": vid})
                 trip.state = 4
-                self._row(rows, trip.index, data, 2, 4)
+                pending.append((vid, trip.index, data, 2, 4, None))
+                positions[vid] = data[tc.VAR_POSITION]
         for pid, data in people.items():
             if not data or pid not in self.trips:
                 continue
@@ -264,7 +353,15 @@ class Population:
                     if dx * dx + dy * dy > 0.0001:
                         trip.heading = math.degrees(math.atan2(dx, dy)) % 360
                 trip.last_x, trip.last_y = position
-                self._row(rows, trip.index, data, 1, state, trip.heading)
+                pending.append((pid, trip.index, data, 1, state, trip.heading))
+                positions[pid] = position
+                self.current_edge[pid] = data.get(tc.VAR_ROAD_ID, "")
+        self.positions = positions
+        self.reach = {vid: VEHICLE_REACH_M for vid in vehicles if vid in positions}
+        self.respond(self.swarm.step(t, positions, self.reach), t)
+        rows: list[FrameRow] = []
+        for agent, index, data, kind, state, heading in pending:
+            self._row(rows, index, data, kind, state, heading, self.swarm.flags(agent, t))
         for pid in arrived_people:
             if pid in self.trips:
                 self._arrive(self.trips[pid], t)
@@ -281,13 +378,13 @@ class Population:
         self.arrival_times[trip.person_id] = t
         self.events.append({"t": t, "person_id": trip.person_id, "event": "arrive"})
 
-    def _row(self, rows: list[FrameRow], index: int, data: dict, kind: int, state: int, heading: float | None = None) -> None:
+    def _row(self, rows: list[FrameRow], index: int, data: dict, kind: int, state: int, heading: float | None = None, flags: int = 0) -> None:
         x, y = data[tc.VAR_POSITION]
         if not math.isfinite(x) or not math.isfinite(y):
             return
         angle = heading if heading is not None else data.get(tc.VAR_ANGLE, 0)
         speed = data.get(tc.VAR_SPEED, 0)
-        rows.append((index, x - self.network.origin[0], y - self.network.origin[1], angle if math.isfinite(angle) else 0, speed if math.isfinite(speed) else 0, kind, state))
+        rows.append((index, x - self.network.origin[0], y - self.network.origin[1], angle if math.isfinite(angle) else 0, speed if math.isfinite(speed) else 0, kind, state, flags))
 
     def counts(self) -> dict[str, int]:
         counts = dict.fromkeys(COUNT_KEYS, 0)
@@ -297,4 +394,4 @@ class Population:
         return counts
 
     def metrics(self) -> dict:
-        return {"boardings": self.boardings, "waiting_person_minutes": round(self.waiting_seconds / 60, 2), "max_occupancy": dict(self.transit.max_occupancy), "observed_agents": self.observed_agents, "peak_observed_agents": self.peak_observed_agents, "stop_queues": dict(self.stop_queues)}
+        return {"boardings": self.boardings, "waiting_person_minutes": round(self.waiting_seconds / 60, 2), "max_occupancy": dict(self.transit.max_occupancy), "observed_agents": self.observed_agents, "peak_observed_agents": self.peak_observed_agents, "stop_queues": dict(self.stop_queues), "swarm": self.swarm.metrics()}

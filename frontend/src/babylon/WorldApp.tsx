@@ -4,6 +4,7 @@ import { clock } from '../world/playback'
 import Transport from './Transport'
 import WorldCanvas from './WorldCanvas'
 import type { WorldScene } from './scene'
+import { EMPTY_STATS } from './traffic'
 import { useReplay } from './useReplay'
 import './world.css'
 
@@ -36,7 +37,7 @@ export default function WorldApp() {
       clock.pause()
     }
   }, [ready, rx])
-  const stats = useCallback(() => sceneRef.current?.traffic.stats ?? { buses: 0, cars: 0, people: 0, released: 0 }, [])
+  const stats = useCallback(() => sceneRef.current?.traffic.stats ?? EMPTY_STATS, [])
 
   const onReady = useCallback((ws: WorldScene) => {
     sceneRef.current = ws

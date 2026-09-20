@@ -229,6 +229,7 @@ export class WorldScene {
     for (const m of frozen) m.unfreeze()
     this.scene.shadowsEnabled = settings.shadows
     this.scene.texturesEnabled = settings.textures
+    this.traffic.setAgentScale(settings.swarmScale)
     this.engine.setHardwareScalingLevel(this.balanced ? 1 : renderScale(window.devicePixelRatio, settings.sharp))
     if (settings.projection !== this.camera.preferredProjection) this.camera.setPreferredProjection(settings.projection)
     if (settings.lighting !== this.lighting) this.setLighting(settings.lighting)

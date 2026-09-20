@@ -11,7 +11,7 @@ CHUNK_SECONDS = 10
 HEADER = struct.Struct("<4sII8If")
 ROW = struct.Struct("<IffffBBH")
 COUNT_KEYS = ("total", "not_departed", "walking", "waiting", "riding", "driving", "arrived", "unroutable")
-FrameRow = tuple[int, float, float, float, float, int, int]
+FrameRow = tuple[int, float, float, float, float, int, int] | tuple[int, float, float, float, float, int, int, int]
 
 
 def atomic_json(path: Path, value: object) -> None:
@@ -42,12 +42,14 @@ def encode_frame(t: int, rows: Iterable[FrameRow], counts: dict[str, int], tempe
         raise ValueError("invalid frame size or temperature")
     data = bytearray(HEADER.pack(b"CSF1", t, len(ordered), *numbers, temperature))
     previous = -1
-    for index, x, z, angle, speed, kind, state in ordered:
+    for row in ordered:
+        index, x, z, angle, speed, kind, state = row[:7]
+        flags = row[7] if len(row) > 7 else 0
         if index <= previous or not all(math.isfinite(v) for v in (x, z, angle, speed)):
             raise ValueError("entity indices must be unique and measurements finite")
-        if not 0 <= index < 2**32 or kind not in (1, 2, 3) or not 0 <= state <= 6:
-            raise ValueError("invalid entity identity or state")
-        data.extend(ROW.pack(index, x, z, angle, speed, kind, state, 0))
+        if not 0 <= index < 2**32 or kind not in (1, 2, 3) or not 0 <= state <= 6 or not 0 <= flags < 2**16:
+            raise ValueError("invalid entity identity, state or flags")
+        data.extend(ROW.pack(index, x, z, angle, speed, kind, state, flags))
         previous = index
     return bytes(data)
 

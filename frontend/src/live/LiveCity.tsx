@@ -12,8 +12,12 @@ import { LiveController } from './controller'
 import LiveCanvas from './LiveCanvas'
 import LiveControls, { type LiveTool } from './LiveControls'
 import LiveTimeline from './LiveTimeline'
+import SwarmPanel from './SwarmPanel'
 import { elapsed, environmentAt, interventionLabel } from './timeline'
 import type { LiveSession } from './types'
+import { useDisplay } from '../babylon/display'
+import { SWARM_SCALES } from '../babylon/figures'
+import { alarmRadius, DEFAULT_INCIDENT, type IncidentSettings } from './incident'
 import '../App.css'
 import './live.css'
 
@@ -24,6 +28,7 @@ const TOOLS: { id: LiveTool; label: string; mark: string }[] = [
   { id: 'route', label: 'Bus route', mark: 'M4 6h12v9H4zM6 3h8M7 15v2m6-2v2M4 10h12' },
   { id: 'temperature', label: 'Temperature', mark: 'M8 12V4a2 2 0 0 1 4 0v8a4 4 0 1 1-4 0ZM10 8v6' },
   { id: 'population', label: 'Population', mark: 'M7 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM2 17v-3a4 4 0 0 1 8 0v3m3-12a2 2 0 0 1 0 4m0 2a4 4 0 0 1 4 4v2' },
+  { id: 'incident', label: 'Incident', mark: 'M10 2 1.5 17h17L10 2Zm0 6v4m0 2.5v.5' },
 ]
 const PERSON_STATE = ['Not departed', 'Walking', 'Waiting for transport', 'On transit', 'Driving', 'Arrived', 'Unroutable']
 const NO_ROADS: string[] = []
@@ -44,12 +49,15 @@ export default function LiveCity() {
   const [localError, setLocalError] = useState<string | null>(null)
   const [tool, setTool] = useState<LiveTool | null>(null)
   const [roads, setRoads] = useState<string[]>([])
+  const [incident, setIncident] = useState<IncidentSettings>(DEFAULT_INCIDENT)
+  const swarmScale = useDisplay(s => s.swarmScale)
+  const setDisplay = useDisplay(s => s.set)
   const [selected, setSelected] = useState<Selected | null>(null)
   const [setup, setSetup] = useState(false)
   const [initialPopulation, setInitialPopulation] = useState(1000)
   const [fleet, setFleet] = useState(2)
   const [split, setSplit] = useState(50)
-  const [performance, setPerformance] = useState({ fps: 0, actors: 0, ready: false })
+  const [performance, setPerformance] = useState({ fps: 0, actors: 0, alerted: 0, ready: false })
   const worlds = useRef<Partial<Record<Side, { world: WorldScene; map: BabylonSyncMap }>>>({})
   const lastCamera = useRef<{ pack: string; pose: Pose; projection: 'isometric' | 'perspective' } | null>(null)
   const session = view.primary?.state
@@ -60,6 +68,8 @@ export default function LiveCity() {
   const blocked = !!view.busy || !active
   const primarySelection = useMemo(() => selected ? { id: selected.id, follow: selected.follow && selected.side === 'primary' } : null, [selected])
   const baselineSelection = useMemo(() => selected ? { id: selected.id, follow: selected.follow && selected.side === 'baseline' } : null, [selected])
+  const incidentDraft = useMemo(() => tool === 'incident' && incident.place ? { lon: incident.place.lon, lat: incident.place.lat, radius_m: incident.radius_m, alarm_radius_m: alarmRadius(incident), label: incident.label } : null, [tool, incident])
+  const placeIncident = useCallback((lon: number, lat: number) => setIncident(current => ({ ...current, place: { lon, lat } })), [])
 
   useEffect(() => {
     controller.start()
@@ -103,12 +113,12 @@ export default function LiveCity() {
   useEffect(() => {
     const timer = setInterval(() => {
       const ws = worlds.current.primary?.world
-      setPerformance({ fps: ws ? Math.round(ws.engine.getFps()) : 0, actors: ws ? ws.traffic.stats.people + ws.traffic.stats.cars + ws.traffic.stats.buses : 0, ready: !!ws })
+      setPerformance({ fps: ws ? Math.round(ws.engine.getFps()) : 0, actors: ws ? ws.traffic.stats.people + ws.traffic.stats.cars + ws.traffic.stats.buses : 0, alerted: ws?.traffic.stats.alerted ?? 0, ready: !!ws })
     }, 750)
     return () => clearInterval(timer)
   }, [])
 
-  const closeTool = useCallback(() => { setTool(null); setRoads([]); controller.discard() }, [controller])
+  const closeTool = useCallback(() => { setTool(null); setRoads([]); setIncident(current => ({ ...current, place: null })); controller.discard() }, [controller])
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (event.target instanceof Element && event.target.closest('input, select, textarea, [contenteditable="true"]')) return
@@ -161,15 +171,17 @@ export default function LiveCity() {
     setSetup(false)
     void controller.create({ pack_id: chosenPack, initial_population: initialPopulation, fleet_size: fleet, seed: 7, horizon_s: 3600, temperature_c: 20, car_share: 0.35 })
   }
-  const camera = (mode: 'city' | 'downtown') => {
+  const camera = (mode: 'city' | 'downtown' | 'swarm') => {
     const ws = worlds.current.primary?.world
     if (!ws || !pack) return
     setSelected(old => old ? { ...old, follow: false } : null)
-    if (mode === 'city') ws.camera.city()
-    else {
-      const zone = pack.zones.find(z => /financial|downtown/i.test(z.name)) ?? pack.zones[0]
-      if (zone) { const [x, z] = ws.frame.lonLatToWorld(zone.lon, zone.lat); ws.camera.district(x, z) }
-    }
+    if (mode === 'city') { ws.camera.city(); return }
+    const latest = session?.incidents?.filter(i => i.start_s <= view.t && view.t < i.end_s).at(-1)
+    const zone = pack.zones.find(z => /financial|downtown/i.test(z.name)) ?? pack.zones[0]
+    const focus = mode === 'swarm' && latest ? [latest.x, latest.z] : zone ? ws.frame.lonLatToWorld(zone.lon, zone.lat) : null
+    if (!focus) return
+    if (mode === 'swarm') ws.camera.swarm(focus[0], focus[1], latest ? Math.max(700, latest.alarm_radius_m * 2.4) : 700)
+    else ws.camera.district(focus[0], focus[1])
   }
   const inspectChannel = selected?.side === 'baseline' ? view.baseline : view.primary
   const entity = selected ? inspectChannel?.metadata.entities.find(e => e.id === selected.id) : null
@@ -186,8 +198,8 @@ export default function LiveCity() {
 
   return <main className="live-shell">
     {pack && <div className={view.baseline ? 'split' : 'live-worlds'} style={{ ['--split' as string]: `${split}%` }}>
-      {view.baseline && <div className="split-pane left" data-side="baseline"><LiveCanvas pack={pack} channel={view.baseline} clock={controller.clock} quality="balanced" preview={null} pickedRoads={NO_ROADS} pickMode="inspect" selected={baselineSelection} onPick={baselinePick} onRoad={pickRoad} onWorld={baselineWorld} /></div>}
-      <div className={view.baseline ? 'split-pane right' : 'live-world'} data-side="primary"><LiveCanvas pack={pack} channel={view.primary} clock={controller.clock} quality={view.baseline ? 'balanced' : 'high'} preview={view.draft} pickedRoads={roads} pickMode={tool === 'road' ? 'road' : 'inspect'} selected={primarySelection} onPick={primaryPick} onRoad={pickRoad} onWorld={primaryWorld} /></div>
+      {view.baseline && <div className="split-pane left" data-side="baseline"><LiveCanvas pack={pack} channel={view.baseline} clock={controller.clock} quality="balanced" preview={null} pickedRoads={NO_ROADS} pickMode="inspect" incidentDraft={null} selected={baselineSelection} onPick={baselinePick} onRoad={pickRoad} onPlace={placeIncident} onWorld={baselineWorld} /></div>}
+      <div className={view.baseline ? 'split-pane right' : 'live-world'} data-side="primary"><LiveCanvas pack={pack} channel={view.primary} clock={controller.clock} quality={view.baseline ? 'balanced' : 'high'} preview={view.draft} pickedRoads={roads} pickMode={tool === 'road' ? 'road' : tool === 'incident' && !view.draft ? 'incident' : 'inspect'} incidentDraft={incidentDraft} selected={primarySelection} onPick={primaryPick} onRoad={pickRoad} onPlace={placeIncident} onWorld={primaryWorld} /></div>
       {view.baseline && <><div className="split-divider live-divider" onPointerDown={e => e.currentTarget.setPointerCapture(e.pointerId)} onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) setSplit(Math.max(15, Math.min(85, e.clientX / window.innerWidth * 100))) }} onPointerUp={e => e.currentTarget.releasePointerCapture(e.pointerId)}><i /></div><div className="split-label left"><span className="tag">Original</span><b>Preserved history</b></div><div className="split-label right"><span className="tag">Edited</span><b>Live branch</b></div></>}
     </div>}
 
@@ -206,7 +218,7 @@ export default function LiveCity() {
     </header>
 
     <nav className="live-tools" aria-label="City interventions">{TOOLS.map(item => <button key={item.id} className={tool === item.id ? 'on' : ''} disabled={blocked} aria-pressed={tool === item.id} onClick={() => void openTool(item.id)}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={item.mark} /></svg>{item.label}</button>)}</nav>
-    <div className="live-camera-controls"><button className="ghostbtn" disabled={!performance.ready} onClick={() => camera('city')}>City view</button><button className="ghostbtn" disabled={!performance.ready} onClick={() => camera('downtown')}>Downtown</button></div>
+    <div className="live-camera-controls"><button className="ghostbtn" disabled={!performance.ready} onClick={() => camera('city')}>City view</button><button className="ghostbtn" disabled={!performance.ready} onClick={() => camera('downtown')}>Downtown</button><button className="ghostbtn" disabled={!performance.ready} onClick={() => camera('swarm')}>Swarm view</button></div>
 
     {pack && (!session || setup) && <aside className="live-panel live-setup" aria-label="Start a live city">
       <div className="live-panel-heading"><div><span className="live-eyebrow">Microscopic simulation</span><h1>Start a live city</h1></div>{session && <button className="iconbtn" onClick={() => setSetup(false)} aria-label="Close city setup">×</button>}</div>
@@ -220,7 +232,16 @@ export default function LiveCity() {
       </form>
     </aside>}
 
-    {pack && session && tool && !setup && <LiveControls key={session.session_id} tool={tool} pack={pack} session={session} time={view.t} corridors={corridors} roads={roads} preview={view.draft} busy={!!view.busy} error={view.error} onRoads={pickRoad} onPreview={change => void controller.preview(change)} onApply={() => void controller.apply().then(() => { if (!controller.getSnapshot().error) closeTool() })} onDiscard={() => controller.discard()} onClose={closeTool} />}
+    {pack && session && tool && !setup && <LiveControls key={session.session_id} tool={tool} pack={pack} session={session} time={view.t} corridors={corridors} roads={roads} incident={incident} preview={view.draft} busy={!!view.busy} error={view.error} onRoads={pickRoad} onIncident={setIncident} onPreview={change => void controller.preview(change)} onApply={() => void controller.apply().then(() => {
+      const snapshot = controller.getSnapshot()
+      if (snapshot.error) return
+      const declared = tool === 'incident' ? snapshot.primary?.state.incidents?.at(-1) : undefined
+      closeTool()
+      const ws = worlds.current.primary?.world
+      if (declared && ws) { setSelected(null); ws.camera.incident(declared.x, declared.z, declared.alarm_radius_m) }
+    })} onDiscard={() => controller.discard()} onClose={closeTool} />}
+
+    {session && !tool && !setup && !selected && <SwarmPanel session={session} time={view.t} onSeek={t => { controller.beginScrub(); void controller.seek(t) }} />}
 
     {selected && entity && <aside className="live-inspector" aria-label="Selected simulated agent">
       <div className="live-panel-heading"><div><span className="live-eyebrow">{selected.side === 'baseline' ? 'Original' : 'Current'} · measured in SUMO</span><h2>{entity.kind === 'bus' ? entity.id.replace('_', ' ') : `Traveler ${entity.person_id?.slice(-5) ?? entity.id.slice(-5)}`}</h2></div><button className="iconbtn" aria-label="Close traveler inspection" onClick={() => setSelected(null)}>×</button></div>
@@ -235,8 +256,8 @@ export default function LiveCity() {
 
     {statusText && <div className="live-progress" role="status">{statusText}<span>Only recorded positions are displayed.</span></div>}
     {(localError || (view.error && !tool)) && <div className="live-global-error" role="alert">{localError ?? view.error}<button className="ghostbtn" onClick={() => { setLocalError(null); controller.discard() }}>Dismiss</button></div>}
-    <div className="live-legend"><span><i className="walk" />Walking</span><span><i className="wait" />Waiting</span><span><i className="drive" />Cars / buses</span><span className="live-provenance">OSM geometry · synthetic demand · SUMO motion</span></div>
-    <div className="live-performance">{performance.ready ? `${performance.fps} FPS · ${performance.actors.toLocaleString()} rendered agents` : 'Building miniature city'}{view.primary && ` · ${(view.primary.replay.residentBytes / 1048576).toFixed(1)} MB replay cache`}</div>
+    <div className="live-legend"><span><i className="walk" />Walking</span><span><i className="wait" />Waiting</span><span><i className="drive" />Cars / buses</span><span><i className="saw" />Saw it</span><span><i className="heard" />Heard about it</span><label className="live-swarm-size">Swarm size<select value={swarmScale} onChange={e => setDisplay({ swarmScale: Number(e.target.value) })}>{SWARM_SCALES.map(s => <option key={s.value} value={s.value}>{s.label} · {s.value}×</option>)}</select></label><span className="live-provenance">OSM geometry · synthetic demand · SUMO motion</span></div>
+    <div className="live-performance">{performance.ready ? `${performance.fps} FPS · ${performance.actors.toLocaleString()} rendered agents · ${performance.alerted.toLocaleString()} informed` : 'Building miniature city'}{view.primary && ` · ${(view.primary.replay.residentBytes / 1048576).toFixed(1)} MB replay cache`}</div>
     {session && <details className="live-event-log"><summary>Interventions · {session.commands.length}</summary><div>{session.commands.length ? session.commands.map(command => <button key={command.command_id} disabled={command.at_s > controller.recordedUntil()} onClick={() => { controller.beginScrub(); void controller.seek(command.at_s) }}><time>+{elapsed(command.at_s)}</time>{interventionLabel(command.intervention)}</button>) : <p>No interventions yet.</p>}</div></details>}
     <LiveTimeline controller={controller} view={view} />
   </main>
