@@ -2,11 +2,11 @@
 
 Opening the city now restores a compatible saved JiuwenSwarm population or opens native swarm setup. It does not create the former 600 rule-driven traffic participants. SUMO remains the movement authority for native residents.
 
-1. Open **Agents** or **People and agent groups**. Inspect saved residents without using models.
+1. Open **Population** in the city toolbar. Inspect saved residents without using models.
 2. Choose **Create a native swarm**, a count, duration, budget and reviewed model families. Creation assigns persistent personas, contacts, homes and model sessions without inference. New anchors are distributed across connected streets around CN Tower/Rogers Centre; the outline marks the activity district, not an impassable wall.
 3. Choose **Start new society run** to execute models. The default is 100 residents for 10 simulated minutes, with a $10 per-run cap. The application and isolated adapter accept up to 100 residents; decisions still execute in small budget-admitted batches. Multiple selected families are distributed across residents through OpenRouter. This is the configured trial scale, not a claim that every resident has already completed a live model turn.
 4. Place rain, storm, flood, fire or tornado from **Events**, set temperature from **Weather**, or send a message in the prompt. Explicit absolute temperatures such as “Set the temperature to 35°C” become temperature observations. Other text is an operator announcement, not an unimplemented tax or policy change.
-5. Click a resident or select a roster entry. The inspector leads with the recorded model-generated decision summary and shows the actual model, accepted/rejected action, plans, beliefs, memories, messages and outcomes. It does not expose private chain-of-thought or invent model records for failed turns.
+5. Click a resident or select a roster entry. One blue-glass inspector leads with the recorded model-generated decision summary and shows the actual model, accepted/rejected action, plans, beliefs, memories, messages and outcomes. Scroll inside it for the full history; its header stays visible, and the card fits beside the playback dock on wide screens or above it on phones. It does not expose private chain-of-thought or invent model records for failed turns.
 
 Inputs to running or paused runs are appended to a durable inbox. Paused runs need explicit Resume. Inputs while inspecting completed recordings wait for a new run, leaving the archive unchanged. Spatial incident inputs reach residents within the declared radius at the authoritative boundary; travelers retain the warning for their next eligible arrival decision. Contact messages travel through the existing society message authority.
 

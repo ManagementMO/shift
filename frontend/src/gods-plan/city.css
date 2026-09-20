@@ -270,3 +270,45 @@
 .gp-shell .resident-details { position: absolute; top: 126px; right: 22px; bottom: 96px; margin: 0; width: min(420px, calc(100vw - 132px)); z-index: 56; pointer-events: auto; }
 .gp-shell[data-population-active] .resident-details { position: fixed; top: var(--gp-panel-top); right: var(--gp-edge); bottom: var(--gp-resident-panel-bottom); width: var(--gp-panel-width); height: auto; max-height: none; min-height: 0; align-self: auto; }
 .gp-shell[data-population-active]:has(.resident-details) .gp-utility-panel { visibility: hidden; }
+/* One complete resident card, using the city's blue glass rather than the legacy inspector theme. */
+.gp-shell .resident-details {
+  --ink: #f5faff;
+  --dim: #c5ddec;
+  --glass-line: #e5f3ff33;
+  --accent: #bce8ff;
+  --accent-soft: #d7edff24;
+  color: var(--ink);
+  background: linear-gradient(145deg, #547a96d9, #183e59e6);
+  border: 1px solid #dcf1ff70;
+  border-radius: 16px;
+  box-shadow: var(--gp-glass-shadow);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #c5ddec88 transparent;
+  scroll-padding-top: 90px;
+}
+.gp-shell .resident-details .resident-inspector { grid-template-columns: minmax(0, 1fr); font-size: 13px; }
+.gp-shell .resident-details .resident-inspector > * { min-width: 0; }
+.gp-shell .resident-details .resident-inspector > .row:first-child {
+  top: 0;
+  background: #315773;
+  gap: 10px;
+  align-items: center;
+}
+.gp-shell .resident-details .resident-inspector > .row:first-child h2 { color: var(--ink); letter-spacing: 0; text-transform: none; font-size: 18px; }
+.gp-shell .resident-details .resident-inspector > .row:first-child > .row { flex-wrap: wrap; }
+.gp-shell .resident-details .resident-scroll-hint { flex-basis: 100%; color: var(--dim); font-size: 11px; line-height: 1.4; }
+.gp-shell .resident-details .tiny { color: var(--ink); background: #d6edff1a; border-radius: 9px; min-height: 32px; padding: 6px 9px; }
+.gp-shell .resident-details summary { padding: 8px 0; font-size: 13px; }
+.gp-shell .resident-details .resident-summary { font-size: 14px; line-height: 1.6; }
+.gp-shell[data-population-active]:has(.resident-details) .resident-summary-bubble { display: none; }
+@media (min-width: 1200px) {
+  /* The centered 560px command/dock leaves room for a full-height resident card beside it. */
+  .gp-shell[data-population-active] .resident-details {
+    bottom: var(--gp-edge);
+    width: min(360px, calc((100vw - 560px) / 2 - 2 * var(--gp-edge) - 12px));
+  }
+}

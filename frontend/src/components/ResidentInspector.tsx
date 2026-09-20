@@ -45,6 +45,7 @@ export default function ResidentInspector({ population, residentId, t, onSelect,
       <div className="row between">
         <h2><i className="brain-dot" style={{ background: color }} />{profile.name}</h2>
         <div className="row">{onFollow && <button className="tiny" onClick={onFollow}>Follow</button>}{onFrame && <button className="tiny" onClick={onFrame}>Frame</button>}<button className="tiny" onClick={onClose}>Close</button></div>
+        <span className="resident-scroll-hint">Scroll for decisions, memories and messages ↓</span>
       </div>
       <div className="dim">{profile.resident_id} · synthetic resident · {population.artifact ? `recorded at +${fmt(t)}` : 'initial definition, not executed'}</div>
       <section className="resident-decision" aria-label="Latest recorded decision">

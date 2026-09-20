@@ -28,6 +28,8 @@
   border-bottom: 1px solid var(--glass-line);
 }
 .resident-details .resident-inspector > .row:first-child h2 { font-size: 17px; }
+.resident-scroll-hint { display: none; }
+.resident-details .resident-scroll-hint { display: block; flex-basis: 100%; font-size: 11px; }
 .resident-details .brain-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; }
 .resident-details .tiny { padding: 5px 7px; border: 1px solid var(--glass-line); font-size: 11px; }
 .resident-details .tiny:hover { background: var(--accent-soft); }
