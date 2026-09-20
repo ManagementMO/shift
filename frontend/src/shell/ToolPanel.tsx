@@ -46,9 +46,10 @@ export default function ToolPanel() {
 }
 
 /**
- * District / Corridor pickers.  Choosing one frames every candidate and opens the pick: the city outlines the
- * regions and tints the one under the pointer; clicking flies in and closes the pick.  Escape, choosing the
- * active picker again, or leaving this panel closes it where the camera is.
+ * District / Corridor pickers.  Choosing one closes this panel, frames every candidate and opens the pick: the
+ * cursor turns to a crosshair, the city outlines the regions and tints the one under the pointer, and a click
+ * flies in and closes the pick.  Escape, choosing the active picker again, or another tool ends it where the
+ * camera is.
  */
 function AreaTool() {
   const picking = useStore((s) => s.picking)
@@ -82,7 +83,7 @@ function AreaTool() {
           )
         })}
       </div>
-      <div className="small dim">{open ? `Choosing a ${open.label.toLowerCase()} — hover to highlight, click to zoom, Esc to stop.` : 'Districts are the pack’s destination zones and the venue; corridors are its named streets.'}</div>
+      <div className="small dim">{open ? `Choosing a ${open.label.toLowerCase()} — point at one on the map and click to zoom, Esc to stop.` : 'Districts are the pack’s destination zones and the venue; corridors are its named streets.'}</div>
     </div>
   )
 }

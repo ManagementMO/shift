@@ -260,8 +260,8 @@ export const useStore = create<State>((set, get) => ({
   select: (selection) => set({ selection }),
   setInvestigation: (investigation) => set({ investigation }),
   setError: (error) => set({ error }),
-  // leaving Area select (another tool, or closing the panel) also ends any pick in progress
-  setTool: (tool) => set({ tool, ghost: tool ? get().ghost : null, picking: tool === 'area' && get().picking }),
+  // picking a different tool ends an Area select pick; closing the panel does not (the pick runs with it closed)
+  setTool: (tool) => set({ tool, ghost: tool ? get().ghost : null, picking: (tool === null || tool === 'area') && get().picking }),
   setGhost: (ghost) => set({ ghost }),
   setLens: (lens) => set({ lens }),
   setDeveloper: (developer) => set({ developer }),

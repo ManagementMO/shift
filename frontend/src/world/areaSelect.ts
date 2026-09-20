@@ -12,7 +12,10 @@ export const AREAS: { id: AreaKind; label: string; key: string; hint: string }[]
   { id: 'corridor', label: 'Corridor', key: '3', hint: 'Point at a street corridor and click to frame it.' },
 ]
 
-/** Open the picker for `kind`: frame its candidates and let the world take the click. */
+/**
+ * Open the picker for `kind`: frame its candidates and let the world take the click.  The Area select panel
+ * closes so the map is clear; the crosshair cursor and the lit rail icon say a pick is in progress.
+ */
 export function startPick(kind: AreaKind): void {
   const lead = leadMap()
   if (!lead) return
@@ -20,6 +23,7 @@ export function startPick(kind: AreaKind): void {
   const pack = s.pack
   const base = pack ? cityPose(pack.pack_id, pack.center) : currentPose(lead)
   const venue: [number, number] | null = pack ? [pack.venue_lonlat[0], pack.venue_lonlat[1]] : null
+  s.setTool(null)
   s.setPicking(true)
   if (kind === 'district') {
     const sites: [number, number][] = pack?.zones.map((z) => [z.lon, z.lat] as [number, number]) ?? []

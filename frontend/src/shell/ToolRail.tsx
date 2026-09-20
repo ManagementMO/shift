@@ -16,7 +16,10 @@ const TOOLS: { id: ToolId; label: string; path: string }[] = [
 
 export default function ToolRail({ active = true }: { active?: boolean }) {
   const tool = useStore((s) => s.tool)
+  const picking = useStore((s) => s.picking)
   const setTool = useStore((s) => s.setTool)
+  // Area select stays lit while a pick runs with its panel closed
+  const isOn = (id: ToolId) => tool === id || (id === 'area' && picking)
 
   // Area select shortcuts: 2 / 3 open the panel and start the pick straight away.
   useEffect(() => {
@@ -36,7 +39,7 @@ export default function ToolRail({ active = true }: { active?: boolean }) {
   return (
     <nav className="rail" aria-label="Interventions">
       {TOOLS.map((t) => (
-        <button key={t.id} className={`railbtn ${tool === t.id ? 'on' : ''}`} onClick={() => setTool(tool === t.id ? null : t.id)} title={t.label} aria-label={t.label} aria-pressed={tool === t.id}>
+        <button key={t.id} className={`railbtn ${isOn(t.id) ? 'on' : ''}`} onClick={() => setTool(tool === t.id ? null : t.id)} title={t.label} aria-label={t.label} aria-pressed={isOn(t.id)}>
           <svg className="glyph" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={t.path} /></svg>
           <span className="tip">{t.label}</span>
         </button>
