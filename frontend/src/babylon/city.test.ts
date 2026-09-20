@@ -54,6 +54,57 @@ describe('New-city rendering without appearance configuration', () => {
     engine.dispose()
   })
 
+  it('resolves picked faces to OSM building ids and collapses exactly the demolished ones', () => {
+    const engine = new NullEngine()
+    const scene = new Scene(engine)
+    const world = fixture()
+    world.green = []
+    world.landmarks = [{ id: 'w-tower', kind: 'cn_tower', name: 'CN Tower', x: 4300, z: 7300, h: 553, ring: [4290, 7290, 4310, 7290, 4310, 7310, 4290, 7310] }]
+    const city = buildCity(scene, world)
+    const buildings = city.chunks.filter((m) => m.name.startsWith('buildings-'))
+    expect(buildings.length).toBeGreaterThan(0)
+    expect(buildings.every((m) => m.isPickable)).toBe(true)
+    // Every face of every building chunk belongs to one of the fixture buildings, and the ids round-trip.
+    const seen = new Set<string>()
+    for (const mesh of buildings) {
+      const faces = (mesh.getIndices()?.length ?? 0) / 3
+      for (let f = 0; f < faces; f++) {
+        const id = city.buildingAt(mesh, f)
+        expect(id).not.toBeNull()
+        seen.add(id!)
+      }
+    }
+    expect(seen).toEqual(new Set(['office', 'house', 'unmodeled-landmark']))
+    expect(city.describeBuilding('office')).toMatchObject({ kind: 'building', category: 'office', height_m: 80, x: 4115, z: 7115 })
+    expect(city.describeBuilding('w-tower')).toMatchObject({ kind: 'landmark', name: 'CN Tower' })
+    const landmark = city.chunks.find((m) => m.metadata?.landmarkId === 'w-tower')!
+    expect(city.buildingAt(landmark, 0)).toBe('w-tower')
+
+    const before = buildings.map((m) => new Float32Array(m.getVerticesData('position')!))
+    city.hideBuildings(['house', 'w-tower'])
+    expect(city.isHidden('house')).toBe(true)
+    expect(landmark.isEnabled()).toBe(false)
+    let collapsed = 0, untouched = 0
+    buildings.forEach((mesh, i) => {
+      const now = mesh.getVerticesData('position')!
+      for (let f = 0; f < (mesh.getIndices()?.length ?? 0) / 3; f++) {
+        const id = city.buildingAt(mesh, f)
+        const v = mesh.getIndices()![f * 3] * 3
+        if (id !== null) { expect(now[v + 1]).toBe(before[i][v + 1]); untouched++ }
+        else { expect(now[v + 1]).toBe(Y.ground - 1); collapsed++ } // hidden buildings no longer pick
+      }
+    })
+    expect(collapsed).toBeGreaterThan(0)
+    expect(untouched).toBeGreaterThan(0)
+    city.hideBuildings([]) // restoring puts every vertex back and re-enables the landmark
+    buildings.forEach((mesh, i) => expect(Array.from(mesh.getVerticesData('position')!)).toEqual(Array.from(before[i])))
+    expect(landmark.isEnabled()).toBe(true)
+    expect(city.isHidden('house')).toBe(false)
+    city.dispose()
+    scene.dispose()
+    engine.dispose()
+  })
+
   it('keeps reconciled thin building bands exact and omits covered roofs and trim', () => {
     const engine = new NullEngine()
     const scene = new Scene(engine)

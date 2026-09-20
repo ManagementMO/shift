@@ -647,16 +647,15 @@ input[type='checkbox'] {
   background: var(--accent);
   color: var(--on-accent);
 }
-.cams button.development {
-  margin-top: 4px;
-  background: rgba(23, 143, 131, 0.16);
-  color: #178f83;
-  font-weight: 600;
-}
-.cams button.development.on {
-  background: #178f83;
-  color: #fff;
-}
+
+/* click-a-building card and its two-step delete */
+.building-card { width: 280px; }
+.building-card .row { flex-wrap: wrap; gap: 6px; align-items: center; }
+.ghostbtn.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+.ghostbtn.danger:hover { background: color-mix(in srgb, var(--bad) 14%, transparent); }
+button.primary.danger { background: var(--bad); color: #1a0f0d; }
+.delete-confirm { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px; border-radius: var(--r); background: color-mix(in srgb, var(--bad) 12%, var(--surface-raised)); animation: status-in 0.25s ease; }
+.delete-confirm > .small { flex: 1 1 100%; color: var(--ink-2); }
 
 /* ---------- drawers (scenario left, lens right) ---------- */
 .drawer {

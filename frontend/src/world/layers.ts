@@ -9,7 +9,7 @@ import { ConeGeometry, CubeGeometry, CylinderGeometry } from '@luma.gl/engine'
 import type { Layer, PickingInfo } from '@deck.gl/core'
 import type { Selection } from '../store'
 import type { CityPack, DevelopmentSpec, HazardTrack, ScenarioSpec, StopCandidate } from '../types'
-import { developmentActivity, developmentArrowFraction, developmentColor, developmentDirection, developmentPolygon, validDevelopmentGeometry } from '../development'
+import { developmentArrowFraction, developmentColor, developmentDirection, developmentPolygon, validDevelopmentGeometry } from '../development'
 import { entitiesAt, hazardFootprint, MAX_GAP_S, type EntityAt, type PersonState, type ReplayIndex, type TrackIndex } from '../replay'
 
 export type RGBA = [number, number, number, number]
@@ -143,11 +143,16 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
   const selectedId = selection?.id ?? null
   const dim = w.dimOthers && selection && (selection.kind === 'person' || selection.kind === 'bus' || selection.kind === 'car')
 
+  // Confirmed developments look like the basemap's own buildings (neutral extrusions, no outline or arrows); only the
+  // placement ghost keeps its kind colour and cues. A thin outline marks the selected one as the delete card's anchor.
   const developments = (scenario?.developments ?? []).map((d) => ({ id: d.development_id, spec: d.spec, ghost: false }))
   if (w.developmentDraft) developments.push({ id: 'draft', spec: w.developmentDraft, ghost: true })
+  const BASEMAP_BUILDING: RGBA = [214, 212, 205, 255]
+  const BASEMAP_PARK: RGBA = [176, 204, 150, 255]
   const color = (spec: DevelopmentSpec, ghost: boolean): RGBA => {
-    const hex = ghost && w.invalidDevelopment ? '#d75e48' : developmentColor(spec)
-    return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16), ghost ? 120 : 240]
+    if (!ghost) return spec.land_use === 'park' ? BASEMAP_PARK : BASEMAP_BUILDING
+    const hex = w.invalidDevelopment ? '#d75e48' : developmentColor(spec)
+    return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16), 120]
   }
   for (const development of developments) {
     const { id, spec, ghost } = development
@@ -156,17 +161,17 @@ export function buildWorldLayers(w: WorldInputs): Layer[] {
     const tint = color(spec, ghost)
     out.push(new PolygonLayer({
       ...SLOT.top, id: `development-${id}${sfx}`, data: [development],
-      getPolygon: () => ring, getElevation: spec.height_m, extruded: true,
-      getFillColor: tint, getLineColor: withA(tint, 255), wireframe: ghost,
+      getPolygon: () => ring, getElevation: spec.land_use === 'park' ? 0.5 : spec.height_m, extruded: true,
+      getFillColor: tint, getLineColor: ghost ? withA(tint, 255) : withA(tint, 0), wireframe: ghost,
       pickable: !ghost, onClick: () => select({ kind: 'development', id }),
     }))
-    out.push(new PathLayer({
+    if (ghost || selectedId === id) out.push(new PathLayer({
       ...SLOT.top, id: `development-footprint-${id}${sfx}`, data: [ring],
-      getPath: () => [...ring, ring[0]], getColor: withA(tint, 255), getWidth: 2,
+      getPath: () => [...ring, ring[0]], getColor: ghost ? withA(tint, 255) : [231, 231, 225, 255], getWidth: 2,
       widthUnits: 'meters', widthMinPixels: 2, parameters: { depthCompare: 'always' },
     }))
-    const direction = ghost ? developmentDirection(spec) : developmentActivity(spec, t)
-    if (!direction || (!ghost && selectedId !== id) || (ghost && !w.developmentPlaced)) continue
+    if (!ghost || !w.developmentPlaced) continue
+    const direction = developmentDirection(spec)
     const paths: { path: [number, number][] }[] = []
     for (const zone of pack?.zones ?? []) {
       if (!(spec.zone_shares[zone.zone_id] > 0)) continue

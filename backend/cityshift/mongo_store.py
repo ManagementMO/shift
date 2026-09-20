@@ -125,6 +125,16 @@ class MongoStore(Store):
         except DuplicateKeyError:
             raise ValueError(f"scenario {s.scenario_id} already exists (immutable)") from None
 
+    def replace_scenario(self, s: ScenarioSpec, demand: DemandSet) -> None:
+        if s.demand_id != demand.demand_id:
+            raise ValueError("scenario and demand identities do not match")
+        if len({t.person_id for t in demand.travelers}) != len(demand.travelers):
+            raise ValueError("traveler IDs must be unique within a demand set")
+        document = {"_id": s.scenario_id, "data": s.model_dump(mode="json"), "demand": demand.model_dump(mode="json")}
+        self._check_size(document)
+        if self.database.scenarios.replace_one({"_id": s.scenario_id}, document, upsert=False).matched_count == 0:
+            raise KeyError(s.scenario_id)
+
     def get_demand(self, sid: str) -> DemandSet | None:
         document = self.database.scenarios.find_one({"_id": sid}, {"demand": 1})
         return DemandSet.model_validate(document["demand"]) if document else None
@@ -145,6 +155,16 @@ class MongoStore(Store):
             self.database.plans.insert_one(document)
         except DuplicateKeyError:
             raise ValueError("plan already exists for this scenario (immutable)") from None
+
+    def replace_plan(self, sid: str, plan: ServicePlan, report: ValidationReport) -> None:
+        if report.plan_id != plan.plan_id:
+            raise ValueError("plan and validation identities do not match")
+        document = {
+            "_id": self._plan_key(sid, plan.plan_id), "scenario_id": sid,
+            "data": plan.model_dump(mode="json"), "validation": report.model_dump(mode="json"),
+        }
+        self._check_size(document)
+        self.database.plans.replace_one({"_id": document["_id"]}, document, upsert=True)
 
     def get_plan(self, sid: str, pid: str) -> ServicePlan | None:
         return self._read("plans", self._plan_key(sid, pid), ServicePlan)

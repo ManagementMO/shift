@@ -20,7 +20,13 @@ from cityshift.contracts import (
 )
 from cityshift.domain import edits, runs
 from cityshift.domain.compiler import baseline_plan, compile_scenario, heuristic_plans
-from cityshift.domain.developments import apply_development, prepare_development, resolve_development
+from cityshift.domain.developments import (
+    apply_development,
+    demolish_building,
+    prepare_development,
+    remove_development,
+    resolve_development,
+)
 from cityshift.domain.runs import execute_run, run_id_for
 
 
@@ -148,12 +154,52 @@ def test_branch_preserves_pack_parent_events_and_subsequent_edits(transport_worl
         prepare_development(pack, child, added, development_spec)
 
 
+def test_removing_a_development_in_place_restores_exactly_the_parent_trips(transport_world, development_spec):
+    pack, scenario, _ = transport_world
+    parent = parent_demand(scenario)
+    preview, _ = prepare_development(pack, scenario, parent, development_spec)
+    child, demand = apply_development(pack, scenario, parent, preview)
+    second_spec = development_spec.model_copy(update={"name": "Second", "land_use": "office", "people_per_unit": 1})
+    second, demand2 = apply_development(pack, child, demand, prepare_development(pack, child, demand, second_spec)[0])
+    assert len(second.developments) == 2 and len(demand2.travelers) == 1 + 8 + 8
+    removed_id = second.developments[0].development_id
+    updated, remaining = remove_development(second, demand2, removed_id)
+    assert updated.scenario_id == second.scenario_id and updated.parent_scenario_id == second.parent_scenario_id
+    assert [d.development_id for d in updated.developments] == [second.developments[1].development_id]
+    assert remaining.travelers[:1] == parent.travelers  # incumbents untouched, same identities
+    assert all(t.development_id != removed_id for t in remaining.travelers)
+    assert {t.development_id for t in remaining.travelers[1:]} == {second.developments[1].development_id}
+    assert remaining.demand_id == updated.demand_id != demand2.demand_id
+    assert updated.change_set[-1].startswith("remove residential Test apartments: 8 one-way trips")
+    assert run_id_for(updated, baseline_plan(), 1, remaining) != run_id_for(second, baseline_plan(), 1, demand2)
+    with pytest.raises(KeyError):
+        remove_development(updated, remaining, removed_id)
+    assert (second.model_dump(), demand2.model_dump()) != (updated.model_dump(), remaining.model_dump())
+
+
+def test_demolishing_a_base_building_is_visual_only_and_keeps_runs_current(transport_world):
+    _, scenario, _ = transport_world
+    demand = parent_demand(scenario)
+    before = run_id_for(scenario, baseline_plan(), 1, demand)
+    demolished = demolish_building(scenario, " w123 ")
+    assert demolished.demolished == ["w123"]
+    assert demolished.change_set[-1] == "demolish building w123"
+    assert demolish_building(demolished, "w123").demolished == ["w123"]  # idempotent
+    assert run_id_for(demolished, baseline_plan(), 1, demand) == before  # no SUMO input changed
+    assert content_hash(demolished.model_dump(mode="json", exclude={"created_at"})) != content_hash(scenario.model_dump(mode="json", exclude={"created_at"}))
+    with pytest.raises(ValueError):
+        demolish_building(scenario, "   ")
+
+
 def test_run_identity_uses_full_demand_and_ignores_creation_clock(transport_world):
     _, scenario, _ = transport_world
     demand = parent_demand(scenario)
     base = run_id_for(scenario, baseline_plan(), 1, demand)
     later = scenario.model_copy(update={"created_at": scenario.created_at + timedelta(days=1)})
     assert run_id_for(later, baseline_plan(), 1, demand) == base
+    relabelled = scenario.model_copy(update={"label": "renamed", "change_set": [*scenario.change_set, "note"]})
+    assert run_id_for(relabelled, baseline_plan(), 1, demand) == base  # provenance text is not a SUMO input
+    assert run_id_for(scenario.model_copy(update={"constraints": scenario.constraints.model_copy(update={"horizon_s": 999})}), baseline_plan(), 1, demand) != base
     changed = demand.model_copy(deep=True)
     changed.travelers[0].origin_edge = "e_AB"
     assert changed.demand_id == demand.demand_id

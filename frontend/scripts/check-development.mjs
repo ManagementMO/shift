@@ -162,18 +162,23 @@ try {
     return box
   }
   console.log(JSON.stringify({ phase: 'after-confirm-framing', ...(await buildingOnScreen('after confirm')) }))
-  assert.equal(await page.locator('.development-pin.selected').count(), 1)
   await page.getByText('Saved in this scenario', { exact: true }).waitFor()
+  // Once confirmed, the building blends in: no pin, no camera shortcut, and the city's own facade material.
+  assert.equal(await page.locator('.development-pin').count(), 0, 'confirmed developments carry no marker')
+  assert.equal(await page.getByRole('navigation', { name: 'Camera', exact: true }).getByRole('button', { name: 'Development', exact: true }).count(), 0)
+  const blended = await page.evaluate((did) => {
+    const scene = window.__cityshift.babylon.scene
+    const walls = scene.getMeshByName(`development-${did}`)
+    const neighbour = window.__cityshift.babylon.city.chunks.find((m) => m.name.startsWith('buildings-') && m.material?.name === walls?.material?.name)
+    return { material: walls?.material?.name ?? null, sharedWithCity: !!neighbour, halo: !!scene.getMeshByName('development-halos'), arrows: !!scene.getMeshByName('development-intentions') }
+  }, child.developments[0].development_id)
+  assert.match(blended.material, /^city-/, JSON.stringify(blended))
+  assert.equal(blended.sharedWithCity, true, 'the confirmed building must use a material some city block also uses')
+  assert.equal(blended.halo || blended.arrows, false)
   await page.screenshot({ path: `${out}after-confirm.png` })
   await enterCity() // cold reload through the landing page
   assert.equal((await state()).scenarioId, childId)
   console.log(JSON.stringify({ phase: 'after-reload-framing', ...(await buildingOnScreen('after reload')) }))
-  const cameras = page.getByRole('navigation', { name: 'Camera', exact: true })
-  await cameras.getByRole('button', { name: 'City', exact: true }).click()
-  await page.waitForFunction(() => !window.__cityshift.babylon.camera.flying && window.__cityshift.map().getZoom() < 15.5, null, { timeout: 15000 })
-  await cameras.getByRole('button', { name: 'Development', exact: true }).click()
-  console.log(JSON.stringify({ phase: 'development-camera-button', ...(await buildingOnScreen('camera button')) }))
-  await page.getByRole('button', { name: `Inspect ${KIND.name}`, exact: true }).click()
   await page.getByText('Saved in this scenario', { exact: true }).waitFor()
   await page.screenshot({ path: `${out}saved.png` })
   console.log(JSON.stringify({ phase: 'persistence-verified', child: childId }))
@@ -202,7 +207,7 @@ try {
     window.__cityshift.seek(20)
   }, measured[1].run_id)
   assert.equal(await page.evaluate(() => window.__cityshift.store.getState().primaryRunId), measured[1].run_id)
-  assert.equal(await page.locator('.development-pin:not(.draft)').count(), 1)
+  assert.equal(await page.locator('.development-pin').count(), 0)
   // Before/after lives in the Transport lens now: the parent run is fetched on demand and matched trip-by-trip.
   await page.getByRole('button', { name: 'Inspect', exact: true }).click() // upstream renamed the lens toggle
   await page.getByRole('button', { name: 'Transport', exact: true }).click()
@@ -219,6 +224,61 @@ try {
   assert.ok(groups.some((text) => text.includes('Existing trips — this branch') && text.includes(`completed ${expectedExisting}/20`)), JSON.stringify(groups))
   assert.ok(groups.some((text) => text.includes('Added trips — this branch only') && text.includes(`completed ${expectedAdded}/${KIND.trips}`)), JSON.stringify(groups))
   await page.screenshot({ path: `${out}comparison.png` })
+  console.log(JSON.stringify({ phase: 'comparison-verified' }))
+
+  // --- delete the development by clicking it on the map: the scenario is edited in place and re-run ---
+  await page.getByRole('button', { name: 'Inspect', exact: true }).click() // close the lens
+  await positionCamera(placement)
+  const developmentId = child.developments[0].development_id
+  const top = await screenPoint(placement)
+  await page.mouse.click(top.x, top.y - 8)
+  await page.waitForFunction((did) => { const s = window.__cityshift.store.getState().selection; return s?.kind === 'development' && s.id === did }, developmentId)
+  const card = page.locator('.building-card')
+  await card.waitFor()
+  assert.match(await card.innerText(), new RegExp(KIND.name))
+  assert.equal(await page.evaluate(() => !!window.__cityshift.babylon.scene.getMeshByName('development-footprints')), true, 'selection outlines the building')
+  await page.screenshot({ path: `${out}delete-card.png` })
+  await card.getByRole('button', { name: 'Delete', exact: true }).click()
+  await card.getByRole('button', { name: 'Yes, delete', exact: true }).click()
+  await page.waitForFunction((sid) => { const s = window.__cityshift.store.getState(); return s.scenarioId === sid && !s.deleting && (s.scenarios.find((x) => x.scenario_id === sid)?.developments?.length ?? 0) === 0 }, childId, { timeout: 60000 })
+  const afterDelete = await api(`/api/scenarios/${childId}`)
+  assert.equal(afterDelete.developments.length, 0)
+  assert.equal(afterDelete.parent_scenario_id, parent.scenario_id)
+  assert.match(afterDelete.change_set.at(-1), /^remove residential Townhouses: 18 one-way trips/)
+  assert.deepEqual((await api(`/api/scenarios/${childId}/demand`)).travelers, parentDemand.travelers) // exactly the parent trips again
+  const currentRuns = await api(`/api/runs?scenario_id=${encodeURIComponent(childId)}`)
+  assert.ok(currentRuns.every((r) => r.run_id !== measured[1].run_id), 'the pre-delete run is no longer current')
+  assert.ok(currentRuns.length >= 1, 'the edited scenario auto-runs again')
+  assert.equal((await api(`/api/runs/${measured[1].run_id}`)).run_id, measured[1].run_id) // ...but stays fetchable
+  assert.equal(await page.evaluate((did) => !!window.__cityshift.babylon.scene.getMeshByName(`development-${did}`), developmentId), false)
+  assert.equal(await page.locator('.building-card').count(), 0)
+  console.log(JSON.stringify({ phase: 'development-deleted', currentRuns: currentRuns.map((r) => r.status) }))
+
+  // --- demolish an original city building: visual only, persisted, and the run stays current ---
+  const runsBeforeDemolish = await api(`/api/runs?scenario_id=${encodeURIComponent(childId)}`)
+  const target = await page.evaluate(([lon, lat]) => {
+    const ws = window.__cityshift.babylon
+    const [x, z] = ws.frame.lonLatToWorld(lon, lat)
+    const near = ws.world.buildings.filter((b) => b.cat !== 'landmark' && !(ws.world.massing?.excluded_osm_ids ?? []).includes(b.source_id ?? b.id))
+      .map((b) => ({ b, d: Math.hypot(b.ring[0] - x, b.ring[1] - z) })).sort((p, q) => p.d - q.d)
+    const info = near.map((p) => ws.city.describeBuilding(p.b.source_id ?? p.b.id)).find((i) => i && i.height_m > 6)
+    return info ? { ...info, position: ws.frame.worldToLonLat(info.x, info.z) } : null
+  }, placement)
+  assert.ok(target, 'a nearby city building to demolish')
+  await page.evaluate((info) => window.__cityshift.store.getState().select({ kind: 'building', id: info.id, label: info.name || 'City building', category: info.category, height_m: info.height_m, position: info.position }), target)
+  await card.waitFor()
+  assert.match(await card.innerText(), new RegExp(target.id))
+  await card.getByRole('button', { name: 'Delete', exact: true }).click()
+  await card.getByRole('button', { name: 'Yes, delete', exact: true }).click()
+  await page.waitForFunction((id) => window.__cityshift.babylon.city.isHidden(id), target.id, { timeout: 60000 })
+  assert.deepEqual((await api(`/api/scenarios/${childId}`)).demolished, [target.id])
+  assert.deepEqual((await api(`/api/runs?scenario_id=${encodeURIComponent(childId)}`)).map((r) => r.run_id), runsBeforeDemolish.map((r) => r.run_id), 'demolition changes nothing SUMO simulates')
+  await page.screenshot({ path: `${out}demolished.png` })
+  await enterCity()
+  assert.equal((await state()).scenarioId, childId)
+  assert.equal(await page.evaluate((id) => window.__cityshift.babylon.city.isHidden(id), target.id), true, 'demolition survives a reload')
+  assert.equal(await page.locator('.development-pin').count(), 0)
+  console.log(JSON.stringify({ phase: 'demolition-verified', building: target.id }))
   assert.deepEqual(errors, [], 'Browser JavaScript errors')
   console.log(JSON.stringify({ phase: 'complete', screenshots: out, runs: measured.map((r) => ({ id: r.run_id, scenario: r.scenario_id, metrics: r.metrics })) }, null, 2))
 } catch (error) {

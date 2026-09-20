@@ -28,6 +28,8 @@ export type Selection =
   | { kind: 'stop'; id: string }
   | { kind: 'restriction'; id: string }
   | { kind: 'development'; id: string }
+  /** A base-city building or landmark picked on the map (ids are the pack's OSM way ids). */
+  | { kind: 'building'; id: string; label: string; category: string; height_m: number; position: [number, number] }
   | null
 
 export type ToolId = 'road' | 'intersection' | 'stop' | 'route' | 'population' | 'event' | 'development' | 'closure' | 'weather'
@@ -102,6 +104,11 @@ type State = {
   ensureBaseScenario: () => Promise<string | null>
   previewDevelopment: () => Promise<void>
   applyDevelopment: () => Promise<ScenarioSpec | null>
+  /** In place: drop a saved development and exactly its trips from the current scenario, then re-run it. */
+  removeDevelopment: (developmentId: string) => Promise<boolean>
+  /** In place, visual only: hide a base-city building/landmark in the current scenario. */
+  demolishBuilding: (buildingId: string) => Promise<boolean>
+  deleting: string | null
   setLens: (l: LensTab | null) => void
   setDeveloper: (d: boolean) => void
   setCameraMode: (m: CameraMode) => void
@@ -121,6 +128,28 @@ const EMPTY_DEVELOPMENT = {
 }
 
 let basePromise: Promise<string | null> | null = null
+
+/**
+ * Deleting a building edits the current scenario in place: the backend rewrites it under the same id and stops
+ * listing runs of the superseded content, so re-selecting the scenario picks up the new state (and auto-runs it).
+ */
+async function editInPlace(target: string, request: (sid: string) => Promise<ScenarioSpec>): Promise<boolean> {
+  const { scenarioId } = useStore.getState()
+  if (!scenarioId || useStore.getState().deleting) return false
+  useStore.setState({ deleting: target, error: null })
+  try {
+    const updated = await request(scenarioId)
+    const scenarios = useStore.getState().scenarios.map((s) => (s.scenario_id === updated.scenario_id ? updated : s))
+    useStore.setState({ scenarios, selection: null })
+    if (useStore.getState().scenarioId === scenarioId) await useStore.getState().selectScenario(scenarioId)
+    return true
+  } catch (e) {
+    useStore.setState({ error: String(e) })
+    return false
+  } finally {
+    useStore.setState({ deleting: null })
+  }
+}
 
 export const useStore = create<State>((set, get) => ({
   health: null,
@@ -195,6 +224,7 @@ export const useStore = create<State>((set, get) => ({
 
   async selectScenario(sid, options) {
     const request = ++scenarioSelectionRequest
+    const changed = get().scenarioId !== sid // re-selecting after an in-place edit must not move the camera
     const sc = get().scenarios.find((s) => s.scenario_id === sid)
     if (sc && sc.pack_id !== get().pack?.pack_id) {
       const [pack, roads] = await Promise.all([api.pack(sc.pack_id), api.roads(sc.pack_id)])
@@ -217,7 +247,7 @@ export const useStore = create<State>((set, get) => ({
       const initial = valid.find((p) => p.plan.family === 'none') ?? valid[0]
       if (initial) await get().submitRun(initial.plan.plan_id)
     }
-    if (request === scenarioSelectionRequest && get().scenarioId === sid && latestDevelopment(sc)) get().focusDevelopment()
+    if (changed && request === scenarioSelectionRequest && get().scenarioId === sid && latestDevelopment(sc)) get().focusDevelopment()
   },
 
   focusDevelopment(id) {
@@ -401,6 +431,13 @@ export const useStore = create<State>((set, get) => ({
     } finally {
       set({ building: null })
     }
+  },
+  deleting: null,
+  async removeDevelopment(developmentId) {
+    return editInPlace(developmentId, (sid) => api.removeDevelopment(sid, developmentId))
+  },
+  async demolishBuilding(buildingId) {
+    return editInPlace(buildingId, (sid) => api.demolishBuilding(sid, buildingId))
   },
   setLens: (lens) => set({ lens }),
   setDeveloper: (developer) => set({ developer }),

@@ -81,16 +81,37 @@ const LANDMARK_COLOR: Record<string, { wall: RGB; roof: RGB }> = {
   quantum_nano: { wall: hex('#b5c2c5'), roof: hex('#73868b') },
 }
 
+/** What a click on the city knows about a base building or landmark, for the delete card. */
+export interface CityBuildingInfo {
+  id: string
+  kind: 'building' | 'landmark'
+  name: string
+  category: string
+  height_m: number
+  /** footprint centroid, world metres */
+  x: number
+  z: number
+}
+
 export interface CityMeshes {
   ground: Mesh
   chunks: Mesh[]
   landmarks: Mesh
   stops: Mesh
   shadowCasters: Mesh[]
+  /** Shared textured materials so scenario overlays (saved developments) can look like the surrounding city. */
+  materials: CityMaterials
+  foliage: StandardMaterial
+  /** Which base building (OSM way id) or landmark a picked face belongs to, or null for anything else. */
+  buildingAt(mesh: Mesh, faceId: number): string | null
+  describeBuilding(id: string): CityBuildingInfo | null
+  /** Hide exactly these base buildings/landmarks (scenario-local demolitions); everything else is restored. */
+  hideBuildings(ids: Iterable<string>): void
+  isHidden(id: string): boolean
   dispose(): void
 }
 
-export function meshFromBatch(name: string, batch: Batch, scene: Scene, material: Material): Mesh {
+export function meshFromBatch(name: string, batch: Batch, scene: Scene, material: Material, updatable = false): Mesh {
   const mesh = new Mesh(name, scene)
   if (!batch.isEmpty()) {
     const vd = new VertexData()
@@ -99,13 +120,28 @@ export function meshFromBatch(name: string, batch: Batch, scene: Scene, material
     vd.colors = new Float32Array(batch.colors)
     vd.uvs = new Float32Array(batch.uvs)
     vd.indices = batch.vertexCount > 65535 ? new Uint32Array(batch.indices) : new Uint16Array(batch.indices)
-    vd.applyToMesh(mesh, false)
+    vd.applyToMesh(mesh, updatable)
   }
   mesh.material = material
   mesh.isPickable = false
   mesh.freezeWorldMatrix()
   mesh.doNotSyncBoundingInfo = true
   return mesh
+}
+
+/** Batches for one building's architecture, keyed by the texture kind each part is drawn with. */
+export function architectureBatches(b: WorldBuilding, detailed = true): Map<TextureKind, Batch> {
+  const kinds = new Map<TextureKind, Batch>()
+  const batch = (kind: TextureKind): Batch => {
+    let existing = kinds.get(kind)
+    if (!existing) kinds.set(kind, (existing = new Batch(TEXTURE_RECIPES[kind].metres)))
+    return existing
+  }
+  addArchitecture({
+    facade: batch(facadeFor({ id: b.source_id ?? b.id, cat: b.cat, h: b.source_height ?? b.h })), roof: batch('roof'),
+    stone: batch('concrete'), glass: batch('glass'), metal: batch('industrial'),
+  }, b, buildingColor(b), detailed)
+  return kinds
 }
 
 export function vertexColorMaterial(name: string, scene: Scene, specular = 0.05): StandardMaterial {
@@ -126,8 +162,11 @@ class ChunkGrid<T> {
     this.size = size
     this.make = make
   }
+  keyAt(x: number, z: number): string {
+    return `${Math.floor(x / this.size)}:${Math.floor(z / this.size)}`
+  }
   at(x: number, z: number): T {
-    const k = `${Math.floor(x / this.size)}:${Math.floor(z / this.size)}`
+    const k = this.keyAt(x, z)
     let c = this.cells.get(k)
     if (!c) {
       c = this.make()
@@ -137,6 +176,9 @@ class ChunkGrid<T> {
   }
 }
 
+/** Where one building's triangles/vertices landed inside a chunk batch, so it can be picked and hidden later. */
+type BuildingRange = { cell: string; kind: TextureKind | 'paint'; face0: number; face1: number; v0: number; v1: number }
+
 function roadColor(r: WorldRoad, pedOnlyLane: boolean): RGB {
   if (pedOnlyLane) return PALETTE.pavement
   const t = r.type
@@ -145,7 +187,7 @@ function roadColor(r: WorldRoad, pedOnlyLane: boolean): RGB {
   return PALETTE.asphaltMinor
 }
 
-function buildingColor(b: WorldBuilding): { wall: RGB; roof: RGB } {
+export function buildingColor(b: WorldBuilding): { wall: RGB; roof: RGB } {
   const c = CATEGORY[b.cat] ?? CATEGORY.generic
   const j = hash01(b.source_id ?? b.id)
   const wall = mix(c.wall, c.alt, j * 0.9)
@@ -190,16 +232,19 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     }
     return batch
   }
-  const flush = (grid: ChunkGrid<ReturnType<typeof makeBatches>>, prefix: string, shadows: boolean) => {
+  const flush = (grid: ChunkGrid<ReturnType<typeof makeBatches>>, prefix: string, shadows: boolean, updatable = false) => {
+    const made = new Map<string, Mesh>()
     for (const [key, cell] of grid.cells) {
       for (const [kind, batch] of cell) {
         if (batch.isEmpty()) continue
-        const mesh = meshFromBatch(`${prefix}-${key}-${kind}`, batch, scene, kind === 'paint' ? flatMat : materials.get(kind))
+        const mesh = meshFromBatch(`${prefix}-${key}-${kind}`, batch, scene, kind === 'paint' ? flatMat : materials.get(kind), updatable)
         mesh.receiveShadows = true
         chunks.push(mesh)
+        made.set(`${key}|${kind}`, mesh)
         if (shadows) casters.push(mesh)
       }
     }
+    return made
   }
 
   // --- water (one mesh; the lake polygon is huge and culls badly anyway)
@@ -264,6 +309,20 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
   const bld = new ChunkGrid(500, makeBatches)
   const focus = world.landmarks.find(l => l.kind === 'cn_tower') ?? world.venue
   const replaced = new Set(world.massing?.excluded_osm_ids ?? [])
+  // Per-building face/vertex ranges: clicking a chunk resolves to an OSM id, and scenario demolitions collapse exactly
+  // that building's vertices instead of rebuilding the chunk.
+  const ranges = new Map<string, BuildingRange[]>()
+  const info = new Map<string, CityBuildingInfo>()
+  const recorded = (cell: ReturnType<typeof makeBatches>, key: string, id: string, build: () => void): void => {
+    const before = new Map([...cell].map(([kind, batch]) => [kind, [batch.indices.length, batch.vertexCount] as const]))
+    build()
+    const out = ranges.get(id) ?? []
+    for (const [kind, batch] of cell) {
+      const [i0, v0] = before.get(kind) ?? [0, 0]
+      if (batch.indices.length > i0) out.push({ cell: key, kind, face0: i0 / 3, face1: batch.indices.length / 3, v0, v1: batch.vertexCount })
+    }
+    if (out.length) ranges.set(id, out)
+  }
   for (const b of world.buildings) {
     if (replaced.has(b.source_id ?? b.id)) continue
     if (b.cat === 'landmark' && world.landmarks.some((l) => l.id === b.id)) continue
@@ -272,17 +331,32 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     const c = buildingColor(b)
     const cell = bld.at(cx, cz)
     const appearance = { id: b.source_id ?? b.id, cat: b.cat, h: b.source_height ?? b.h }
-    addArchitecture({
+    const id = b.source_id ?? b.id
+    info.set(id, { id, kind: 'building', name: b.name ?? '', category: b.cat, height_m: b.source_height ?? b.h, x: cx, z: cz })
+    recorded(cell, bld.keyAt(cx, cz), id, () => addArchitecture({
       facade: batchFor(cell, facadeFor(appearance)), roof: batchFor(cell, 'roof'),
       stone: batchFor(cell, 'concrete'), glass: batchFor(cell, 'glass'), metal: batchFor(cell, 'industrial'),
-    }, b, c, Math.hypot(cx - focus.x, cz - focus.z) < 1500)
+    }, b, c, Math.hypot(cx - focus.x, cz - focus.z) < 1500))
   }
   for (const b of world.massing?.buildings ?? []) {
     const cell = bld.at(b.x, b.z)
     const color = buildingColor({ ...b, ring: [] })
-    appendMassing(b, batchFor(cell, facadeFor(b)), batchFor(cell, 'roof'), color.wall)
+    info.set(b.id, { id: b.id, kind: 'building', name: '', category: b.cat, height_m: b.h, x: b.x, z: b.z })
+    recorded(cell, bld.keyAt(b.x, b.z), b.id, () => appendMassing(b, batchFor(cell, facadeFor(b)), batchFor(cell, 'roof'), color.wall))
   }
-  flush(bld, 'buildings', true)
+  const buildingMeshes = flush(bld, 'buildings', true, true)
+  for (const mesh of buildingMeshes.values()) mesh.isPickable = true
+  const originalPositions = new Map<Mesh, Float32Array>()
+  const faceOwner = new Map<Mesh, { id: string; face0: number; face1: number }[]>()
+  for (const [id, list] of ranges) {
+    for (const r of list) {
+      const mesh = buildingMeshes.get(`${r.cell}|${r.kind}`)
+      if (!mesh) continue
+      const owners = faceOwner.get(mesh) ?? []
+      owners.push({ id, face0: r.face0, face1: r.face1 })
+      faceOwner.set(mesh, owners)
+    }
+  }
 
   const trees = buildVegetation(scene, treePlacements(world), foliageMat, world.surfaces ? Y.road : Y.green)
   chunks.push(...trees)
@@ -294,14 +368,55 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     const lm = new Batch(TEXTURE_RECIPES.concrete.metres)
     const landmarkGlass = new Batch(TEXTURE_RECIPES.glass.metres)
     buildLandmark(lm, landmarkGlass, l)
+    info.set(l.id, { id: l.id, kind: 'landmark', name: l.name, category: 'landmark', height_m: l.h, x: l.x, z: l.z })
     for (const [suffix, batch, mat] of [['solid', lm, landmarkMat], ['glass', landmarkGlass, materials.get('glass')]] as const) {
       if (batch.isEmpty()) continue
       const mesh = meshFromBatch(`landmark-${l.kind}-${suffix}`, batch, scene, mat)
-      mesh.metadata = { landmarkKind: l.kind }
+      mesh.metadata = { landmarkKind: l.kind, landmarkId: l.id }
+      mesh.isPickable = true
       mesh.receiveShadows = true
       chunks.push(mesh)
       casters.push(mesh)
     }
+  }
+  const landmarkById = new Map(world.landmarks.map((l) => [l.id, l]))
+  const hidden = new Set<string>()
+  const hideBuildings = (ids: Iterable<string>): void => {
+    const next = new Set(ids)
+    if (next.size === hidden.size && [...next].every((id) => hidden.has(id))) return
+    const touched = new Set<Mesh>()
+    for (const id of new Set([...hidden, ...next])) for (const r of ranges.get(id) ?? []) {
+      const mesh = buildingMeshes.get(`${r.cell}|${r.kind}`)
+      if (mesh) touched.add(mesh)
+    }
+    for (const mesh of touched) {
+      const original = originalPositions.get(mesh) ?? (() => {
+        const copy = new Float32Array(mesh.getVerticesData('position') ?? [])
+        originalPositions.set(mesh, copy)
+        return copy
+      })()
+      const positions = new Float32Array(original)
+      for (const id of next) for (const r of ranges.get(id) ?? []) {
+        if (buildingMeshes.get(`${r.cell}|${r.kind}`) !== mesh) continue
+        const target = info.get(id)
+        // Collapse the building to a single point on the ground: zero-area triangles draw nothing and pick nothing.
+        for (let v = r.v0; v < r.v1; v++) {
+          positions[v * 3] = target?.x ?? positions[v * 3]
+          positions[v * 3 + 1] = Y.ground - 1
+          positions[v * 3 + 2] = target?.z ?? positions[v * 3 + 2]
+        }
+      }
+      mesh.updateVerticesData('position', positions)
+    }
+    for (const id of new Set([...hidden, ...next])) {
+      const landmark = landmarkById.get(id)
+      if (!landmark) continue
+      const show = !next.has(id)
+      for (const mesh of chunks) if (mesh.metadata?.landmarkId === id && !(show && mesh.metadata?.modelLoaded)) mesh.setEnabled(show)
+      scene.getTransformNodeByName(`model-${landmark.kind}`)?.setEnabled(show)
+    }
+    hidden.clear()
+    for (const id of next) hidden.add(id)
   }
 
   // --- stops
@@ -315,6 +430,16 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     landmarks,
     stops,
     shadowCasters: casters,
+    materials,
+    foliage: foliageMat,
+    buildingAt(mesh, faceId) {
+      if (mesh.metadata?.landmarkId) return String(mesh.metadata.landmarkId)
+      const owner = faceOwner.get(mesh)?.find((o) => faceId >= o.face0 && faceId < o.face1)
+      return owner && !hidden.has(owner.id) ? owner.id : null
+    },
+    describeBuilding: (id) => info.get(id) ?? null,
+    hideBuildings,
+    isHidden: (id) => hidden.has(id),
     dispose() {
       ground.dispose()
       for (const c of chunks) c.dispose()

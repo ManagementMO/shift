@@ -166,6 +166,37 @@ class Service:
                     self.register_plan(saved, plan)
         return saved
 
+    def remove_development(self, sid: str, development_id: str) -> ScenarioSpec:
+        with self.store.lock:
+            scenario, demand = developments.remove_development(self.scenario(sid), self.demand(sid), development_id)
+            return self._rewrite_scenario(scenario, demand)
+
+    def demolish_building(self, sid: str, building_id: str) -> ScenarioSpec:
+        with self.store.lock:
+            scenario = developments.demolish_building(self.scenario(sid), building_id)
+            return self._rewrite_scenario(scenario, self.demand(sid))
+
+    def _rewrite_scenario(self, scenario: ScenarioSpec, demand: DemandSet) -> ScenarioSpec:
+        """Edit a scenario in place: overwrite it, re-validate its plans against the new demand, keep custom plans."""
+        pack = self.pack(scenario.pack_id)
+        self.store.replace_scenario(scenario, demand)
+        generated = {p.plan_id: p for p in [baseline_plan(), *heuristic_plans(pack, scenario, demand)]}
+        for plan in self.store.list_plans(scenario.scenario_id):
+            generated.setdefault(plan.plan_id, plan)
+        for plan in generated.values():
+            self.store.replace_plan(scenario.scenario_id, plan, validate_plan(pack, scenario, plan, demand))
+        return scenario
+
+    def current_runs(self, sid: str) -> list[SimulationRun]:
+        """Runs whose identity still matches the scenario's current content; in-place edits make older ones stale."""
+        scenario, demand = self.scenario(sid), self.demand(sid)
+        current = []
+        for run in self.store.list_runs(sid):
+            plan = self.store.get_plan(sid, run.plan_id)
+            if plan is not None and run_id_for(scenario, plan, run.seed, demand) == run.run_id:
+                current.append(run)
+        return current
+
     # agents --------------------------------------------------------------------------------------
     def investigate(self, sid: str, problem: str, constraint: str, options: InvestigationOptions | None = None) -> Investigation:
         scenario = self.scenario(sid)

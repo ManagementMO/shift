@@ -154,3 +154,41 @@ def apply_development(
         "change_set": [*scenario.change_set, change], "label": f"{scenario.label} · {change}", "created_at": utcnow(),
     })
     return child, demand
+
+
+def remove_development(scenario: ScenarioSpec, demand: DemandSet, development_id: str) -> tuple[ScenarioSpec, DemandSet]:
+    """In-place removal: the development and exactly its trips go; every other traveler keeps its identity."""
+    if scenario.demand_id != demand.demand_id:
+        raise ValueError("scenario and demand identities do not match")
+    development = next((d for d in scenario.developments if d.development_id == development_id), None)
+    if development is None:
+        raise KeyError(development_id)
+    kept = [t.model_copy(deep=True) for t in demand.travelers if t.development_id != development_id]
+    identity = content_hash({
+        "generator": "development-removed-v1", "parent": content_hash(demand), "removed": development_id,
+    })
+    new_demand = DemandSet(
+        demand_id=f"demand-{identity}", seed=demand.seed, travelers=kept,
+        background_vehicles=demand.background_vehicles, synthetic=True,
+        generation_method=f"{demand.generation_method}; removed {development_id}: {len(demand.travelers) - len(kept)} trips",
+    )
+    change = f"remove {development.spec.land_use} {development.spec.name}: {len(demand.travelers) - len(kept)} one-way trips"
+    updated = scenario.model_copy(deep=True, update={
+        "demand_id": new_demand.demand_id,
+        "developments": [d.model_copy(deep=True) for d in scenario.developments if d.development_id != development_id],
+        "change_set": [*scenario.change_set, change],
+    })
+    return updated, new_demand
+
+
+def demolish_building(scenario: ScenarioSpec, building_id: str) -> ScenarioSpec:
+    """Hide a base-city building in this scenario. Visual only: base buildings generate no trips here."""
+    building_id = building_id.strip()
+    if not building_id or len(building_id) > 80:
+        raise ValueError("building id must be 1-80 characters")
+    if building_id in scenario.demolished:
+        return scenario
+    return scenario.model_copy(deep=True, update={
+        "demolished": [*scenario.demolished, building_id],
+        "change_set": [*scenario.change_set, f"demolish building {building_id}"],
+    })

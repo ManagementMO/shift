@@ -3,6 +3,7 @@ import { BUILDING_KIND_ORDER, BUILDING_KINDS, DEVELOPMENT_USES, developmentCount
 import { useStore } from '../store'
 import type { BuildingKind, Development, DevelopmentSpec } from '../types'
 import { fmt } from '../util'
+import { DeleteButton } from '../world/BuildingCard'
 import { currentPose, developmentPose } from '../world/camera'
 import { clock } from '../world/playback'
 import { cameraTo, leadMap } from '../world/registry'
@@ -43,6 +44,8 @@ function Assumptions({ spec }: { spec: DevelopmentSpec }) {
 function DevelopmentDetails({ development }: { development: Development }) {
   const { spec } = development
   const setTool = useStore((s) => s.setTool)
+  const removeDevelopment = useStore((s) => s.removeDevelopment)
+  const deleting = useStore((s) => s.deleting)
   const counts = developmentCounts(spec)
   const kind = developmentKind(spec)
   return <div className="tool development-tool" style={{ '--kind-color': kind ? BUILDING_KINDS[kind].color : DEVELOPMENT_USES[spec.land_use].color } as CSSProperties}>
@@ -59,7 +62,12 @@ function DevelopmentDetails({ development }: { development: Development }) {
       <button className="ghostbtn" onClick={() => frameDevelopment(spec)}>Frame building</button>
       <button className="ghostbtn" onClick={() => { clock.seek(spec.first_wave.start_s); frameDevelopment(spec) }}>Show first wave</button>
     </div>
-    <button className="ghostbtn" onClick={() => setTool('development')}>Place another</button>
+    <div className="row wrap">
+      <button className="ghostbtn" onClick={() => setTool('development')}>Place another</button>
+      <DeleteButton label={`Delete ${spec.name}`} busy={deleting === development.development_id}
+        prompt={`Remove ${spec.name} and its ${counts.trips.toLocaleString()} trips from this scenario? The scenario is edited in place and re-run.`}
+        onConfirm={() => void removeDevelopment(development.development_id)} />
+    </div>
     <div className="small dim">Synthetic one-way trips, not a calibrated forecast. No roads or construction restrictions were added.</div>
   </div>
 }

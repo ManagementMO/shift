@@ -155,6 +155,8 @@ export type ScenarioSpec = {
   restrictions: Restriction[]
   hazards: HazardTrack[]
   developments?: Development[]
+  /** Base-city buildings (OSM way / landmark ids) hidden in this scenario. Visual only; not part of run identity. */
+  demolished?: string[]
   constraints: {
     fleet: FleetVehicle[]
     horizon_s: number

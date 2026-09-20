@@ -236,7 +236,12 @@ def submit_run(req: RunRequest) -> dict:
 
 @app.get("/api/runs")
 def list_runs(scenario_id: str | None = Query(default=None)) -> list[dict]:
-    return [r.model_dump(mode="json") for r in get_service().store.list_runs(scenario_id)]
+    svc = get_service()
+    try:
+        runs = svc.current_runs(scenario_id) if scenario_id else svc.store.list_runs()
+    except KeyError:
+        raise _not_found("scenario") from None
+    return [r.model_dump(mode="json") for r in runs]
 
 
 @app.get("/api/runs/{rid}")

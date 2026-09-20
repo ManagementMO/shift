@@ -275,6 +275,9 @@ class ScenarioSpec(BaseModel):
     restrictions: list[Restriction] = []
     hazards: list[HazardTrack] = []
     developments: list[Development] = []
+    # Base-city buildings (OSM way / landmark ids) removed in this scenario. Visual only: they generate no trips and
+    # touch no network edge, so they are excluded from run identity.
+    demolished: list[str] = []
     constraints: ConstraintSet
     parent_scenario_id: str | None = None
     change_set: list[str] = []

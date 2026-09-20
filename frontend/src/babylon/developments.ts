@@ -4,11 +4,14 @@ import { TransformNode } from '@babylonjs/core/Meshes/transformNode'
 import type { Observer } from '@babylonjs/core/Misc/observable'
 import type { Scene } from '@babylonjs/core/scene'
 
-import { developmentActivity, developmentArrowFraction, developmentColor, developmentDirection, developmentRing, validDevelopmentGeometry } from '../development'
+import { developmentArrowFraction, developmentColor, developmentDirection, developmentRing, validDevelopmentGeometry } from '../development'
 import type { CityPack, Development, DevelopmentSpec } from '../types'
-import { hex, meshFromBatch, vertexColorMaterial, Y } from './city'
+import { TEXTURE_RECIPES } from './appearance'
+import { architectureBatches, hex, meshFromBatch, PALETTE, vertexColorMaterial, Y, type CityMeshes } from './city'
 import type { WorldFrame } from './coords'
 import { Batch, hash01, mix, type RGB } from './geometry'
+import { buildVegetation } from './vegetation'
+import type { BuildingCategory, WorldBuilding } from './worldData'
 
 const RISE_MS = 620
 const RIPPLE_MS = 950
@@ -61,6 +64,32 @@ export function developmentGeometry(spec: DevelopmentSpec, frame: WorldFrame, co
   return batch
 }
 
+/**
+ * A confirmed development as the city itself would draw it: the same procedural architecture, facade textures and
+ * roof materials as the surrounding OSM buildings, so it is indistinguishable from its neighbours.
+ */
+export function cityBuildingFor(id: string, spec: DevelopmentSpec, frame: WorldFrame): WorldBuilding {
+  const cat: BuildingCategory = spec.land_use === 'office' ? (spec.height_m >= 65 ? 'tower' : 'office')
+    : spec.land_use === 'school' ? 'civic' : spec.height_m > 15 ? 'apartments' : 'residential'
+  return { id, ring: developmentRing(spec, frame), h: spec.height_m, cat, name: spec.name }
+}
+
+/** Where a confirmed park's trees stand: the same deterministic grove the placement ghost showed. */
+export function parkTrees(spec: DevelopmentSpec, frame: WorldFrame): { x: number; z: number; scale: number; shade: number }[] {
+  const [cx, cz] = frame.lonLatToWorld(...spec.position)
+  const [w, d] = spec.footprint_m
+  const out: { x: number; z: number; scale: number; shade: number }[] = []
+  const spacing = 11
+  for (let ix = 0, x = cx - w / 2 + 7; x <= cx + w / 2 - 7; x += spacing, ix++) {
+    for (let iz = 0, z = cz - d / 2 + 7; z <= cz + d / 2 - 7; z += spacing, iz++) {
+      if (Math.abs(x - cx) < 3 || Math.abs(z - cz) < 3) continue
+      const j = hash01(`${spec.name}:${ix}:${iz}`)
+      out.push({ x: x + (j - 0.5) * 4, z: z + (hash01(`${iz}:${ix}:${spec.name}`) - 0.5) * 4, scale: 0.85 + j * 0.5, shade: hash01(`${ix}:${iz}`) })
+    }
+  }
+  return out
+}
+
 /** A thin ground ring used for the placement ripple. */
 function ringBatch(cx: number, cz: number, r: number, width: number, y: number, color: RGB): Batch {
   const batch = new Batch()
@@ -100,6 +129,7 @@ export class DevelopmentOverlay {
   private readonly markMaterial: StandardMaterial
   private readonly ghostMarkMaterial: StandardMaterial
   private meshes: Mesh[] = []
+  private roots: TransformNode[] = []
   private key = ''
   private ghostRoot: TransformNode | null = null
   private ghostBase: [number, number] = [0, 0]
@@ -111,11 +141,13 @@ export class DevelopmentOverlay {
   private ripples: { mesh: Mesh; material: StandardMaterial; start: number }[] = []
   private seen: Set<string> | null = null
   private readonly observer: Observer<Scene>
+  private readonly city: CityMeshes | null
   private now = 0
 
-  constructor(scene: Scene, frame: WorldFrame) {
+  constructor(scene: Scene, frame: WorldFrame, city: CityMeshes | null = null) {
     this.scene = scene
     this.frame = frame
+    this.city = city
     this.material = vertexColorMaterial('development-material', scene)
     this.ghostMaterial = vertexColorMaterial('development-ghost-material', scene)
     this.ghostMaterial.alpha = 0.42
@@ -135,27 +167,27 @@ export class DevelopmentOverlay {
   }
 
   set(marks: DevelopmentMarks): void {
-    const activity = marks.developments.map((d) => developmentActivity(d.spec, marks.t))
     const draftSansPosition = marks.draft ? { ...marks.draft, position: null } : null
     const placedAt = marks.placed && marks.draft ? marks.draft.position : null
-    const key = JSON.stringify([marks.developments, draftSansPosition, placedAt, marks.invalidDraft, marks.focusedId, marks.zones, activity])
+    const key = JSON.stringify([marks.developments, draftSansPosition, placedAt, marks.invalidDraft, marks.focusedId, marks.zones])
     if (key !== this.key) {
       this.key = key
-      this.rebuild(marks, activity, placedAt)
+      this.rebuild(marks, placedAt)
     }
     this.aimGhost(marks)
   }
 
-  private rebuild(marks: DevelopmentMarks, activity: ('inbound' | 'outbound' | null)[], placedAt: [number, number] | null): void {
+  private rebuild(marks: DevelopmentMarks, placedAt: [number, number] | null): void {
     const previouslySeen = this.seen
     for (const mesh of this.meshes) mesh.dispose()
+    for (const root of this.roots) root.dispose()
     this.meshes = []
+    this.roots = []
     this.rising.clear()
     const ghostBefore = this.ghostRoot
     this.ghostRoot = null
     const footprints = new Batch()
     const intentions = new Batch()
-    const halos = new Batch()
 
     const arrows = (spec: DevelopmentSpec, direction: 'inbound' | 'outbound', color: RGB): void => {
       const center = this.frame.lonLatToWorld(...spec.position)
@@ -176,29 +208,31 @@ export class DevelopmentOverlay {
       }
     }
 
-    // --- saved developments (depth-tested building + halo, always-on-top outline) ---
+    // --- saved developments: drawn like any other city building (same textures, no halo, outline or arrows). A
+    // thin outline appears only while one is selected, so the delete card has an unambiguous anchor.
     const seen = new Set<string>()
-    marks.developments.forEach((development, i) => {
+    for (const development of marks.developments) {
       const { spec } = development
       const id = development.development_id
       seen.add(id)
-      if (!validDevelopmentGeometry(spec)) return
-      const color = hex(developmentColor(spec))
-      const mesh = meshFromBatch(`development-${id}`, developmentGeometry(spec, this.frame, color), this.scene, this.material)
-      mesh.isPickable = true
-      mesh.metadata = { development_id: id }
-      mesh.receiveShadows = true
-      this.meshes.push(mesh)
-      if (previouslySeen && !previouslySeen.has(id)) this.rising.set(animatable(mesh), this.now) // a freshly confirmed building rises out of the ground
-      const ring = developmentRing(spec, this.frame, 3)
-      footprints.ribbon([...ring, ring[0], ring[1]], marks.focusedId === id ? 3 : 1.6, Y.junction + 0.3, color)
-      // Ground halo: a wide tinted ring so the lot reads at district scale. Depth-tested so the walls draw over it.
-      const center = this.frame.lonLatToWorld(...spec.position)
-      const halo = Math.max(...spec.footprint_m) * 0.9 + 14
-      halos.disc(center[0], center[1], halo, Y.junction + 0.22, mix(color, hex('#ffffff'), 0.35), 40)
-      halos.disc(center[0], center[1], halo - 4, Y.junction + 0.24, mix(color, hex('#f4f6f1'), 0.82), 40)
-      if (activity[i] && marks.focusedId === id) arrows(spec, activity[i], color)
-    })
+      if (!validDevelopmentGeometry(spec)) continue
+      const fresh = !!previouslySeen && !previouslySeen.has(id) // a freshly confirmed building rises out of the ground
+      const root = new TransformNode(`development-${id}-root`, this.scene)
+      for (const mesh of this.savedMeshes(id, spec)) {
+        mesh.isPickable = true
+        mesh.metadata = { development_id: id }
+        mesh.receiveShadows = true
+        mesh.parent = root
+        if (fresh) animatable(mesh)
+        this.meshes.push(mesh)
+      }
+      this.roots.push(root)
+      if (fresh) this.rising.set(root, this.now)
+      if (marks.focusedId === id) {
+        const ring = developmentRing(spec, this.frame, 2)
+        footprints.ribbon([...ring, ring[0], ring[1]], 2.2, Y.junction + 0.3, hex('#e7e7e1'))
+      }
+    }
     this.seen = seen
 
     // --- the draft: a translucent ghost that glides after the cursor until it is placed ---
@@ -248,13 +282,42 @@ export class DevelopmentOverlay {
     }
     ghostBefore?.dispose()
 
-    if (!halos.isEmpty()) this.meshes.push(meshFromBatch('development-halos', halos, this.scene, this.markMaterial))
     for (const [name, batch] of [['footprints', footprints], ['intentions', intentions]] as const) {
       if (batch.isEmpty()) continue
       const mesh = meshFromBatch(`development-${name}`, batch, this.scene, this.markMaterial)
       mesh.renderingGroupId = 1
       this.meshes.push(mesh)
     }
+  }
+
+  /** Meshes for a confirmed development, textured with the city's own materials when a city is attached. */
+  private savedMeshes(id: string, spec: DevelopmentSpec): Mesh[] {
+    const city = this.city
+    if (!city) {
+      // Headless/test scenes: keep the flat vertex-colour look.
+      return [meshFromBatch(`development-${id}`, developmentGeometry(spec, this.frame, hex(developmentColor(spec))), this.scene, this.material)]
+    }
+    if (spec.land_use === 'park') {
+      const lawn = new Batch(TEXTURE_RECIPES.grass.metres)
+      const ring = developmentRing(spec, this.frame)
+      lawn.polygon(ring, undefined, Y.green + 0.06, PALETTE.green)
+      const meshes = [meshFromBatch(`development-${id}`, lawn, this.scene, city.materials.get('grass'))]
+      for (const tree of buildVegetation(this.scene, parkTrees(spec, this.frame), city.foliage, Y.green)) {
+        tree.name = `development-${id}-trees`
+        tree.unfreezeWorldMatrix()
+        tree.thinInstanceEnablePicking = true // clicking a tree selects the park
+        meshes.push(tree)
+      }
+      return meshes
+    }
+    const meshes: Mesh[] = []
+    let first = true
+    for (const [kind, batch] of architectureBatches(cityBuildingFor(id, spec, this.frame))) {
+      if (batch.isEmpty()) continue
+      meshes.push(meshFromBatch(first ? `development-${id}` : `development-${id}-${kind}`, batch, this.scene, city.materials.get(kind)))
+      first = false
+    }
+    return meshes
   }
 
   private aimGhost(marks: DevelopmentMarks): void {
@@ -320,7 +383,9 @@ export class DevelopmentOverlay {
   dispose(): void {
     this.scene.onBeforeRenderObservable.remove(this.observer)
     for (const mesh of this.meshes) mesh.dispose()
+    for (const root of this.roots) root.dispose()
     this.meshes = []
+    this.roots = []
     for (const { mesh, material } of this.ripples) { mesh.dispose(); material.dispose() }
     this.ripples = []
     this.ghostRoot?.dispose()

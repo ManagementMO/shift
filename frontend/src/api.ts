@@ -40,6 +40,12 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return (await r.json()) as T
 }
 
+async function del<T>(path: string): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`)
+  return (await r.json()) as T
+}
+
 export const api = {
   health: () => get<Health>('/api/health'),
   packs: () => get<{ pack_id: string; name: string }[]>('/api/packs'),
@@ -82,6 +88,11 @@ export const api = {
     post<DevelopmentPreview>(`/api/scenarios/${sid}/developments/preview`, spec),
   applyDevelopment: (sid: string, proposal: DevelopmentPreview) =>
     post<ScenarioSpec>(`/api/scenarios/${sid}/developments/apply`, proposal),
+  // In-place edits: the scenario keeps its id; the backend hides runs of the superseded content.
+  removeDevelopment: (sid: string, developmentId: string) =>
+    del<ScenarioSpec>(`/api/scenarios/${sid}/developments/${encodeURIComponent(developmentId)}`),
+  demolishBuilding: (sid: string, buildingId: string) =>
+    post<ScenarioSpec>(`/api/scenarios/${sid}/demolitions`, { building_id: buildingId }),
   // agents
   investigate: (sid: string, problem: string, constraint: string) =>
     post<Investigation>(`/api/scenarios/${sid}/investigate`, { problem, constraint, options: investigationOptions(usePreferences.getState().preferences) }),

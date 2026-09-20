@@ -86,10 +86,17 @@ def runner_for(pack: CityPack) -> SumoRunner:
         return _runners[pack.pack_id]
 
 
+RUN_IDENTITY_EXCLUDES = {"created_at", "label", "change_set", "demolished"}
+
+
 def run_id_for(scenario: ScenarioSpec, plan: ServicePlan, seed: int, demand: DemandSet) -> str:
-    """Deterministic: same scenario + plan + seed => same run id (duplicate submissions are idempotent)."""
+    """Deterministic: same scenario + plan + seed => same run id (duplicate submissions are idempotent).
+
+    Provenance fields (creation clock, label, change log) and demolished base buildings are excluded: none of them
+    change what SUMO simulates, so a run stays current across them.
+    """
     return "run-" + content_hash({
-        "s": scenario.model_dump(mode="json", exclude={"created_at"}), "p": plan.model_dump(mode="json"),
+        "s": scenario.model_dump(mode="json", exclude=RUN_IDENTITY_EXCLUDES), "p": plan.model_dump(mode="json"),
         "seed": seed, "demand": content_hash(demand), "compiler": "multi-origin-v1",
     })[:12]
 

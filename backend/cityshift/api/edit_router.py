@@ -54,3 +54,29 @@ def apply_development(sid: str, proposal: DevelopmentPreview) -> dict:
         raise HTTPException(404, f"scenario {sid} not found") from None
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
+
+
+@router.delete("/{sid}/developments/{development_id}")
+def remove_development(sid: str, development_id: str) -> dict:
+    """In-place: drops the development and exactly its trips from this scenario; runs of the old content go stale."""
+    try:
+        return get_service().remove_development(sid, development_id).model_dump(mode="json")
+    except KeyError as exc:
+        raise HTTPException(404, f"{exc.args[0]} not found") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+class DemolitionRequest(BaseModel):
+    building_id: str
+
+
+@router.post("/{sid}/demolitions")
+def demolish_building(sid: str, req: DemolitionRequest) -> dict:
+    """In-place, visual only: hides a base-city building in this scenario. Base buildings generate no trips."""
+    try:
+        return get_service().demolish_building(sid, req.building_id).model_dump(mode="json")
+    except KeyError:
+        raise HTTPException(404, f"scenario {sid} not found") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None

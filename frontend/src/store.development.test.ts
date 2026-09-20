@@ -216,6 +216,56 @@ describe('development preview lifecycle', () => {
     expect(useStore.getState().primaryRunId).toBeNull()
   })
 
+  it('deletes a saved development in place: same scenario, no camera move, stale run dropped, re-run picked up', async () => {
+    const child = fixtureScenario('child', 'parent')
+    const spec = { ...useStore.getState().developmentDraft!, position: [-79.372, 43.655] as [number, number] }
+    child.developments = [{ development_id: 'saved', spec, access: [] }]
+    const map = fakeMap()
+    const unregister = registerMap('solo', map)
+    const staleRun = fixtureBundle(child, [fixtureTraveler()]).run
+    const runs = vi.spyOn(api, 'runs').mockResolvedValue([staleRun])
+    vi.spyOn(api, 'plans').mockResolvedValue([{ plan: { plan_id: 'baseline', family: 'none' }, validation: { valid: true } } as never])
+    vi.spyOn(api, 'demand').mockResolvedValue(fixtureBundle(child, [fixtureTraveler()]).demand!)
+    vi.spyOn(api, 'bundle').mockResolvedValue(fixtureBundle(child, [fixtureTraveler()]))
+    const submit = vi.spyOn(api, 'submitRun').mockResolvedValue({ ...staleRun, run_id: 'run-fresh', status: 'queued' })
+    useStore.setState({ scenarios: [fixtureScenario(), child] })
+    await useStore.getState().selectScenario('child')
+    expect(useStore.getState().primaryRunId).toBe(staleRun.run_id)
+    const movesBefore = map.moves.length
+    useStore.getState().select({ kind: 'development', id: 'saved' })
+
+    const updated = { ...child, developments: [], demand_id: 'demand-after', change_set: ['remove residential Townhouses: 18 one-way trips'] }
+    const remove = vi.spyOn(api, 'removeDevelopment').mockResolvedValue(updated)
+    runs.mockResolvedValue([]) // the backend no longer lists the run of the superseded content
+    expect(await useStore.getState().removeDevelopment('saved')).toBe(true)
+    expect(remove).toHaveBeenCalledWith('child', 'saved')
+    const s = useStore.getState()
+    expect(s.scenarioId).toBe('child') // edited in place, not branched
+    expect(s.scenarios.find((x) => x.scenario_id === 'child')).toEqual(updated)
+    expect(s.selection).toBeNull()
+    expect(s.primaryRunId).toBeNull()
+    expect(submit).toHaveBeenCalledTimes(1) // no current run left, so the scenario auto-runs again
+    expect(map.moves.length).toBe(movesBefore) // re-selecting the same scenario does not fly anywhere
+    expect(s.deleting).toBeNull()
+    unregister()
+  })
+
+  it('demolishes a base-city building in place and surfaces backend refusals without losing the scenario', async () => {
+    vi.spyOn(api, 'plans').mockResolvedValue([])
+    vi.spyOn(api, 'runs').mockResolvedValue([])
+    vi.spyOn(api, 'demand').mockResolvedValue(fixtureBundle(fixtureScenario(), [fixtureTraveler()]).demand!)
+    useStore.getState().select({ kind: 'building', id: 'w123', label: 'City building', category: 'office', height_m: 40, position: [-79.38, 43.65] })
+    const demolished = { ...fixtureScenario(), demolished: ['w123'], change_set: ['demolish building w123'] }
+    vi.spyOn(api, 'demolishBuilding').mockResolvedValueOnce(demolished).mockRejectedValueOnce(new Error('422 building id must be 1-80 characters'))
+    expect(await useStore.getState().demolishBuilding('w123')).toBe(true)
+    expect(useStore.getState().scenarios[0].demolished).toEqual(['w123'])
+    expect(useStore.getState().scenarioId).toBe('parent')
+    expect(useStore.getState().selection).toBeNull()
+    expect(await useStore.getState().demolishBuilding('   ')).toBe(false)
+    expect(useStore.getState().error).toContain('1-80 characters')
+    expect(useStore.getState().scenarios[0].demolished).toEqual(['w123']) // the failed edit changed nothing
+  })
+
   it('keeps the current scenario and draft when confirmation fails', async () => {
     const spec = useStore.getState().developmentDraft!
     vi.spyOn(api, 'previewDevelopment').mockResolvedValue(proposal(spec))

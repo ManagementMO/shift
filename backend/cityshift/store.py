@@ -78,6 +78,18 @@ class Store:
             self._write("demand", s.scenario_id, demand)
             self._write("scenarios", s.scenario_id, s)
 
+    def replace_scenario(self, s: ScenarioSpec, demand: DemandSet) -> None:
+        """In-place edit (deleting a building): the scenario keeps its id; runs keyed on the old content go stale."""
+        with self.lock:
+            if self.get_scenario(s.scenario_id) is None:
+                raise KeyError(s.scenario_id)
+            if s.demand_id != demand.demand_id:
+                raise ValueError("scenario and demand identities do not match")
+            if len({t.person_id for t in demand.travelers}) != len(demand.travelers):
+                raise ValueError("traveler IDs must be unique within a demand set")
+            self._write("demand", s.scenario_id, demand)
+            self._write("scenarios", s.scenario_id, s)
+
     def get_scenario(self, sid: str) -> ScenarioSpec | None:
         return self._read("scenarios", sid, ScenarioSpec)
 
@@ -91,6 +103,10 @@ class Store:
     def put_plan(self, sid: str, plan: ServicePlan, report: ValidationReport) -> None:
         self._write("plans", f"{sid}__{plan.plan_id}", plan)
         self._write("validations", f"{sid}__{plan.plan_id}", report)
+
+    def replace_plan(self, sid: str, plan: ServicePlan, report: ValidationReport) -> None:
+        """Re-validate a plan after an in-place scenario edit (the JSON store overwrites by key)."""
+        self.put_plan(sid, plan, report)
 
     def get_plan(self, sid: str, pid: str) -> ServicePlan | None:
         return self._read("plans", f"{sid}__{pid}", ServicePlan)

@@ -7,7 +7,8 @@ from cityshift import providers
 from cityshift.api import service as service_module
 from cityshift.api.app import app
 from cityshift.api.service import Service
-from cityshift.contracts import DemandSet, Traveler
+from cityshift.contracts import DemandSet, RunStatus, SimulationRun, Traveler
+from cityshift.domain.runs import run_id_for
 from cityshift.mongo_store import MongoStore
 
 
@@ -49,6 +50,39 @@ def test_api_development_preview_cancel_apply_and_reload(atlas_api, development_
     assert reloaded.demand(parent.scenario_id) == demand
     assert reloaded.demand(child["scenario_id"]).travelers[:1] == demand.travelers
     assert reloaded.plan(child["scenario_id"], "baseline").plan_id == "baseline"
+    reloaded.close()
+
+
+def test_api_deletes_in_place_and_hides_stale_runs(atlas_api, development_spec):
+    client, service, parent, demand = atlas_api
+    service.register_scenario(parent, demand)
+    base = f"/api/scenarios/{parent.scenario_id}"
+    proposal = client.post(f"{base}/developments/preview", json=development_spec.model_dump(mode="json")).json()
+    child = client.post(f"{base}/developments/apply", json=proposal).json()
+    sid = child["scenario_id"]
+    # A run recorded against the pre-edit content is listed as current...
+    plan = service.plan(sid, "baseline")
+    stale = SimulationRun(run_id=run_id_for(service.scenario(sid), plan, 1, service.demand(sid)), scenario_id=sid, plan_id="baseline", seed=1, status=RunStatus.completed)
+    service.store.put_run(stale)
+    assert [r["run_id"] for r in client.get("/api/runs", params={"scenario_id": sid}).json()] == [stale.run_id]
+    # ...demolishing a base building is visual only, so the run stays current...
+    response = client.post(f"{base.replace(parent.scenario_id, sid)}/demolitions", json={"building_id": "w42"})
+    assert response.status_code == 200, response.text
+    assert response.json()["demolished"] == ["w42"]
+    assert [r["run_id"] for r in client.get("/api/runs", params={"scenario_id": sid}).json()] == [stale.run_id]
+    # ...but removing the development changes the demand, so the old run is no longer current (yet still fetchable).
+    response = client.delete(f"/api/scenarios/{sid}/developments/{child['developments'][0]['development_id']}")
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    assert updated["scenario_id"] == sid and updated["developments"] == [] and updated["demolished"] == ["w42"]
+    assert client.get(f"/api/scenarios/{sid}/demand").json()["travelers"] == demand.model_dump(mode="json")["travelers"]
+    assert client.get("/api/runs", params={"scenario_id": sid}).json() == []
+    assert client.get(f"/api/runs/{stale.run_id}").status_code == 200
+    assert client.get("/api/runs").json()[0]["run_id"] == stale.run_id
+    assert service.plan(sid, "baseline").plan_id == "baseline"  # plans re-validated, not lost
+    assert client.delete(f"/api/scenarios/{sid}/developments/missing").status_code == 404
+    reloaded = Service(store=MongoStore(service.store.database))
+    assert reloaded.scenario(sid).model_dump(mode="json") == updated
     reloaded.close()
 
 

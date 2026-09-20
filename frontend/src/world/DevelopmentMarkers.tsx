@@ -1,25 +1,19 @@
 import { useEffect, useMemo, useRef, type CSSProperties } from 'react'
-import { DEVELOPMENT_USES, developmentActivity, developmentColor, developmentCounts, developmentLabel, scenarioForView, validDevelopmentGeometry } from '../development'
+import { DEVELOPMENT_USES, developmentColor, developmentCounts, developmentLabel, validDevelopmentGeometry } from '../development'
 import { useStore } from '../store'
 import { mapForSide } from './registry'
 
-export default function DevelopmentMarkers({ runId, side }: { runId: string | null; side: string }) {
-  const scenarios = useStore((s) => s.scenarios)
-  const selectedId = useStore((s) => s.scenarioId)
-  const bundle = useStore((s) => runId ? s.replays[runId]?.bundle ?? null : null)
+/**
+ * Placement-time labels only: the aiming hint and the pin over a placed-but-unconfirmed footprint. Confirmed
+ * developments are ordinary city buildings and carry no marker; clicking one opens the building card instead.
+ */
+export default function DevelopmentMarkers({ side }: { runId: string | null; side: string }) {
   const draft = useStore((s) => s.developmentDraft)
   const placed = useStore((s) => s.developmentPlaced)
   const preview = useStore((s) => s.developmentPreview)
   const error = useStore((s) => s.developmentError)
-  const selection = useStore((s) => s.selection)
-  const t = useStore((s) => s.t)
   const refs = useRef(new Map<string, HTMLButtonElement>())
-  const rows = useMemo(() => {
-    const scenario = scenarioForView(scenarios, selectedId, bundle, side)
-    const saved = (scenario?.developments ?? []).map((d) => ({ id: d.development_id, spec: d.spec, draft: false }))
-    if (side !== 'left' && draft && placed && validDevelopmentGeometry(draft)) saved.push({ id: 'draft', spec: draft, draft: true })
-    return saved
-  }, [scenarios, selectedId, bundle, side, draft, placed])
+  const rows = useMemo(() => side !== 'left' && draft && placed && validDevelopmentGeometry(draft) ? [{ id: 'draft', spec: draft, draft: true }] : [], [side, draft, placed])
 
   useEffect(() => {
     let raf = 0
@@ -38,29 +32,20 @@ export default function DevelopmentMarkers({ runId, side }: { runId: string | nu
     return () => cancelAnimationFrame(raf)
   }, [rows, side])
 
-  const selected = rows.some((row) => row.draft || (selection?.kind === 'development' && selection.id === row.id))
-  return <div className="development-markers" aria-label="Development map events">
+  return <div className="development-markers" aria-label="Development placement">
     {side !== 'left' && draft && !placed && <div className="development-map-hint glass"><i className="development-cursor-dot" aria-hidden="true" /><b>{developmentLabel(draft)} · click to place</b><span>The outline follows your cursor over land beside a street.</span></div>}
     {rows.map((row) => {
       const use = DEVELOPMENT_USES[row.spec.land_use]
-      const active = developmentActivity(row.spec, t)
       const counts = developmentCounts(row.spec)
       return <button key={row.id} ref={(node) => { if (node) refs.current.set(row.id, node); else refs.current.delete(row.id) }}
-        className={`development-pin ${row.draft ? 'draft' : ''} ${active ? 'active' : ''} ${selection?.id === row.id ? 'selected' : ''}`}
-        style={{ '--development-color': row.draft && error ? '#c75d44' : developmentColor(row.spec) } as CSSProperties}
-        aria-label={`${row.draft ? 'Preview' : 'Inspect'} ${row.spec.name}`}
-        onClick={(event) => {
-          event.stopPropagation()
-          if (row.draft) return
-          const store = useStore.getState()
-          store.setTool('development')
-          store.select({ kind: 'development', id: row.id })
-        }}>
+        className="development-pin draft"
+        style={{ '--development-color': error ? '#c75d44' : developmentColor(row.spec) } as CSSProperties}
+        aria-label={`Preview ${row.spec.name}`}
+        onClick={(event) => event.stopPropagation()}>
         <span className="development-pin-glyph" aria-hidden="true">▥</span>
-        <span className="development-pin-copy"><small>{row.draft ? preview ? 'READY TO CONFIRM' : error ? 'CANNOT BUILD HERE' : 'CHECKING ACCESS…' : 'NEW DEVELOPMENT'}</small><b>{row.spec.name}</b><span>{row.spec.capacity.toLocaleString()} {use.unit} · {counts.trips.toLocaleString()} trips</span></span>
-        {!row.draft && active && <i title={`${active} departure wave active`} />}
+        <span className="development-pin-copy"><small>{preview ? 'READY TO CONFIRM' : error ? 'CANNOT BUILD HERE' : 'CHECKING ACCESS…'}</small><b>{row.spec.name}</b><span>{row.spec.capacity.toLocaleString()} {use.unit} · {counts.trips.toLocaleString()} trips</span></span>
       </button>
     })}
-    {selected && <div className="development-map-key">Colored footprint = scenario development · arrows = declared travel directions, not routes</div>}
+    {rows.length > 0 && <div className="development-map-key">Outlined footprint = proposed building · arrows = declared travel directions, not routes</div>}
   </div>
 }
