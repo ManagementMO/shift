@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 import sumolib
 
@@ -99,6 +102,56 @@ def test_real_sumo_closed_loop_preserves_society_after_first_trip(tmp_path, monk
     assert manifest["control_mode"] == "rules"
     for name, digest in manifest["artifacts"].items():
         assert hashlib.sha256((Path(result.run_dir) / name).read_bytes()).hexdigest() == digest
+
+
+@pytest.mark.parametrize("failure", ["stopped_runtime", "transport_timeout", "invalid_boundary"])
+def test_native_boundary_failure_stops_instead_of_finishing_with_repeated_fallbacks(tmp_path, monkeypatch, failure):
+    from cityshift.agents.population_client import SwarmUnavailable
+    from cityshift.domain import population_runs
+
+    pack, population = network_population(tmp_path, horizon=60)
+    brain = BrainAssignment(model_family="local-test", model_id="local-boundary-double", api_provider="local-test",
+                            config_ref="native-failure-test", control_mode="jiuwenswarm")
+    population.spec.brains = [brain]
+    population.assignments = dict.fromkeys(population.assignments, brain)
+    rid = population_run_id(population, failure)
+    run = SimulationRun(run_id=rid, scenario_id=population.population_id, population_id=population.population_id,
+                        run_kind="population", plan_id="service-ledger-v1", seed=population.spec.seed)
+    usage = {"run_totals": {"calls": 0, "reported_tokens": 0, "reported_cost_microdollars": 0,
+                           "accounted_microdollars": 0, "uncertain_requests": 0}}
+    gateway = SimpleNamespace(preflight=AsyncMock(return_value={}),
+                              register_run=lambda *a, **k: SimpleNamespace(token="local-test-gateway-token"),
+                              unregister_run=lambda _: None, usage=lambda _: usage)
+    errors = {"stopped_runtime": SwarmUnavailable("native runtime failed"),
+              "transport_timeout": httpx.ReadTimeout("local boundary timeout"),
+              "invalid_boundary": ValueError("wrong native boundary")}
+
+    class UnavailableNativeRuntime:
+        def __init__(self, *args):
+            self.health = {"native_available": True, "evidence": "local boundary double"}
+
+        def start(self, resume=None):
+            pass
+
+        def decide(self, packets):
+            raise errors[failure]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(population_runs, "get_population_gateway", lambda: gateway)
+    monkeypatch.setattr(population_runs, "NativePopulationClient", UnavailableNativeRuntime)
+    bridges, records = {}, []
+    result = execute_population_run(run, pack, population, lambda value: records.append(value.model_copy(deep=True)),
+                                    lambda key, value: bridges.__setitem__(key, value), lambda key: bridges.pop(key),
+                                    "local-test-control", run_root=tmp_path / "runs")
+    assert result.status == RunStatus.failed
+    artifact = PopulationArtifact.model_validate_json((Path(result.run_dir) / "population.json").read_text())
+    assert artifact.metrics.end_time_s == 0
+    assert not artifact.decisions
+    assert not artifact.swarm_bindings
+    assert not bridges
+    assert records[-1].status == RunStatus.failed
 
 
 @pytest.mark.parametrize("failure", ["constructor", "artifact", "network"])

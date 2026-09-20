@@ -90,3 +90,34 @@ def test_actual_main_client_transmits_exact_declared_budget_to_local_admission_d
         client.close()
     assert not client.active and client._process is None and client._http is None
     assert processes and all(process.poll() == 0 for process in processes)
+
+
+@pytest.mark.parametrize("status", ["failed", "stopped", None, "unrecognized"])
+def test_client_rejects_dead_or_unverified_native_runtime_even_when_http_succeeds(monkeypatch, status):
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "backend"))
+    from cityshift.agents.population_client import NativePopulationClient, SwarmUnavailable
+
+    def stopped_runtime(request):
+        if request.url.path.endswith("/stop"):
+            return httpx.Response(200, json={"status": "stopped"})
+        payload = {
+            "run_id": "wire-test", "epoch": 1,
+            "decisions": [{"resident_id": "resident-a", "decision": None,
+                           "binding": {}, "fallback_reason": "decision_timeout", "usage": {}}],
+        }
+        if status is not None:
+            payload["runtime_status"] = status
+        return httpx.Response(200, json=payload)
+
+    population = SimpleNamespace(spec=SimpleNamespace(budget=SimpleNamespace(decision_timeout_s=1)))
+    client = NativePopulationClient("wire-test", population, "test-controller-" + "a" * 32,
+                                    "test-gateway-" + "b" * 32, "http://127.0.0.1:9876/v1",
+                                    "http://127.0.0.1:9877")
+    client._http = httpx.Client(base_url="http://127.0.0.1:9878", transport=httpx.MockTransport(stopped_runtime))
+    client.active = True
+    try:
+        with pytest.raises(SwarmUnavailable, match="runtime"):
+            client.decide([{"resident_id": "resident-a", "epoch": 1, "t": 30, "world_version": 1}])
+    finally:
+        client.close()

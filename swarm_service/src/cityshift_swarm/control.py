@@ -412,6 +412,7 @@ class RunControl:
         response = DecisionResponse(
             run_id=self.request.run_id,
             epoch=request.epoch,
+            runtime_status="running" if self.status == "running" else "failed" if self.failure else "stopped",
             decisions=rows,
             native_tokens_spent=int(self.native_budget.spent) if self.native_budget is not None else 0,
             generation=self.generation,

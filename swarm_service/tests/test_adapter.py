@@ -240,6 +240,7 @@ async def test_epoch_fences_and_failure_cardinality(settings):
         assert response.decisions[0].decision is None
         assert response.decisions[0].fallback_reason == "test_native_failure"
         assert response.decisions[0].binding.worker_id is None
+        assert response.model_dump().get("runtime_status") == "failed"
         assert control.accept_epoch(packet) == response
         changed = packet.model_copy(deep=True)
         changed.observations[0]["memories"] = ["forged replay"]

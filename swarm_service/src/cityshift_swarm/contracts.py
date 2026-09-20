@@ -194,6 +194,7 @@ class DecisionRow(Contract):
 class DecisionResponse(Contract):
     run_id: str
     epoch: int
+    runtime_status: Literal["running", "failed", "stopped"]
     decisions: list[DecisionRow]
     native_tokens_spent: int = 0
     generation: int = 0

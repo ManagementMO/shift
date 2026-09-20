@@ -130,6 +130,8 @@ class NativePopulationClient:
         if response.status_code != 200:
             raise SwarmUnavailable(f"native decision boundary failed (HTTP {response.status_code})")
         data = response.json()
+        if data.get("runtime_status") != "running":
+            raise SwarmUnavailable("native runtime stopped or did not attest a running decision boundary")
         due = {packet["resident_id"] for packet in packets}
         rows = data.get("decisions", [])
         if (data.get("run_id") != self.run_id or data.get("epoch") != first["epoch"]

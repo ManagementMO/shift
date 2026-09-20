@@ -172,11 +172,8 @@ def execute_population_run(run: SimulationRun, pack: CityPack, population: Popul
                         bridge.begin_epoch(world.epoch, packets)
                         try:
                             results, bindings, failures, usage = client.decide(packets)
-                        except (httpx.HTTPError, SwarmUnavailable, ValueError):
-                            results = {packet["resident_id"]: None for packet in packets}
-                            bindings, usage = {}, {}
-                            failures = {rid: "native decision unavailable; no fresh inference claimed" for rid in results}
-                        staged = bridge.end_epoch(world.epoch)
+                        finally:
+                            staged = bridge.end_epoch(world.epoch)
                         rejections = {}
                         for rid, choice in results.items():
                             if choice is None:
