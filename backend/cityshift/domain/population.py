@@ -137,32 +137,44 @@ def district_anchors(pack: CityPack, spec: PopulationSpec) -> list[ActivityAncho
     net = sumolib.net.readNet(pack.net_file)
     if not net.hasGeoProj():
         raise ValueError("city district requires a georeferenced network; use explicit anchors for synthetic fixtures")
-    cx, cy = net.convertLonLat2XY(*pack.center)
-    candidates: list[tuple[float, str, Any]] = []
+    # Use the declared landmark district, not the broader city camera's centre.
+    # Frozen definitions retain their original anchors; this only affects new populations.
+    landmarks = [z for z in pack.zones if z.zone_id in {"Z_ROGERS", "Z_CN_TOWER"}]
+    center = (sum(z.lon for z in landmarks) / len(landmarks), sum(z.lat for z in landmarks) / len(landmarks)) \
+        if pack.pack_id == "toronto" and len(landmarks) == 2 else pack.center
+    cx, cy = net.convertLonLat2XY(*center)
+    candidates: list[tuple[float, str, Any, float, float]] = []
     for edge in net.getEdges():
         if edge.isSpecial() or edge.getLength() < 30 or not all(edge.allows(c) for c in spec.enabled_classes):
             continue
-        x, y = sumolib.geomhelper.positionAtShapeOffset(edge.getShape(), edge.getLength() / 2)
+        lane = next(lane for lane in edge.getLanes() if lane.allows("pedestrian"))
+        x, y = sumolib.geomhelper.positionAtShapeOffset(lane.getShape(), round(lane.getLength() / 2, 2))
         distance = math.hypot(x - cx, y - cy)
-        if distance <= spec.district_radius_m:
-            candidates.append((distance, edge.getID(), edge))
+        if max(abs(x - cx), abs(y - cy)) <= spec.district_radius_m:
+            candidates.append((distance, edge.getID(), edge, x, y))
     candidates.sort(key=lambda row: (row[0], row[1]))
-    driving = [c for c in spec.enabled_classes if c != "pedestrian"]
-    chosen: list[Any] = []
-    for _, _, edge in candidates:
-        if all(net.getShortestPath(other, edge, vClass=c)[0] is not None
-               and net.getShortestPath(edge, other, vClass=c)[0] is not None
-               for other in chosen for c in driving):
-            chosen.append(edge)
-        if len(chosen) == 8:
-            break
+    chosen: list[tuple[float, str, Any, float, float]] = []
+    while candidates and len(chosen) < 8:
+        if chosen:
+            # Spread declared homes/services across accessible streets. Nearby opposite
+            # lanes should not consume every anchor merely because they share a centre.
+            candidates.sort(key=lambda row: (
+                -min(math.hypot(row[3] - other[3], row[4] - other[4]) for other in chosen), row[1],
+            ))
+        candidate = candidates.pop(0)
+        edge = candidate[2]
+        if all(net.getShortestPath(other[2], edge, vClass=c, ignoreDirection=c == "pedestrian")[0] is not None
+               and net.getShortestPath(edge, other[2], vClass=c, ignoreDirection=c == "pedestrian")[0] is not None
+               for other in chosen for c in spec.enabled_classes):
+            chosen.append(candidate)
     if len(chosen) < 8:
         raise ValueError("no connected eight-anchor district supports all enabled travel classes")
     purposes: tuple[Literal["home", "shop", "service", "work", "rest"], ...] = (
         "shop", "service", "home", "home", "home", "home", "work", "rest",
     )
     anchors = []
-    for i, (edge, purpose) in enumerate(zip(chosen, purposes, strict=True)):
+    for i, (candidate, purpose) in enumerate(zip(chosen, purposes, strict=True)):
+        edge = candidate[2]
         access = {}
         for travel_class in spec.enabled_classes:
             lane = next(lane for lane in edge.getLanes() if lane.allows(travel_class))

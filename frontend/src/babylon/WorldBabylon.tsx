@@ -8,6 +8,8 @@ import { live, liveClosuresAt } from '../live/session'
 import { useStore, type Selection } from '../store'
 import { useGodVisuals } from '../gods-plan/state'
 import { applyNow } from '../live/session'
+import { sendPopulationStimulus } from '../populationStimuli'
+import { populationHazards } from '../populationHazards'
 import { weatherTrackFor, WEATHER_VISUALS, type HazardTrack as WeatherTrack } from '../weather'
 import type { Restriction } from '../types'
 import { corridorPose, currentPose, districtPose } from '../world/camera'
@@ -22,6 +24,7 @@ import { guideTrack, HazardEffects } from './hazardEffects'
 import { BabylonSyncMap } from './mapAdapter'
 import { CORRIDOR_PICK_PX, NavLabels, NavOverlay, type NavMode, type NavTarget } from './navigation'
 import { Overlay } from './overlay'
+import { PopulationDistrict } from './populationDistrict'
 import { RoadIndex } from './roadIndex'
 import type { WorldScene } from './scene'
 import type { Kind } from './traffic'
@@ -109,6 +112,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
       const map = new BabylonSyncMap(ws)
       const overlay = new Overlay(ws.scene, ws.roads, ws.frame)
       const developments = new DevelopmentOverlay(ws.scene, ws.frame, ws.city)
+      const populationDistrict = new PopulationDistrict(ws.scene, ws.frame, ws.world.network_fingerprint)
       const buildings = ws.buildings
       const nav = new NavOverlay(ws.scene, ws.world, ws.roads, buildings)
       const streets = new RoadIndex(ws.world, (r) => r.allow.includes('car') || r.allow.includes('bus'))
@@ -246,7 +250,9 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
           const [lon, lat] = ws.frame.worldToLonLat(g[0], g[1])
           useGodVisuals.getState().setWeather(null)
           canvas.style.cursor = ''
-          void applyNow({ kind: 'incident', hazard: aim.hazard, lon, lat, radius_m: Math.round(aim.radius_m), duration_s: Math.round(aim.duration_s), label: aim.label || null })
+          if (useStore.getState().populationActive) {
+            void sendPopulationStimulus({ kind: 'incident', hazard: aim.hazard, lon, lat, radius_m: Math.round(aim.radius_m), duration_s: Math.round(aim.duration_s), text: aim.label || `A ${aim.hazard} event has been reported in this area.` }).then(ok => { if (ok) useStore.getState().setTool('residents') })
+          } else void applyNow({ kind: 'incident', hazard: aim.hazard, lon, lat, radius_m: Math.round(aim.radius_m), duration_s: Math.round(aim.duration_s), label: aim.label || null })
           return
         }
         const p = local(e)
@@ -332,6 +338,9 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         const s = useStore.getState()
         const channel = s.populationActive ? null : live.getSnapshot().primary
         const replay = s.populationActive && s.primaryRunId ? s.replays[s.primaryRunId] ?? null : null
+        populationDistrict.setDefinition(s.populationActive
+          ? s.primaryRunId ? replay?.population?.definition ?? null : s.populationDefinition
+          : null)
         if (attached !== channel || residentReplay !== replay || populationActive !== s.populationActive) {
           attached = channel
           residentReplay = replay
@@ -401,6 +410,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         unregister()
         nav.dispose()
         developments.dispose()
+        populationDistrict.dispose()
         ws.scene.onBeforeRenderObservable.remove(animator)
         weather.dispose()
         overlay.dispose()
@@ -429,7 +439,9 @@ function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverla
   if (s.populationActive) {
     overlay.set({ closed: [], ghost: [], focus: [], ghostStops: [] })
     developments.set({ developments: [], draft: null, placed: false, ghostPosition: null, invalidDraft: false, focusedId: null, zones: [], t })
-    ws.storm.setHazards([])
+    const artifact = s.primaryRunId ? s.replays[s.primaryRunId]?.population?.artifact : null
+    ws.storm.setHazards(populationHazards(artifact, ws.frame, t).tornadoes)
+    weather.set(weatherTracks(ws, t), t, useGodVisuals.getState().weather ? 'weather-guide' : null)
     return
   }
   const view = live.getSnapshot()
@@ -452,8 +464,10 @@ function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverla
 
 /** Weather / fire visuals for the live incidents in their windows, plus the muted guide cloud where one is being aimed. */
 function weatherTracks(ws: WorldScene, t: number): WeatherTrack[] {
-  const tracks: WeatherTrack[] = []
-  for (const incident of live.session?.incidents ?? []) {
+  const s = useStore.getState()
+  const artifact = s.primaryRunId ? s.replays[s.primaryRunId]?.population?.artifact : null
+  const tracks: WeatherTrack[] = s.populationActive ? populationHazards(artifact, ws.frame, t).weather : []
+  for (const incident of s.populationActive ? [] : live.session?.incidents ?? []) {
     if (!(incident.hazard in WEATHER_VISUALS) || t < incident.start_s || t >= incident.end_s) continue
     const track = weatherTrackFor(incident, ws.frame)
     if (track) tracks.push(track)
