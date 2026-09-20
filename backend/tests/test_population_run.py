@@ -110,14 +110,15 @@ def test_native_boundary_failure_stops_instead_of_finishing_with_repeated_fallba
     from cityshift.domain import population_runs
 
     pack, population = network_population(tmp_path, horizon=60)
-    brain = BrainAssignment(model_family="local-test", model_id="local-boundary-double", api_provider="local-test",
+    brain = BrainAssignment(model_family="claude", model_id="anthropic/claude-haiku-4.5", api_provider="openrouter",
                             config_ref="native-failure-test", control_mode="jiuwenswarm")
     population.spec.brains = [brain]
     population.assignments = dict.fromkeys(population.assignments, brain)
     rid = population_run_id(population, failure)
     run = SimulationRun(run_id=rid, scenario_id=population.population_id, population_id=population.population_id,
                         run_kind="population", plan_id="service-ledger-v1", seed=population.spec.seed)
-    usage = {"run_totals": {"calls": 0, "reported_tokens": 0, "reported_cost_microdollars": 0,
+    usage = {"remaining_microdollars": 20_000_000, "blocked": False,
+             "run_totals": {"calls": 0, "reported_tokens": 0, "reported_cost_microdollars": 0,
                            "accounted_microdollars": 0, "uncertain_requests": 0}}
     gateway = SimpleNamespace(preflight=AsyncMock(return_value={}),
                               register_run=lambda *a, **k: SimpleNamespace(token="local-test-gateway-token"),

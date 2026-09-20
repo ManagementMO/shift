@@ -8,7 +8,7 @@ from pydantic import Field
 from cityshift.agents.population_bridge import BridgeError
 from cityshift.agents.population_client import SwarmUnavailable
 from cityshift.api.population_service import PopulationService, get_population_service
-from cityshift.contracts import PopulationContract, PopulationSpec
+from cityshift.contracts import PopulationContract, PopulationSpec, PopulationStimulus
 
 router = APIRouter(prefix="/api/population", tags=["population"])
 ServiceDependency = Annotated[PopulationService, Depends(get_population_service)]
@@ -18,6 +18,7 @@ PopulationId = Annotated[str, Path(min_length=1, max_length=160, pattern=r"^[a-z
 class PopulationRunRequest(PopulationContract):
     population_id: str = Field(min_length=1, max_length=160, pattern=r"^[a-zA-Z0-9_-]+$")
     idempotency_key: str = Field(min_length=1, max_length=160, pattern=r"^[a-zA-Z0-9_.:-]+$")
+    stimuli: list[PopulationStimulus] = Field(default_factory=list, max_length=128)
 
 
 class BindWorkerRequest(PopulationContract):
@@ -65,10 +66,44 @@ def get_population(population_id: PopulationId, service: ServiceDependency) -> d
 @router.post("/runs", status_code=202)
 def start_population(payload: PopulationRunRequest, service: ServiceDependency) -> dict:
     try:
-        return service.submit(payload.population_id, payload.idempotency_key).model_dump(mode="json")
+        return service.submit(payload.population_id, payload.idempotency_key, payload.stimuli).model_dump(mode="json")
     except KeyError:
         raise HTTPException(status_code=404, detail="population or pack not found") from None
     except SwarmUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+@router.post("/runs/{run_id}/stimuli", status_code=202)
+def queue_stimulus(run_id: PopulationId, payload: PopulationStimulus, service: ServiceDependency) -> dict:
+    try:
+        return service.queue_stimulus(run_id, payload)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="population run not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+@router.get("/runs/{run_id}/stimuli")
+def list_stimuli(run_id: PopulationId, service: ServiceDependency) -> dict:
+    try:
+        return service.stimuli(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="population run not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+@router.get("/runs/{run_id}/snapshot")
+def population_snapshot(run_id: PopulationId, service: ServiceDependency) -> dict:
+    try:
+        return service.snapshot(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="population run not found") from None
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="resident snapshot is not yet published") from None
+    except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
 
 

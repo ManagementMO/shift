@@ -11,6 +11,7 @@ from cityshift.contracts import (
     PopulationDecisionRecord,
     PopulationDefinition,
     PopulationEvent,
+    PopulationStimulusRecord,
     ResidentSnapshot,
     ResidentState,
     SocialMessage,
@@ -52,6 +53,7 @@ class SavedSociety(PopulationContract):
     seen_intents: list[tuple[str, str]]
     completed_trips: int = Field(ge=0)
     failed_trips: int = Field(ge=0)
+    stimuli: list[PopulationStimulusRecord] = Field(default_factory=list)
 
     def validate_consistency(self, definition: PopulationDefinition) -> None:
         ids, task_ids = set(self.states), set(self.tasks)
@@ -59,6 +61,14 @@ class SavedSociety(PopulationContract):
         anchors = {anchor.anchor_id: anchor for anchor in definition.anchors}
         terminal = {"completed", "declined", "failed", "expired"}
         events = {event.event_id: event for event in self.events}
+        if (len({row.stimulus.stimulus_id for row in self.stimuli}) != len(self.stimuli)
+                or any(row.applied_s > self.t or set(row.resident_ids) - ids for row in self.stimuli)):
+            raise ValueError("checkpoint contains invalid operator observation receipts")
+        for row in self.stimuli:
+            if not any(event.kind == "external_observation" and event.t == row.applied_s
+                       and event.cause_id == f"stimulus:{row.stimulus.stimulus_id}"
+                       and event.resident_ids == row.resident_ids for event in self.events):
+                raise ValueError("checkpoint observation receipt lacks its scoped event")
         records = {record.decision_id: record for record in self.decisions}
         if len(events) != len(self.events) or len(records) != len(self.decisions):
             raise ValueError("checkpoint contains duplicate event or decision identities")

@@ -600,6 +600,39 @@ class SocietyTask(PopulationContract):
     cause_id: str | None = None
 
 
+class PopulationStimulus(PopulationContract):
+    """Operator observation input, never an instruction choosing a resident's action."""
+
+    stimulus_id: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+    kind: Literal["incident", "temperature", "announcement"]
+    text: str = Field(min_length=1, max_length=400)
+    lon: float | None = Field(default=None, ge=-180, le=180)
+    lat: float | None = Field(default=None, ge=-90, le=90)
+    radius_m: float | None = Field(default=None, ge=20, le=2000)
+    duration_s: int = Field(default=600, ge=30, le=14400)
+    hazard: Literal["crash", "fire", "flood", "tornado", "gas_leak", "rain", "storm"] | None = None
+    temperature_c: float | None = Field(default=None, ge=-40, le=50)
+
+    @model_validator(mode="after")
+    def valid_observation(self) -> Self:
+        geometry = (self.lon, self.lat, self.radius_m)
+        if any(v is not None for v in geometry) and any(v is None for v in geometry):
+            raise ValueError("scoped observations require longitude, latitude, and radius")
+        if self.kind == "incident" and (self.hazard is None or self.lon is None):
+            raise ValueError("incident observations require hazard and geometry")
+        if (self.kind == "temperature") != (self.temperature_c is not None):
+            raise ValueError("temperature observations require temperature_c only")
+        if self.kind != "incident" and self.hazard is not None:
+            raise ValueError("hazard belongs only to incident observations")
+        return self
+
+
+class PopulationStimulusRecord(PopulationContract):
+    stimulus: PopulationStimulus
+    applied_s: int = Field(ge=0)
+    resident_ids: list[str]
+
+
 class PopulationSpec(PopulationContract):
     generator_version: Literal["society-v1"] = "society-v1"
     rules_version: Literal["service-ledger-v1"] = "service-ledger-v1"
@@ -770,3 +803,4 @@ class PopulationArtifact(PopulationContract):
     mobility_bindings: list[MobilityBinding]
     swarm_bindings: list[SwarmBinding]
     metrics: PopulationMetrics
+    stimuli: list[PopulationStimulusRecord] = Field(default_factory=list)

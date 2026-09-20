@@ -25,6 +25,7 @@ from cityshift.contracts import (
     content_hash,
     utcnow,
 )
+from cityshift.domain.population_admission import boundary_budget_reason
 from cityshift.domain.population_checkpoints import (
     atomic_json,
     consume_checkpoint,
@@ -32,6 +33,7 @@ from cityshift.domain.population_checkpoints import (
     load_checkpoint,
     save_checkpoint,
 )
+from cityshift.domain.population_stimuli import read_stimuli
 from cityshift.domain.runs import RUN_ROOT
 from cityshift.domain.society import SocietyWorld
 from cityshift.providers import API_PORT, POPULATION_GATEWAY_BASE
@@ -87,6 +89,14 @@ def _save(world: SocietyWorld, mobility: PopulationMobility, run: SimulationRun,
         artifact.metrics.artifact_bytes = len(encoded.encode()) + sum((out_dir / name).stat().st_size for name in data)
     atomic_json(out_dir / "population.json", artifact.model_dump(mode="json"))
     atomic_json(out_dir / "metrics.json", artifact.metrics.model_dump(mode="json"))
+    run.progress = world.t / world.definition.spec.horizon_s
+    run.warnings = list(artifact.metrics.warnings)
+    # The viewer reads one atomically replaced file, never a mixture of epochs.
+    atomic_json(out_dir / "snapshot.json", {
+        "run": run.model_dump(mode="json"), "tracks": data["tracks.json"], "events": data["events.json"],
+        "occupancy": {}, "stopQueue": {}, "compile": data["compile.json"],
+        "population": artifact.model_dump(mode="json"),
+    })
     return artifact
 
 
@@ -131,6 +141,10 @@ def execute_population_run(run: SimulationRun, pack: CityPack, population: Popul
                 world = SocietyWorld(run.run_id, population, mobility)
             native = population.spec.brains[0].control_mode == "jiuwenswarm"
             if native:
+                # Publish truthful bodies before slow worker startup. No model
+                # execution or initial decision is implied by this snapshot.
+                _save(world, mobility, run, attempt, out_dir, started)
+                persist(run)
                 gateway = get_population_gateway()
                 asyncio.run(gateway.preflight())
                 budget = population.spec.budget
@@ -164,7 +178,21 @@ def execute_population_run(run: SimulationRun, pack: CityPack, population: Popul
                     run.checkpoint_available = True
                     run.status = RunStatus.paused
                     break
-                packets = world.begin_epoch()
+                inputs_changed = world.apply_stimuli(read_stimuli(run_root, run.run_id))
+                due = sorted(world.due_residents(), key=lambda rid: (world.states[rid].next_decision_s, rid))
+                if native and gateway is not None and due:
+                    reason = boundary_budget_reason(population, due, gateway.usage(run.run_id))
+                    if reason:
+                        saved = save_checkpoint(out_dir, attempt, world, mobility, client, time.monotonic() - started,
+                                                prior_audit + bridge.audit())
+                        run.checkpoint_id = saved["checkpoint_id"]
+                        run.checkpoint_available = True
+                        run.status = RunStatus.paused
+                        run.error = reason
+                        break
+                # A native epoch has one shared deadline. Do not enqueue additional
+                # waves behind the SDK's worker limit under that same deadline.
+                packets = world.begin_epoch(due[:population.spec.budget.max_concurrency] if native else None)
                 if packets:
                     if native:
                         if client is None:
@@ -196,9 +224,12 @@ def execute_population_run(run: SimulationRun, pack: CityPack, population: Popul
                             packet["resident_id"]: baseline_decision(packet) for packet in packets
                         }
                         world.commit_decisions(choices, source="rules")
-                if world.t - last_published_t >= ARTIFACT_INTERVAL_S:
+                periodic = world.t - last_published_t >= ARTIFACT_INTERVAL_S
+                if inputs_changed or (native and packets) or periodic:
                     _save(world, mobility, run, attempt, out_dir, started, gateway.usage(run.run_id) if gateway else None)
-                    last_published_t = world.t
+                    if periodic:
+                        last_published_t = world.t
+                    persist(run)
                 outcomes = mobility.step()
                 world.advance(mobility.t, outcomes)
                 if world.t % 30 == 0:
