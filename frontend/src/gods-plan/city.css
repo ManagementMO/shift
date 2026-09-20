@@ -54,7 +54,7 @@
 .gp-shell .gp-legacy-panel button,.gp-shell .gp-legacy-inline button { border-radius: 12px; padding: 9px 13px; color: #f1f8ff; background: #d6edff1a; border: 1px solid #ddecff26; }
 .gp-shell .gp-legacy-panel button.primary,.gp-shell .gp-legacy-inline button.primary { color: #183b5b; background: #e5f4fff0; }
 .gp-shell .gp-legacy-panel .pill,.gp-shell .gp-legacy-inline .pill { border-radius: 20px; color: #dbeffc; border: 1px solid #d6eeff38; }
-.gp-shell .gp-legacy-inline .toolpanel { position: relative; inset: auto; width: 100%; max-height: none; border: 0; background: none; box-shadow: none; backdrop-filter: none; padding: 0; }
+.gp-shell .gp-legacy-inline .toolpanel { position: relative; inset: auto; transform: none; width: 100%; max-height: none; border: 0; background: none; box-shadow: none; backdrop-filter: none; padding: 0; }
 .gp-shell .gp-legacy-inline .toolpanel-head { display: none; }
 .gp-shell .gp-legacy-inline .tool { display: grid; gap: 13px; padding: 5px 0; }
 .gp-shell .gp-legacy-inline label { color: #c9dfef; }

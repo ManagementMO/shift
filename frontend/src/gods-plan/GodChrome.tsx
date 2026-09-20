@@ -24,7 +24,7 @@ const tools: { value: GodTool; icon: string; label: string }[] = [
   { value: 'layers', icon: 'layers', label: 'Map layers' },
 ]
 
-export default function GodChrome({ activeTab, openTab = null, activeTool, timeLabel, weatherLabel, temperatureLabel, weatherNote, statusLabel, playing, speed, speeds = [], counters = [], ready = true, command, commandBusy = false, onTab, onTool, onHome, onCommandChange, onCommand, onTogglePlay, onSpeed }: GodHUDProps) {
+export default function GodChrome({ activeTab, openTab = null, activeTool, timeLabel, weatherLabel, temperatureLabel, weatherNote, statusLabel, playing, speed, speeds = [], ready = true, command, commandBusy = false, onTab, onTool, onHome, onCommandChange, onCommand, onTogglePlay, onSpeed }: GodHUDProps) {
   const selectedTab = openTab ?? activeTab
 
   function submitCommand(event: FormEvent<HTMLFormElement>) {
@@ -78,9 +78,6 @@ export default function GodChrome({ activeTab, openTab = null, activeTool, timeL
           {speeds.map((value) => <GlassButton key={value} variant="ghost" className="god-chrome__speed" aria-pressed={speed === value} disabled={!ready} onClick={() => onSpeed?.(value)}>{value}×</GlassButton>)}
         </div>}
         {statusLabel && <span className="god-chrome__status">{statusLabel}</span>}
-        {counters.length > 0 && <dl className="god-chrome__counters">
-          {counters.map((counter) => <div key={counter.label}><dd>{counter.value ?? '—'}</dd><dt>{counter.label}</dt></div>)}
-        </dl>}
       </GlassSurface>
 
       <div className="god-chrome__command-zone">

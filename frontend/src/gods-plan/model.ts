@@ -75,8 +75,6 @@ export interface GodHUDProps {
   /** Playback speed multiplier and the choices offered in the dock. */
   speed?: number
   speeds?: readonly number[]
-  /** Live cohort counters shown in the dock (label → value); null values render as a dash. */
-  counters?: readonly { label: string; value: number | null }[]
   /** False while SUMO is starting or busy: the dock's controls are disabled. */
   ready?: boolean
   is2D: boolean
