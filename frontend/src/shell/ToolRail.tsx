@@ -6,7 +6,7 @@ const TOOLS: { id: ToolId; label: string; path: string }[] = [
   { id: 'stop', label: 'Bus stop', path: 'M6 4h12v12H6z M9 8h6 M12 16v6 M8 22h8' },
   { id: 'population', label: 'Population', path: 'M8 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M2 20v-3a6 6 0 0 1 12 0v3 M16 5a3 3 0 0 1 0 6 M17 14a5 5 0 0 1 5 5v1' },
   { id: 'event', label: 'Event', path: 'M5 5h14v16H5z M8 2v6 M16 2v6 M5 11h14 M9 15h6' },
-  { id: 'weather', label: 'Hazard', path: 'M12 3L2 21h20L12 3z M12 9v5 M12 17v1' },
+  { id: 'weather', label: 'Tornado', path: 'M3 5h18 M5 9h13 M8 13h9 M10 17h5 M12 21h2' },
   { id: 'road', label: 'Road', path: 'M7 2L4 22 M17 2l3 20 M12 3v4 M12 10v4 M12 17v4' },
   { id: 'intersection', label: 'Intersection', path: 'M8 2v6H2 M16 2v6h6 M2 16h6v6 M22 16h-6v6' },
 ]

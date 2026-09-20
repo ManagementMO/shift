@@ -37,6 +37,7 @@ import { applyWorldAtmosphere } from './atmosphere'
 import type { WorldData } from './worldData'
 import { buildStreetDetails } from './streetDetails'
 import { loadLandmarkModels } from './landmarkModels'
+import { StormSystem } from './tornado'
 
 export interface WorldSceneOptions {
   shadows?: boolean
@@ -62,6 +63,7 @@ export class WorldScene {
   /** Every drawn building as pickable prisms, for pointer picking and info. */
   readonly buildings: BuildingIndex
   readonly traffic: Traffic
+  readonly storm: StormSystem
   readonly fill: HemisphericLight
   readonly assetsReady: Promise<void>
   private readonly post: DefaultRenderingPipeline
@@ -215,9 +217,11 @@ export class WorldScene {
     this.roads = new RoadIndex(world)
     this.buildings = new BuildingIndex(world)
     this.traffic = new Traffic(scene, this.frame, balanced ? null : this.shadows, world.surfaces ? Y.road : Y.path)
+    this.storm = new StormSystem(scene, this.frame, world, this.city, balanced ? null : this.shadows)
     scene.onBeforeRenderObservable.add(() => {
       const p = this.camera.cam.globalPosition
       this.traffic.update(this.simT, { x: p.x, y: p.y, z: p.z, radius: this.camera.cam.radius })
+      this.storm.update(this.simT)
     })
 
     scene.autoClear = true
@@ -268,6 +272,7 @@ export class WorldScene {
     window.removeEventListener('resize', this.resize)
     this.engine.stopRenderLoop()
     this.camera.cancel()
+    this.storm.dispose()
     this.traffic.dispose()
     this.terrain.dispose()
     this.city.dispose()
