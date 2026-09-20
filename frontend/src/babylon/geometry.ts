@@ -9,6 +9,15 @@ import earcut from 'earcut'
 import type { Flat } from './worldData'
 
 export type RGB = [number, number, number]
+export type SegmentFilter = (ax: number, az: number, bx: number, bz: number) => boolean
+
+/** True when both ends of a segment lie on the same side of an axis-aligned box, within `tolerance` metres. */
+export function onBoxEdge(box: readonly number[], tolerance = 0.6): SegmentFilter {
+  const [x0, z0, x1, z1] = box
+  return (ax, az, bx, bz) =>
+    (Math.abs(ax - x0) < tolerance && Math.abs(bx - x0) < tolerance) || (Math.abs(ax - x1) < tolerance && Math.abs(bx - x1) < tolerance)
+    || (Math.abs(az - z0) < tolerance && Math.abs(bz - z0) < tolerance) || (Math.abs(az - z1) < tolerance && Math.abs(bz - z1) < tolerance)
+}
 
 export class Batch {
   positions: number[] = []
@@ -47,15 +56,15 @@ export class Batch {
     for (let i = 0; i < tris.length; i += 3) this.indices.push(base + tris[i], base + tris[i + 1], base + tris[i + 2])
   }
 
-  /** Vertical walls around a ring (and its holes) from y0 to y1, flat-shaded, outward normals. */
-  walls(ring: Flat, holes: Flat[] | undefined, y0: number, y1: number, c: RGB, shade = 0.85, inward = false): void {
+  /** Vertical walls around a ring (and its holes) from y0 to y1, flat-shaded, outward normals. `skip` drops individual edges. */
+  walls(ring: Flat, holes: Flat[] | undefined, y0: number, y1: number, c: RGB, shade = 0.85, inward = false, skip?: SegmentFilter): void {
     const side = inward ? -1 : 1
     const outward = (signedArea(ring) > 0 ? 1 : -1) * side
-    this.wallRing(ring, y0, y1, c, shade, outward)
-    if (holes) for (const h of holes) this.wallRing(h, y0, y1, c, shade, -(signedArea(h) > 0 ? 1 : -1) * side)
+    this.wallRing(ring, y0, y1, c, shade, outward, skip)
+    if (holes) for (const h of holes) this.wallRing(h, y0, y1, c, shade, -(signedArea(h) > 0 ? 1 : -1) * side, skip)
   }
 
-  private wallRing(ring: Flat, y0: number, y1: number, c: RGB, shade: number, outward: number): void {
+  private wallRing(ring: Flat, y0: number, y1: number, c: RGB, shade: number, outward: number, skip?: SegmentFilter): void {
     const n = ring.length / 2
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n
@@ -66,7 +75,7 @@ export class Batch {
       const dx = bx - ax
       const dz = bz - az
       const len = Math.hypot(dx, dz)
-      if (len < 1e-6) continue
+      if (len < 1e-6 || skip?.(ax, az, bx, bz)) continue
       // positive-shoelace ring in (x east, z north): outward normal of edge a->b is (dz, -dx)
       const nx = (dz / len) * outward
       const nz = (-dx / len) * outward

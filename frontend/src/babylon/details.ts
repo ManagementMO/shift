@@ -62,7 +62,7 @@ export function roadDashes(shape: Flat, offset: number): Flat[] {
 export const TREE_CLEARANCE = 6
 
 type TreeWorld = Pick<WorldData, 'green' | 'buildings' | 'roads' | 'water' | 'junctions' | 'surfaces'>
-export interface TreePlacement { x: number; z: number; scale: number; shade: number }
+export interface TreePlacement { x: number; z: number; scale: number; shade: number; y?: number }
 type Obstacle = { box: [number, number, number, number]; contains: (x: number, z: number) => boolean }
 
 export function treePlacements(world: TreeWorld, limit = 6000): TreePlacement[] {

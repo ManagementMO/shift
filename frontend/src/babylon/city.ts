@@ -14,7 +14,7 @@ import type { Material } from '@babylonjs/core/Materials/material'
 import { addArchitecture } from './architecture'
 import { appendMassing } from './massing'
 
-import { Batch, bounds, centroid, hash01, mix, scale, signedArea, type RGB } from './geometry'
+import { Batch, bounds, centroid, hash01, mix, onBoxEdge, scale, signedArea, type RGB } from './geometry'
 import { facadeFor, TEXTURE_RECIPES, type TextureKind } from './appearance'
 import { roadDashes, treePlacements } from './details'
 import { CityMaterials } from './materials'
@@ -40,6 +40,7 @@ export const PALETTE = {
   land: hex('#b7b6a5'),
   water: hex('#327781'),
   green: hex('#78985b'),
+  meadow: hex('#8a9d62'),
   sand: hex('#e3d3a8'),
   rail: hex('#6f685e'),
   asphaltMajor: hex('#55585e'),
@@ -87,6 +88,7 @@ export interface CityMeshes {
   landmarks: Mesh
   stops: Mesh
   shadowCasters: Mesh[]
+  materials: CityMaterials
   dispose(): void
 }
 
@@ -205,9 +207,11 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
   // --- water (one mesh; the lake polygon is huge and culls badly anyway)
   const water = new Batch(TEXTURE_RECIPES.water.metres)
   const shoreline = new Batch(TEXTURE_RECIPES.concrete.metres)
+  // The pack clips the lake at its bounds; no wall there, the far water continues on the other side.
+  const packEdge = onBoxEdge(world.crs.bounds_world)
   for (const poly of world.water) {
     water.polygon(poly.ring, poly.holes, Y.water, PALETTE.water)
-    shoreline.walls(poly.ring, poly.holes, Y.water, world.surfaces ? Y.road : Y.ground, [0.58, 0.56, 0.49], 1, true)
+    shoreline.walls(poly.ring, poly.holes, Y.water, world.surfaces ? Y.road : Y.ground, [0.58, 0.56, 0.49], 1, true, packEdge)
   }
   if (!water.isEmpty()) {
     chunks.push(meshFromBatch('water', water, scene, materials.get('water')))
@@ -217,11 +221,11 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
   // --- surfaces: parks, sand, rail, paths, roads, junctions — chunked 1.2 km
   const surf = new ChunkGrid(1200, makeBatches)
   if (world.surfaces) {
-    const colors = { grass: PALETTE.green, sand: PALETTE.sand, pavement: PALETTE.pavement, asphalt: PALETTE.asphaltMinor, rail: PALETTE.rail }
-    for (const kind of ['grass', 'sand', 'pavement', 'asphalt', 'rail'] as const) {
-      for (const p of world.surfaces[kind]) {
+    const colors = { grass: PALETTE.green, sand: PALETTE.sand, pavement: PALETTE.pavement, asphalt: PALETTE.asphaltMinor, rail: PALETTE.rail, meadow: PALETTE.meadow }
+    for (const kind of ['grass', 'sand', 'pavement', 'asphalt', 'rail', 'meadow'] as const) {
+      for (const p of world.surfaces[kind] ?? []) {
         const [cx, cz] = centroid(p.ring)
-        batchFor(surf.at(cx, cz), kind === 'rail' ? 'roof' : kind).polygon(p.ring, p.holes, Y.road, colors[kind])
+        batchFor(surf.at(cx, cz), kind === 'rail' ? 'roof' : kind === 'meadow' ? 'grass' : kind).polygon(p.ring, p.holes, Y.road, colors[kind])
       }
     }
   }
@@ -315,6 +319,7 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     landmarks,
     stops,
     shadowCasters: casters,
+    materials,
     dispose() {
       ground.dispose()
       for (const c of chunks) c.dispose()

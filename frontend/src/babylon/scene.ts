@@ -26,6 +26,7 @@ import { WorldFrame } from './coords'
 import { renderScale, type DisplaySettings } from './display'
 import { fitShadowLight } from './shadows'
 import { buildCity, Y, type CityMeshes } from './city'
+import { buildTerrain, type Terrain } from './terrain'
 import { WorldCamera } from './camera'
 import { RoadIndex } from './roadIndex'
 import { Traffic } from './traffic'
@@ -49,6 +50,7 @@ export class WorldScene {
   readonly camera: WorldCamera
   readonly sun: DirectionalLight
   readonly city: CityMeshes
+  readonly terrain: Terrain
   readonly shadows: ShadowGenerator | null
   readonly canvas: HTMLCanvasElement
   readonly world: WorldData
@@ -105,6 +107,8 @@ export class WorldScene {
     const streets = buildStreetDetails(scene, world)
     this.city.chunks.push(...streets)
     this.city.shadowCasters.push(...streets.filter(m => m.name.startsWith('street-trees-')))
+    // Placeholder countryside past the pack: grassland hills, the lake carried on, main roads to the horizon.
+    this.terrain = buildTerrain(scene, world, this.city.materials, { cells: balanced ? 96 : 176, treeLimit: balanced ? 500 : 1500 })
 
     // --- camera
     const cam = new ArcRotateCamera('cam', -1.95, 0.98, 1500, new Vector3(380, 0, -520), scene)
@@ -137,7 +141,7 @@ export class WorldScene {
         canvas.removeEventListener('wheel', cancelFlight)
       })
     }
-    applyWorldAtmosphere(scene, world.crs.bounds_world, sky)
+    applyWorldAtmosphere(scene, this.terrain.shape.farBounds, sky)
 
     // --- shadows (sun) use a fixed world-space frustum, independent of camera rotation and zoom.
     if (opts.shadows ?? true) {
@@ -253,6 +257,7 @@ export class WorldScene {
     this.engine.stopRenderLoop()
     this.camera.cancel()
     this.traffic.dispose()
+    this.terrain.dispose()
     this.city.dispose()
     this.scene.dispose()
     this.engine.dispose()
