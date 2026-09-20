@@ -1,0 +1,175 @@
+.god-chrome {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  color: #fff;
+  font: 13px/1.35 var(--gp-font);
+}
+
+.god-chrome :is(button, input, .gp-glass) { pointer-events: auto; font: inherit; }
+.god-chrome button { cursor: pointer; touch-action: manipulation; }
+.god-chrome button:disabled { cursor: default; }
+.god-chrome :is(button, input):focus-visible { outline: 2px solid #d8f0ff; outline-offset: 2px; }
+
+.god-chrome .god-chrome__brand {
+  position: absolute;
+  top: var(--gp-edge);
+  left: var(--gp-edge);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  box-shadow: none;
+  color: #fff;
+  white-space: nowrap;
+}
+.god-chrome .god-chrome__globe { width: 28px; height: 28px; flex-shrink: 0; }
+.god-chrome .god-chrome__wordmark { font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
+.god-chrome .god-chrome__brand-divider { width: 1px; height: 20px; margin: 0 2px; background: #f6fcff66; }
+.god-chrome .god-chrome__city { font-size: 13px; color: #e2eff8; }
+
+.god-chrome .god-chrome__tabs {
+  position: absolute;
+  top: var(--gp-edge);
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  width: min(430px, 40vw);
+  height: 38px;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid #e5f5ff55;
+  border-radius: 20px;
+  background: linear-gradient(120deg, #508cc540, #2d67a231);
+  box-shadow: inset 0 1px 0 #ffffff14;
+  backdrop-filter: blur(16px);
+}
+.god-chrome .god-chrome__tab { min-width: 0; min-height: 0; padding: 4px 8px; border: 0; border-radius: 16px; color: #f5faff; background: transparent; box-shadow: none; font-size: 12px; white-space: nowrap; }
+.god-chrome .god-chrome__tab[data-active='true'] { color: #1d2b44; background: #fbfdff; font-weight: 600; box-shadow: 0 0 0 1px #dff0ff55; }
+.god-chrome .god-chrome__tab[data-open='true']:not([data-active='true']) { color: #223d59; background: #d6ecffcf; }
+
+.god-chrome .god-chrome__weather {
+  position: absolute;
+  top: var(--gp-edge);
+  right: var(--gp-edge);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid #e8f6ff29;
+  border-radius: 13px;
+  background: #40699252;
+  box-shadow: inset 0 1px 0 #f6fcff12;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.god-chrome .god-chrome__time { font-weight: 600; padding-right: 8px; border-right: 1px solid #e8f6ff40; }
+.god-chrome .god-chrome__sun { width: 19px; height: 19px; color: #ffda77; }
+.god-chrome .god-chrome__weather-label { color: #e3eff8; }
+
+.god-chrome .god-chrome__tools {
+  position: absolute;
+  top: var(--gp-panel-top);
+  left: var(--gp-edge);
+  display: grid;
+  gap: 2px;
+  width: 48px;
+  max-height: var(--gp-panel-max-height);
+  padding: 4px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  border: 1px solid #dcf1ff63;
+  border-radius: 15px;
+  background: linear-gradient(145deg, #779cbc7d, #183e5980);
+  box-shadow: inset 0 1px 1px #f0f9ff33, 0 5px 20px #0f2e4826;
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+.god-chrome .god-chrome__tool { display: grid; place-items: center; width: 38px; height: 38px; min-height: 0; padding: 7px; border: 1px solid transparent; border-radius: 10px; color: #fff; background: none; box-shadow: none; }
+.god-chrome .god-chrome__tool svg { width: 21px; height: 21px; }
+.god-chrome .god-chrome__tool[aria-pressed='true']:not([data-tool='select']) { border-color: #d5f2ff7a; background: #7cbfec3b; }
+
+.god-chrome .god-chrome__command-zone {
+  position: absolute;
+  bottom: var(--gp-edge);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100% - 2 * var(--gp-edge)));
+}
+.god-chrome .god-chrome__command-form { margin: 0; }
+.god-chrome .god-chrome__command-dock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 6px 8px 6px 13px;
+  border: 1px solid #dcf1ff70;
+  border-radius: 15px;
+  background: linear-gradient(145deg, #779cbc66, #183e598c);
+  box-shadow: inset 0 1px 1px #f0f9ff33, 0 5px 20px #0f2e4826;
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+.god-chrome .god-chrome__sparkles { flex: 0 0 20px; width: 20px; height: 20px; }
+.god-chrome .god-chrome__command-input { flex: 1; min-width: 0; width: 0; height: 34px; padding: 4px 0; border: 0; border-radius: 0; color: #fff; background: transparent; box-shadow: none; outline: none; font-size: 13px; }
+.god-chrome .god-chrome__command-input::placeholder { color: #e7f2fccc; }
+/* the glass dock is the field: no focus ring inside it (the ring stays on the buttons for keyboard users) */
+.god-chrome .god-chrome__command-input:focus,
+.god-chrome .god-chrome__command-input:focus-visible { outline: none; box-shadow: none; }
+.god-chrome .god-chrome__submit { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; min-height: 0; padding: 6px; border: 0; border-radius: 50%; color: #29415b; background: #f7fbff; box-shadow: none; }
+.god-chrome .god-chrome__submit:disabled { opacity: .65; }
+
+/* playback dock: play / pause, speed and the live status, beside the command bar (counters live in Analytics) */
+.god-chrome .god-chrome__dock {
+  position: absolute;
+  bottom: var(--gp-edge);
+  left: var(--gp-edge);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 6px 12px 6px 8px;
+  border: 1px solid #dcf1ff70;
+  border-radius: 15px;
+  background: linear-gradient(145deg, #779cbc66, #183e598c);
+  box-shadow: inset 0 1px 1px #f0f9ff33, 0 5px 20px #0f2e4826;
+  backdrop-filter: blur(18px) saturate(1.2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.god-chrome .god-chrome__play { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; min-height: 0; padding: 6px; border: 0; border-radius: 50%; color: #29415b; background: #f7fbff; box-shadow: none; }
+.god-chrome .god-chrome__play:disabled { opacity: .65; }
+.god-chrome .god-chrome__speeds { display: flex; gap: 2px; padding: 2px; border-radius: 12px; background: #10305033; }
+.god-chrome .god-chrome__speed { min-width: 0; min-height: 0; padding: 4px 8px; border: 0; border-radius: 10px; color: #e7f2fc; background: transparent; box-shadow: none; font-size: 12px; }
+.god-chrome .god-chrome__speed[aria-pressed='true'] { color: #1d2b44; background: #fbfdff; font-weight: 600; }
+.god-chrome .god-chrome__status { padding-left: 10px; border-left: 1px solid #e8f6ff40; color: #e3eff8; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .god-chrome > :is(.god-chrome__brand, .god-chrome__tabs, .god-chrome__weather, .god-chrome__tools, .god-chrome__dock, .god-chrome__command-zone) {
+    animation: gp-enter 320ms cubic-bezier(.22, 1, .36, 1) var(--gp-enter-delay, 0ms) backwards;
+  }
+  .god-chrome__tabs { --gp-enter-delay: 25ms; }
+  .god-chrome__weather { --gp-enter-delay: 50ms; }
+  .god-chrome__tools { --gp-enter-delay: 75ms; }
+  .god-chrome__dock { --gp-enter-delay: 95ms; }
+  .god-chrome__command-zone { --gp-enter-delay: 110ms; }
+}
+
+@media (max-width: 900px) {
+  .god-chrome .god-chrome__tabs { top: calc(var(--gp-edge) + 44px); width: min(430px, calc(100% - 2 * var(--gp-edge))); }
+}
+@media (max-width: 900px) {
+  .god-chrome .god-chrome__dock { bottom: calc(var(--gp-edge) + 56px); left: 50%; transform: translateX(-50%); }
+  .god-chrome .god-chrome__status { display: none; }
+}
+@media (max-width: 540px) {
+  .god-chrome .god-chrome__wordmark { font-size: 18px; }
+  .god-chrome .god-chrome__city, .god-chrome .god-chrome__brand-divider, .god-chrome .god-chrome__weather-label { display: none; }
+  .god-chrome .god-chrome__brand { gap: 7px; }
+  .god-chrome .god-chrome__weather { gap: 7px; padding: 8px; font-size: 11px; }
+}

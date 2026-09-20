@@ -10,7 +10,7 @@ import { Texture } from '@babylonjs/core/Materials/Textures/texture'
 import { RawTexture } from '@babylonjs/core/Materials/Textures/rawTexture'
 import { Constants } from '@babylonjs/core/Engines/constants'
 import type { LinesMesh } from '@babylonjs/core/Meshes/linesMesh'
-import { flightPose, geoPoint, pointGeo, orbitRadius, lockOrbit, LOCATIONS, type Location, type Orbit } from './flight'
+import { flightPose, focusPose, geoPoint, orbitRadius, lockOrbit, ENTRY_DURATION, GLOBE_FOV, LOCATIONS, type Location, type Orbit } from './flight'
 
 const ASSET_ROOT = 'https://raw.githubusercontent.com/mrdoob/three.js/7300402f96c23bfa2174ffc0da01fb4e277d33da/examples/textures/planets'
 const BORDERS = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson'
@@ -48,13 +48,16 @@ void main() {
   float sun = dot(normal, sunDirection);
   vec3 day = texture2D(dayMap, vUV).rgb;
   vec3 night = texture2D(nightMap, vUV).rgb;
-  float light = 0.22 + 0.78 * smoothstep(-0.22, 0.9, sun);
+  float light = 0.52 + 0.56 * smoothstep(-0.3, 0.95, sun);
   float grey = dot(day, vec3(0.299, 0.587, 0.114));
-  vec3 color = mix(day * 0.94, vec3(pow(grey, 0.86) * 0.95 + 0.005), tactical);
-  color *= light;
-  color += night * (1.0 - smoothstep(-0.08, 0.32, sun)) * mix(0.8, 0.28, tactical);
+  vec3 natural = day * vec3(0.92, 1.04, 1.13) + vec3(0.012, 0.027, 0.044);
+  vec3 color = mix(natural, vec3(pow(grey, 0.86) * 0.95 + 0.02), tactical) * light;
+  color += night * (1.0 - smoothstep(-0.08, 0.32, sun)) * mix(0.4, 0.2, tactical);
+  float ocean = 1.0 - smoothstep(0.06, 0.19, day.r);
+  float reflection = pow(max(0.0, dot(reflect(-sunDirection, normal), view)), 24.0);
+  color += vec3(0.78, 0.86, 0.96) * reflection * ocean * 0.16;
   float rim = pow(1.0 - max(0.0, dot(normal, view)), 3.8);
-  color += mix(vec3(0.055, 0.22, 0.33), vec3(0.10), tactical) * rim;
+  color += mix(vec3(0.24, 0.48, 0.76), vec3(0.3), tactical) * rim;
   gl_FragColor = vec4(color, 1.0);
 }`
 
@@ -63,15 +66,19 @@ precision highp float;
 varying vec3 vPosition;
 varying vec3 vNormal;
 uniform vec3 cameraPosition;
+uniform vec3 sunDirection;
 uniform float tactical;
 void main() {
-  float rim = pow(1.0 - max(0.0, dot(normalize(vNormal), normalize(cameraPosition - vPosition))), 3.2);
-  vec3 color = mix(vec3(0.22, 0.28, 0.32), vec3(0.3), tactical);
-  gl_FragColor = vec4(color, rim * 0.18);
+  vec3 normal = normalize(vNormal);
+  float facing = max(0.0, dot(normal, normalize(cameraPosition - vPosition)));
+  float rim = pow(1.0 - facing, 5.0);
+  float light = smoothstep(-0.2, 0.8, dot(normal, sunDirection));
+  vec3 sky = mix(vec3(0.46, 0.72, 1.0), vec3(1.0, 0.96, 0.9), light * 0.85);
+  vec3 color = mix(sky, vec3(0.87, 0.91, 0.96), tactical);
+  gl_FragColor = vec4(color, rim * (0.22 + light * 0.12));
 }`
 
 export interface GlobeCallbacks {
-  select: (place: Location) => void
   imageryError: () => void
 }
 
@@ -88,24 +95,24 @@ export class GlobeScene {
   private borders: LinesMesh | null = null
   private flying = false
   private disposed = false
-  private tactical = true
+  private tactical = false
   private fittedRadius: number
   private lastInteraction = performance.now()
+  private turn: { from: Orbit; place: Location; start: number; duration: number } | null = null
   private flight: { from: Orbit; place: Location; start: number; duration: number; progress: (t: number) => void; done: () => void } | null = null
   private readonly reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   private readonly resizeObserver: ResizeObserver
-  private down: { x: number; y: number } | null = null
 
   constructor(canvas: HTMLCanvasElement, labels: Map<string, HTMLButtonElement>, callbacks: GlobeCallbacks) {
     this.canvas = canvas
-    this.engine = new Engine(canvas, true, { antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' })
+    this.engine = new Engine(canvas, true, { alpha: true, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' })
     this.engine.setHardwareScalingLevel(1 / Math.min(window.devicePixelRatio || 1, 1.5))
     this.scene = new Scene(this.engine)
     this.scene.useRightHandedSystem = true
-    this.scene.clearColor = new Color4(6 / 255, 6 / 255, 6 / 255, 1)
+    this.scene.clearColor = new Color4(0, 0, 0, 0)
     this.fittedRadius = orbitRadius(canvas.clientWidth, canvas.clientHeight)
-    this.camera = new ArcRotateCamera('orbit', -1.84, 1.01, this.fittedRadius, Vector3.Zero(), this.scene)
-    this.camera.fov = 0.7
+    this.camera = new ArcRotateCamera('orbit', -1.62, 1.12, this.fittedRadius, Vector3.Zero(), this.scene)
+    this.camera.fov = GLOBE_FOV
     this.camera.minZ = 0.001
     this.camera.maxZ = 100
     lockOrbit(this.camera, this.fittedRadius)
@@ -118,23 +125,23 @@ export class GlobeScene {
     this.camera.attachControl(canvas, true)
     const shaderOptions = { attributes: ['position', 'normal', 'uv'], uniforms: ['world', 'worldViewProjection', 'cameraPosition', 'sunDirection', 'tactical'], samplers: ['dayMap', 'nightMap'] }
     this.material = new ShaderMaterial('earth', this.scene, { vertexSource: vertex, fragmentSource: earthFragment }, shaderOptions)
-    this.material.setVector3('sunDirection', new Vector3(-0.65, 0.6, -1).normalize())
-    this.material.setFloat('tactical', 1)
-    const dayFallback = RawTexture.CreateRGBATexture(new Uint8Array([24, 49, 65, 255]), 1, 1, this.scene)
+    this.material.setFloat('tactical', 0)
+    const dayFallback = RawTexture.CreateRGBATexture(new Uint8Array([35, 72, 112, 255]), 1, 1, this.scene)
     const nightFallback = RawTexture.CreateRGBATexture(new Uint8Array([0, 0, 0, 255]), 1, 1, this.scene)
     this.textures.push(dayFallback, nightFallback)
     this.material.setTexture('dayMap', dayFallback)
     this.material.setTexture('nightMap', nightFallback)
-    const earth = CreateSphere('earth', { diameter: 2, segments: 72 }, this.scene)
+    const earth = CreateSphere('earth', { diameter: 2, segments: 96 }, this.scene)
     earth.material = this.material
+    earth.isPickable = false
     this.loadTexture('earth_day_4096.jpg', (texture) => this.material.setTexture('dayMap', texture), callbacks.imageryError)
     this.loadTexture('earth_night_4096.jpg', (texture) => this.material.setTexture('nightMap', texture))
 
     this.atmosphere = new ShaderMaterial('atmosphere', this.scene, { vertexSource: vertex, fragmentSource: atmosphereFragment }, { ...shaderOptions, needAlphaBlending: true })
-    this.atmosphere.alphaMode = Constants.ALPHA_ADD
+    this.atmosphere.alphaMode = Constants.ALPHA_COMBINE
     this.atmosphere.disableDepthWrite = true
-    this.atmosphere.setFloat('tactical', 1)
-    const glow = CreateSphere('atmosphere', { diameter: 2.012, segments: 64 }, this.scene)
+    this.atmosphere.setFloat('tactical', 0)
+    const glow = CreateSphere('atmosphere', { diameter: 2.016, segments: 96 }, this.scene)
     glow.material = this.atmosphere
     glow.isPickable = false
 
@@ -144,29 +151,17 @@ export class GlobeScene {
       const element = labels.get(place.id)
       return element ? [{ point: Vector3.FromArray(geoPoint(place.lat, place.lon, 1.009)), element }] : []
     })
-    const pointerDown = (event: PointerEvent) => {
+    const interact = () => {
       this.lastInteraction = performance.now()
-      if (event.button === 0 && !this.flying) this.down = { x: event.clientX, y: event.clientY }
+      this.turn = null
     }
-    const pointerUp = (event: PointerEvent) => {
-      const down = this.down
-      this.down = null
-      if (!down || this.flying || Math.hypot(event.clientX - down.x, event.clientY - down.y) > 5) return
-      const rect = canvas.getBoundingClientRect()
-      const hit = this.scene.pick(event.clientX - rect.left, event.clientY - rect.top, (mesh) => mesh === earth)
-      if (hit?.pickedPoint) {
-        const geo = pointGeo(hit.pickedPoint.asArray())
-        callbacks.select({ id: 'custom', name: 'Selected location', region: 'Globe selection', ...geo })
-      }
-    }
-    const wheel = () => { this.lastInteraction = performance.now() }
-    canvas.addEventListener('pointerdown', pointerDown)
-    canvas.addEventListener('pointerup', pointerUp)
-    canvas.addEventListener('wheel', wheel, { passive: true })
+    canvas.addEventListener('pointerdown', interact)
+    canvas.addEventListener('keydown', interact)
+    canvas.addEventListener('wheel', interact, { passive: true })
     this.scene.onDisposeObservable.addOnce(() => {
-      canvas.removeEventListener('pointerdown', pointerDown)
-      canvas.removeEventListener('pointerup', pointerUp)
-      canvas.removeEventListener('wheel', wheel)
+      canvas.removeEventListener('pointerdown', interact)
+      canvas.removeEventListener('keydown', interact)
+      canvas.removeEventListener('wheel', interact)
     })
     this.engine.runRenderLoop(() => {
       if (this.disposed) return
@@ -177,11 +172,22 @@ export class GlobeScene {
         Object.assign(this.camera, flightPose(f.from, f.place, t))
         f.progress(t)
         if (t === 1) { this.flight = null; f.done() }
-      } else if (!this.flying && !this.reducedMotion && now - this.lastInteraction > 5500) {
-        this.camera.alpha += Math.min(this.engine.getDeltaTime(), 50) * 0.000025
+      } else if (this.turn) {
+        const t = Math.min(1, (now - this.turn.start) / this.turn.duration)
+        const pose = focusPose(this.turn.from, this.turn.place, t)
+        this.camera.alpha = pose.alpha
+        this.camera.beta = pose.beta
+        if (t === 1) this.turn = null
+      } else if (!this.flying && !this.reducedMotion && now - this.lastInteraction > 10000) {
+        this.camera.alpha += Math.min(this.engine.getDeltaTime(), 50) * 0.000004
       }
+      const view = this.camera.position.normalizeToNew()
+      const right = Vector3.Cross(Vector3.UpReadOnly, view).normalize()
+      const sun = view.scale(0.85).add(right.scale(0.55)).add(new Vector3(0, 0.65, 0)).normalize()
       this.material.setVector3('cameraPosition', this.camera.position)
+      this.material.setVector3('sunDirection', sun)
       this.atmosphere.setVector3('cameraPosition', this.camera.position)
+      this.atmosphere.setVector3('sunDirection', sun)
       this.scene.render()
       this.projectMarkers()
     })
@@ -198,20 +204,31 @@ export class GlobeScene {
     this.tactical = value
     this.material.setFloat('tactical', value ? 1 : 0)
     this.atmosphere.setFloat('tactical', value ? 1 : 0)
-    if (this.borders) this.borders.alpha = value ? 0.25 : 0.18
+    if (this.borders) this.borders.setEnabled(value)
+  }
+
+  focus(place: Location): void {
+    if (this.flying) return
+    const { alpha, beta, radius } = this.camera
+    this.lastInteraction = performance.now()
+    this.camera.inertialAlphaOffset = this.camera.inertialBetaOffset = 0
+    if (this.reducedMotion) Object.assign(this.camera, focusPose({ alpha, beta, radius }, place, 1))
+    else this.turn = { from: { alpha, beta, radius }, place, start: this.lastInteraction, duration: 1100 }
   }
 
   fly(place: Location, progress: (t: number) => void, done: () => void): void {
     const { alpha, beta, radius } = this.camera
+    this.turn = null
     this.flying = true
     this.camera.detachControl()
     this.camera.lowerRadiusLimit = 1.01
     this.camera.inertialAlphaOffset = this.camera.inertialBetaOffset = this.camera.inertialRadiusOffset = 0
-    this.flight = { from: { alpha, beta, radius }, place, start: performance.now(), duration: this.reducedMotion ? 180 : 4300, progress, done }
+    this.flight = { from: { alpha, beta, radius }, place, start: performance.now(), duration: this.reducedMotion ? 180 : ENTRY_DURATION, progress, done }
   }
 
   cancel(): void {
     this.flight = null
+    this.turn = null
     this.flying = false
     lockOrbit(this.camera, this.fittedRadius)
     this.camera.attachControl(this.canvas, true)
@@ -254,8 +271,9 @@ export class GlobeScene {
         }
       }
       this.borders = CreateLineSystem('country-borders', { lines }, this.scene)
-      this.borders.color = new Color3(0.72, 0.72, 0.72)
-      this.borders.alpha = this.tactical ? 0.25 : 0.18
+      this.borders.color = new Color3(0.8, 0.87, 0.94)
+      this.borders.alpha = 0.16
+      this.borders.setEnabled(this.tactical)
       this.borders.isPickable = false
     } catch {
       return

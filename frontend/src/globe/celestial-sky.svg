@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <defs>
+    <filter id="clouds" x="-30%" y="-60%" width="160%" height="220%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency=".006 .011" numOctaves="3" seed="18" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="180" xChannelSelector="R" yChannelSelector="G"/>
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <radialGradient id="mist"><stop stop-color="#f8fbff" stop-opacity=".84"/><stop offset="1" stop-color="#f1f6ff" stop-opacity="0"/></radialGradient>
+    <radialGradient id="warm"><stop stop-color="#fff5e5" stop-opacity=".86"/><stop offset="1" stop-color="#fffaee" stop-opacity="0"/></radialGradient>
+  </defs>
+  <g filter="url(#clouds)">
+    <ellipse cx="148" cy="500" rx="510" ry="200" fill="url(#mist)"/>
+    <ellipse cx="1380" cy="670" rx="490" ry="190" fill="url(#mist)"/>
+    <ellipse cx="700" cy="990" rx="620" ry="200" fill="url(#mist)"/>
+    <ellipse cx="900" cy="25" rx="480" ry="125" fill="url(#mist)"/>
+    <ellipse cx="1250" cy="210" rx="380" ry="180" fill="url(#warm)"/>
+    <ellipse cx="430" cy="810" rx="470" ry="85" fill="url(#mist)"/>
+  </g>
+</svg>
