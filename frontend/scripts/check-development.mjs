@@ -82,7 +82,9 @@ const ghostMeshId = () => page.evaluate(() => window.__cityshift.babylon.scene.g
 /** Open the tool, pick a kind, aim with the cursor (ghost follows), then click to place — access is checked automatically. */
 const openAimAndPlace = async () => {
   await page.locator('.railbtn[title="Development"]').click()
-  await page.locator('.development-status.aim').waitFor()
+  await page.getByRole('radiogroup', { name: 'Building type', exact: true }).waitFor()
+  assert.equal(await page.locator('.development-status').count(), 0, 'no status or instructions before anything is placed')
+  assert.equal(await page.locator('.kind-tile small').count(), 0, 'tiles carry no descriptions')
   await page.getByRole('radio', { name: KIND.tile, exact: true }).click()
   assert.equal((await state()).draft.capacity, 12)
   await positionCamera(placement)

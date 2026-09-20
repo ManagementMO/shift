@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, type CSSProperties } from 'react'
-import { DEVELOPMENT_USES, developmentColor, developmentCounts, developmentLabel, validDevelopmentGeometry } from '../development'
+import { DEVELOPMENT_USES, developmentColor, developmentCounts, validDevelopmentGeometry } from '../development'
 import { useStore } from '../store'
 import { mapForSide } from './registry'
 
 /**
- * Placement-time labels only: the aiming hint and the pin over a placed-but-unconfirmed footprint. Confirmed
- * developments are ordinary city buildings and carry no marker; clicking one opens the building card instead.
+ * Placement-time label only: the pin over a placed-but-unconfirmed footprint. Confirmed developments are ordinary
+ * city buildings and carry no marker; clicking one opens the building card instead.
  */
 export default function DevelopmentMarkers({ side }: { runId: string | null; side: string }) {
   const draft = useStore((s) => s.developmentDraft)
@@ -33,7 +33,6 @@ export default function DevelopmentMarkers({ side }: { runId: string | null; sid
   }, [rows, side])
 
   return <div className="development-markers" aria-label="Development placement">
-    {side !== 'left' && draft && !placed && <div className="development-map-hint glass"><i className="development-cursor-dot" aria-hidden="true" /><b>{developmentLabel(draft)} · click to place</b><span>The outline follows your cursor over land beside a street.</span></div>}
     {rows.map((row) => {
       const use = DEVELOPMENT_USES[row.spec.land_use]
       const counts = developmentCounts(row.spec)
@@ -46,6 +45,5 @@ export default function DevelopmentMarkers({ side }: { runId: string | null; sid
         <span className="development-pin-copy"><small>{preview ? 'READY TO CONFIRM' : error ? 'CANNOT BUILD HERE' : 'CHECKING ACCESS…'}</small><b>{row.spec.name}</b><span>{row.spec.capacity.toLocaleString()} {use.unit} · {counts.trips.toLocaleString()} trips</span></span>
       </button>
     })}
-    {rows.length > 0 && <div className="development-map-key">Outlined footprint = proposed building · arrows = declared travel directions, not routes</div>}
   </div>
 }
