@@ -112,6 +112,7 @@ export default function LiveCity() {
   useEffect(() => {
     const timer = setInterval(() => {
       const ws = worlds.current.primary?.world
+      setSelected(current => current?.follow && worlds.current[current.side]?.world.camera.mode !== 'agent' ? { ...current, follow: false } : current)
       setPerformance({ fps: ws ? Math.round(ws.engine.getFps()) : 0, actors: ws ? ws.traffic.stats.people + ws.traffic.stats.cars + ws.traffic.stats.buses : 0, alerted: ws?.traffic.stats.alerted ?? 0, ready: !!ws })
     }, 750)
     return () => clearInterval(timer)

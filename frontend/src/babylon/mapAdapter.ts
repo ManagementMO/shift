@@ -181,7 +181,7 @@ export class BabylonSyncMap implements SyncMap {
 
   isMoving(): boolean {
     const c = this.ws.camera.cam
-    return this.ws.camera.flying || this.ws.keys?.moving || c.inertialAlphaOffset !== 0 || c.inertialBetaOffset !== 0 || c.inertialRadiusOffset !== 0 || c.inertialPanningX !== 0 || c.inertialPanningY !== 0
+    return this.ws.camera.flying || this.ws.camera.looking || this.ws.keys?.moving || c.inertialAlphaOffset !== 0 || c.inertialBetaOffset !== 0 || c.inertialRadiusOffset !== 0 || c.inertialPanningX !== 0 || c.inertialPanningY !== 0
   }
 
   on(ev: string, cb: MoveCb): void {

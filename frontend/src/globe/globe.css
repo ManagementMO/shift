@@ -86,14 +86,14 @@
   .orbital { grid-template-columns: 296px minmax(0, 1fr) 296px; }
 }
 @media (max-width: 1000px) {
-  .orbital { position: fixed; overflow: auto; grid-template-columns: minmax(0, 1fr); grid-template-rows: 60px minmax(64vh, auto) auto auto 30px; grid-template-areas: 'header' 'stage' 'left' 'right' 'footer'; }
+  .orbital { position: fixed; overflow: auto; grid-template-columns: minmax(0, 1fr); grid-template-rows: 60px minmax(64dvh, auto) max-content max-content 30px; grid-template-areas: 'header' 'stage' 'left' 'right' 'footer'; }
   .orbital-header { padding: 0 18px; gap: 12px; }
   .orbital-brand { font-size: 16px; gap: 9px; }
   .orbital-brand svg { width: 21px; height: 21px; }
   .orbital-panel { overflow: visible; }
   .orbital-panel-left { border-right: 0; border-top: 1px solid #1c1c1c; }
   .orbital-panel-right { border-left: 0; border-top: 1px solid #1c1c1c; }
-  .sim-settings-docked, .recent-work { height: auto; min-height: 0; }
+  .orbital .sim-settings-docked, .orbital .recent-work { height: auto; min-height: 0; max-height: none; overflow: visible; }
   .orbital-footer { padding: 0 18px; font-size: 8px; }
   .orbital-footer > span:last-child { gap: 6px; }
   .orbital-footer > span:last-child a:first-child, .orbital-footer i { display: none; }

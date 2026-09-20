@@ -170,6 +170,87 @@ describe('fixed city camera', () => {
     expect(cam.movement.input.resolveInteraction('pointer', { button: 0, modifiers: { ctrl: true } })?.interaction).toBe('pan')
   })
 
+  it('turns native look input around a stationary eye instead of orbiting the target', () => {
+    const { cam, camera } = setup(1440, 900, false)
+    camera.setPreferredProjection('perspective')
+    camera.apply({ target: [100, 200], radius: 700, heading: 30, elevation: 35, y: 20 })
+    cam.inputs.attached.fixedEyeLook?.attachControl()
+    cam.getViewMatrix(true)
+    const eye = cam.position.clone(), heading = camera.pose.heading
+    cam.movement.rotationAccumulatedPixels.set(0.6, -0.15, 0)
+    cam._checkInputs()
+    cam.getViewMatrix(true)
+    expect(Vector3.Distance(cam.position, eye)).toBeLessThan(0.00001)
+    expect(camera.pose.heading).not.toBe(heading)
+    expect(camera.pose.radius).toBe(700)
+    expect(cam.inertialAlphaOffset).toBe(0)
+    const turned = camera.pose
+    cam._checkInputs()
+    expect(camera.pose).toEqual(turned)
+  })
+
+  it('can look above the horizon without translating or rolling over', () => {
+    const { cam, camera } = setup(1440, 900, false)
+    camera.apply({ target: [0, 0], radius: 400, heading: 0, elevation: 20 })
+    cam.upperBetaLimit = Math.PI - 0.08
+    cam.inputs.attached.fixedEyeLook?.attachControl()
+    cam.getViewMatrix(true)
+    const eye = cam.position.clone()
+    cam.movement.rotationAccumulatedPixels.set(0, 4, 0)
+    cam._checkInputs()
+    cam.getViewMatrix(true)
+    expect(Vector3.Distance(cam.position, eye)).toBeLessThan(0.00001)
+    expect(camera.pose.elevation).toBeLessThan(0)
+    expect(cam.beta).toBeCloseTo(Math.PI - 0.08)
+  })
+
+  it('stops look input when camera controls are detached for placement', () => {
+    const { cam, camera } = setup(1440, 900, false)
+    cam.inputs.attached.fixedEyeLook?.attachControl()
+    cam.inputs.attached.fixedEyeLook?.detachControl()
+    const before = camera.pose
+    cam.movement.rotationAccumulatedPixels.set(0.3, 0.2, 0)
+    cam._checkInputs()
+    expect(camera.pose).toEqual(before)
+  })
+
+  it('keeps native pan and zoom translating the camera while look is eye-anchored', () => {
+    const { cam, camera } = setup(1440, 900, false)
+    cam.inputs.attached.fixedEyeLook.attachControl()
+    cam.getViewMatrix(true)
+    const before = camera.eye
+    cam.movement.panAccumulatedPixels.set(5, 0, 0)
+    cam._checkInputs()
+    expect(Vector3.Distance(before, camera.eye)).toBeGreaterThan(1)
+    cam.movement.resetPanVelocity()
+    const radius = cam.radius
+    cam.movement.zoomAccumulatedPixels = 10
+    cam._checkInputs()
+    expect(cam.radius).toBeLessThan(radius)
+  })
+
+  it('does not let agent following recenter the eye after manual looking', () => {
+    const { cam, camera } = setup(1440, 900, false)
+    camera.agent(0, 0, 0, 0)
+    cam.inputs.attached.fixedEyeLook.attachControl()
+    cam.movement.rotationAccumulatedPixels.set(0.4, 0.1, 0)
+    cam._checkInputs()
+    const eye = camera.eye
+    camera.follow(500, 500)
+    expect(camera.mode).toBe('city')
+    expect(Vector3.Distance(eye, camera.eye)).toBeLessThan(0.00001)
+  })
+
+  it('bounds the actual eye after zooming toward a below-ground look target', () => {
+    const { cam, camera } = setup(1440, 900, false)
+    camera.apply({ target: [0, 0], radius: 2000, heading: 30, elevation: 45, y: -1000 })
+    cam.radius = 45
+    camera.constrainEye([-1000, -1000, 1000, 1000], () => 17)
+    expect(camera.eye.y).toBeCloseTo(20)
+    expect(camera.pose.heading).toBeCloseTo(30)
+    expect(camera.pose.radius).toBe(45)
+  })
+
   it('keeps the standalone renderer lab camera editable', () => {
     const { camera } = setup(1440, 900, false)
     const pose = { target: [100, 200] as [number, number], radius: 300, heading: 45, elevation: 40 }

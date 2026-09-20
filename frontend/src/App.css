@@ -95,8 +95,11 @@ button:disabled {
 /* ---------- shell: the city is the interface ---------- */
 .shell {
   position: relative;
-  width: 100vw;
-  height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: 100%;
+  height: 100dvh;
 }
 .worlds,
 .worlds .world {
@@ -141,15 +144,14 @@ button:disabled {
 
 /* ---------- top strip ---------- */
 .strip {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  position: relative;
+  grid-row: 1;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 14px;
-  height: 56px;
-  padding: 0 16px;
+  min-height: 56px;
+  padding: 8px 16px;
   background: var(--glass);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -234,6 +236,9 @@ button:disabled {
 }
 .strip-actions {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
   gap: 4px;
   padding-left: 6px;
   border-left: 1px solid rgba(255, 255, 255, 0.12);
@@ -278,6 +283,7 @@ button:disabled {
 /* ---------- left tool rail ---------- */
 .rail {
   position: absolute;
+  grid-row: 2 / 3;
   left: 14px;
   top: 50%;
   transform: translateY(-50%);
@@ -335,9 +341,8 @@ button:disabled {
 
 .toolpanel.toolpanel-development {
   width: 360px;
-  top: 78px;
+  top: 12px;
   transform: none;
-  max-height: calc(100vh - 220px);
 }
 .development-tool { --kind-color: var(--accent); }
 .development-tool h3 { margin: 0; font-size: 17px; }
@@ -353,7 +358,7 @@ button:disabled {
 .development-assumptions li { margin: 3px 0; }
 
 /* the four building tiles */
-.kind-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.kind-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 110px), 1fr)); gap: 8px; }
 .kind-tile { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px 10px 12px; text-align: center; border-radius: var(--r); background: var(--surface-raised); border: 1px solid var(--glass-line); color: var(--ink); cursor: pointer; transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.18s, border-color 0.18s, background 0.18s; }
 .kind-tile:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35); border-color: color-mix(in srgb, var(--kind-color) 55%, transparent); }
 .kind-tile:active { transform: translateY(0) scale(0.98); }
@@ -417,11 +422,12 @@ button:disabled {
 
 .toolpanel {
   position: absolute;
+  grid-row: 2 / 3;
   left: 72px;
   top: 50%;
   transform: translateY(-50%);
   width: 320px;
-  max-height: calc(100vh - 220px);
+  max-height: calc(100% - 24px);
   overflow: auto;
   padding: 14px 16px 16px;
   background: var(--glass-strong);
@@ -651,8 +657,9 @@ button.primary.danger { background: var(--bad); color: #1a0f0d; }
 /* ---------- drawers (scenario left, lens right) ---------- */
 .drawer {
   position: absolute;
-  top: 72px;
-  bottom: 150px;
+  grid-row: 2 / 3;
+  top: 12px;
+  bottom: 12px;
   width: 380px;
   padding: 14px 16px;
   background: var(--glass-strong);
@@ -1014,10 +1021,11 @@ details summary {
 
 /* ---------- bottom: sim dock ---------- */
 .bottom {
-  position: absolute;
-  left: 50%;
-  bottom: 16px;
-  transform: translateX(-50%);
+  position: relative;
+  grid-row: 3;
+  align-self: end;
+  justify-self: center;
+  margin-bottom: 16px;
   width: min(920px, calc(100vw - 28px));
   display: flex;
   flex-direction: column;
@@ -1089,7 +1097,7 @@ details summary {
   }
   .dock-metrics {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 2 / 3;
     justify-content: space-between;
     gap: 4px;
   }
@@ -1133,8 +1141,9 @@ details summary {
 /* ---------- overlays ---------- */
 .hint {
   position: absolute;
+  grid-row: 2 / 3;
   left: 50%;
-  top: 76px;
+  top: 12px;
   transform: translateX(-50%);
   background: var(--glass-strong);
   border: 1px solid var(--glass-line);
@@ -1214,7 +1223,8 @@ details summary {
 }
 .display-panel {
   position: absolute;
-  top: 72px;
+  grid-row: 2 / 3;
+  top: 12px;
   right: 14px;
   width: 224px;
   z-index: 19;
@@ -1263,27 +1273,24 @@ details summary {
   .bottom { width: calc(100vw - 160px); }
   .dock { grid-template-columns: auto 1fr; gap: 12px; }
   .dock-metrics { grid-column: 1 / -1; justify-content: space-between; }
-  .drawer { bottom: 205px; }
 }
 @media (max-width: 700px) {
   .strip { gap: 4px; padding: 8px 10px; height: auto; flex-wrap: wrap; }
   .brand .city { display: none; }
   .strip .scenario-name { order: 3; flex-basis: 100%; }
-  .strip-actions { margin-left: auto; border: 0; }
+  .strip-actions { margin-left: auto; padding-left: 0; border: 0; }
   .ghostbtn { padding: 6px 7px; font-size: 11px; }
   .wordmark { font-size: 13px; letter-spacing: -0.04em; }
-  .bottom { width: calc(100vw - 28px); bottom: 10px; }
+  .bottom { width: calc(100vw - 28px); margin-bottom: 10px; }
   .dock { padding: 10px; grid-template-columns: 1fr; gap: 6px; }
   .dock-controls { justify-content: space-between; }
   .metric { min-width: 0; padding-left: 6px; }
   .metric .lbl { font-size: 9px; }
   .rail { left: 10px; padding: 3px; }
   .railbtn { width: 32px; height: 32px; }
-  .display-panel { width: 180px; top: 128px; }
-  .drawer { top: 128px; }
-  .hint { top: 128px; width: calc(100vw - 32px); border-radius: var(--r); }
-  .drawer, .toolpanel { left: 56px; right: 56px; width: auto; }
-  .toolpanel { max-height: calc(100vh - 270px); }
+  .display-panel { width: 180px; }
+  .hint { width: calc(100vw - 32px); border-radius: var(--r); }
+  .drawer, .toolpanel, .toolpanel.toolpanel-development { left: 56px; right: 56px; width: auto; }
   .bubble.docked { right: 56px; bottom: 200px; }
 }
 @media (prefers-reduced-motion: reduce) {
