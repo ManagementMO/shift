@@ -6,10 +6,36 @@ import { Scene } from '@babylonjs/core/scene'
 import { vehicleScale } from '../babylon/figures'
 import { Traffic } from '../babylon/traffic'
 import { WorldFrame } from '../babylon/coords'
+import { bundle } from '../population.testData'
+import { buildIndex } from '../replay'
+import { abstractEntityId } from '../population'
 
 const frame = new WorldFrame({ utm_zone: 17, net_offset: [0, 0], origin_net: [0, 0], origin_lonlat: [-79, 43], bounds_world: [-1000, -1000, 1000, 1000] })
 
 describe('Live traffic rendering', () => {
+  it('draws stationary residents as upright humanoids and picks their bodies without moving their anchors', () => {
+    const engine = new NullEngine(), scene = new Scene(engine)
+    const traffic = new Traffic(scene, frame, null, 0)
+    const recording = bundle()
+    traffic.setReplay(buildIndex(recording))
+    traffic.update(0, { x: 0, y: 600, z: 0, radius: 1250 })
+    const body = scene.getMeshByName('abstract-presence-body') as Mesh
+    const head = scene.getMeshByName('abstract-presence-trim') as Mesh
+    expect(body.thinInstanceCount).toBe(2)
+    expect(head.thinInstanceCount).toBe(2)
+    expect(body.getBoundingInfo().boundingBox.maximum.y).toBeGreaterThan(1.4)
+    expect(head.getBoundingInfo().boundingBox.maximum.y).toBeGreaterThan(1.8)
+    const anchor = recording.population!.definition.anchors[0]
+    const [x, z] = frame.lonLatToWorld(anchor.lon, anchor.lat)
+    expect(traffic.poseOf(abstractEntityId('r1'))).toMatchObject({ x, z, kind: 'person' })
+    const scale = body.thinInstanceGetWorldMatrices()[0].getRow(1)!.y
+    expect(traffic.pick(x, 0.9 * scale, (px, py) => ({ x: px, y: py }), 0.1)).toEqual({ id: abstractEntityId('r1'), kind: 'person' })
+    // Changing to a measured vehicle removes only that resident's standing body.
+    traffic.update(10, { x: 0, y: 600, z: 0, radius: 1250 })
+    expect(body.thinInstanceCount).toBe(1)
+    traffic.dispose(); scene.dispose(); engine.dispose()
+  })
+
   it('draws 5000 individually measured agents through shared instances and keeps picking identities', () => {
     const engine = new NullEngine(), scene = new Scene(engine)
     const traffic = new Traffic(scene, frame, null)
