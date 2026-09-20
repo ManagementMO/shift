@@ -12,7 +12,7 @@ vi.mock('../live/session', () => ({ useLive: () => ({ primary: null, draft: null
 
 beforeEach(() => {
   mock.state = { populationActive: true, primaryRunId: 'pop-run', replays: { 'pop-run': buildIndex(bundle()) }, populationDefinition: populationArtifact().definition,
-    selection: { kind: 'resident', id: 'r1' }, t: 12, cameraMode: 'city', select: vi.fn(), corridors: {}, speed: 1, playing: false } as unknown as State
+    selection: { kind: 'resident', id: 'r1' }, t: 12, cameraMode: 'city', select: vi.fn(), corridors: {}, speed: 1, playing: false, runs: [] } as unknown as State
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Inspection must not submit inference') }))
 })
 afterEach(() => vi.unstubAllGlobals())

@@ -215,6 +215,7 @@ export type RunMetrics = {
 }
 
 export type SimulationRun = {
+  checkpoint_available?: boolean
   run_id: string
   scenario_id: string
   plan_id: string
@@ -636,6 +637,20 @@ export type PopulationArtifact = {
   mobility_bindings: MobilityBinding[]
   swarm_bindings: SwarmBinding[]
   metrics: PopulationMetrics
+  stimuli?: { stimulus: PopulationStimulus; applied_s: number; resident_ids: string[] }[]
+}
+
+/** Operator input delivered to a native society at an authoritative decision boundary. */
+export type PopulationStimulus = {
+  stimulus_id: string
+  kind: 'incident' | 'temperature' | 'announcement'
+  text: string
+  lon?: number | null
+  lat?: number | null
+  radius_m?: number | null
+  hazard?: 'crash' | 'fire' | 'flood' | 'tornado' | 'gas_leak' | 'rain' | 'storm' | null
+  temperature_c?: number | null
+  duration_s: number
 }
 
 export type PopulationSessionBudget = {
@@ -653,6 +668,7 @@ export type PopulationStatus = {
   budget: PopulationSessionBudget
   native_proof_required?: boolean
   initial_scale_gate?: number
+  admission?: { request_reservation_microdollars: Record<string, number>; max_output_tokens: number }
 }
 
 export type Renderer = 'babylon' | 'mapbox'

@@ -47,7 +47,7 @@ export default function PopulationLens() {
   const assignments = population?.assignments ?? definition?.assignments ?? {}
   const families = [...new Map(Object.values(assignments).map((assignment) => [assignment.model_family, assignment])).values()]
   return <div className="lens-body">
-    <div className="small"><b>{profiles.length} synthetic residents</b> · {rx ? `recorded at +${fmt(t)}` : primaryRunId ? 'waiting for refreshed recorded state' : 'initial definition, not executed'}</div>
+    <div className="small"><b>{profiles.length} {families.every(brain => brain.control_mode === 'jiuwenswarm') ? 'JiuwenSwarm residents' : 'archived rules residents'}</b> · {rx ? `recorded at +${fmt(t)}` : primaryRunId ? 'waiting for refreshed recorded state' : 'initial definition, not executed'}</div>
     {primaryRunId && !rx && <div className="small dim">Execution and replay are separate. The stale bundle was cleared on resume; resident selections persist while the backend reaches the next recorded boundary.</div>}
     {rx && !population && <div className="small warn">Optional population artifact is absent. Measured tracks may still replay, but mental state and ownership cannot be reconstructed.</div>}
     <div className="small dim">Persistent personas across mobility modes. Replay, selection, and scrubbing make no model calls.</div>

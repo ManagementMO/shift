@@ -51,20 +51,15 @@ export default function PopulationPanel() {
   const saved = scenarios.filter(s => s.scenario_kind === 'population' && s.pack_id === pack?.pack_id)
 
   return <div className="tool population-panel">
-    <div className="population-heading"><strong>JiuwenSwarm residents</strong><span className={`population-status ${unavailable ? 'unavailable' : 'available'}`}>{unavailable ? 'Not ready' : 'Runtime configured'}</span></div>
-    <p className="small dim">Native AI residents share a local district, with individual model sessions, needs, tasks, contacts, and measured SUMO journeys.</p>
-    <p className="small population-inspection-hint">Click a resident on the map or in the list to inspect their model, recorded decision summary, plan, messages, and outcomes. Summaries are not private chain-of-thought.</p>
+    <div className="population-heading"><strong>JiuwenSwarm residents</strong><span className={`population-status ${unavailable ? 'unavailable' : 'available'}`}>{unavailable ? 'Execution unavailable' : 'Runtime configured'}</span></div>
+    <p className="small population-inspection-hint">Click a resident to inspect its model, decision summary, actions, and messages.</p>
+    <details className="population-create"><summary>Budget and connection · ${populationCostLimit(status).toFixed(2)} remaining</summary>
     {unavailable && <div className="small warn" role="status">{unavailable}</div>}
     <div className="small dim">Inference budget remaining: ${populationCostLimit(status).toFixed(2)}. Saved residents remain inspectable when execution is unavailable. Creating a swarm and inspecting it make no model calls.</div>
     <button className="ghostbtn" onClick={() => void refreshStatus()} disabled={busy}>Check native connection</button>
-    <label>Saved population<select aria-label="Saved native population" value={active ? scenarioId ?? '' : ''} disabled={busy} onChange={e => { if (e.target.value) void useStore.getState().selectScenario(e.target.value) }}><option value="">Choose saved residents</option>{saved.map(s => <option key={s.scenario_id} value={s.scenario_id}>{s.label}</option>)}</select></label>
+    </details>
+    <label>Saved population<select aria-label="Saved native population" value={active ? scenarioId ?? '' : ''} disabled={busy} onChange={e => { if (e.target.value) void useStore.getState().selectScenario(e.target.value) }}><option value="">Choose saved residents</option>{saved.map(s => <option key={s.scenario_id} value={s.scenario_id}>{s.label} · {s.scenario_id.slice(-6)}</option>)}</select></label>
     {active && definition && <PopulationEvents />}
-    {active && <PopulationLens />}
-    {definition && <section className="population-current small" aria-label="Current native population">
-      <strong>{definition.profiles.length} residents · {definition.spec.brains.every(brain => brain.control_mode === 'jiuwenswarm') ? 'Native JiuwenSwarm definition' : 'Archived rules definition'}</strong>
-      <div>{definition.spec.brains.map(brain => `${brain.model_family} (${brain.api_provider})`).join(' · ')}</div>
-      <div className="dim">District anchor radius {definition.spec.district_radius_m} m · {replay ? 'recorded execution available' : 'definition only; execution starts separately'}</div>
-    </section>}
     <details open={!definition} className="population-create"><summary>Create a native swarm</summary>
       <label>Residents<input aria-label="Native resident count" type="number" min={5} max={maxResidents} value={residentCount} onChange={e => setCount(Number(e.target.value))} /></label>
       <div className="small dim">Up to {maxResidents} native residents under the current runtime gate. Start with a short run, then inspect individual decisions.</div>
@@ -83,15 +78,16 @@ export default function PopulationPanel() {
       <button className="primary" onClick={create} disabled={!!definitionReason || !modelIds.length || busy || !Number.isInteger(residentCount) || residentCount < 5 || residentCount > maxResidents || !Number.isSafeInteger(seed) || !Number.isFinite(maxCost) || maxCost <= 0 || maxCost > 20}>Create swarm (no model calls)</button>
       <div className="small dim">After creation, use Start new society run to authorize model execution within the displayed cap.</div>
     </details>
-    {active && definition && <PopulationRunControl />}
-    {active && <div className="population-runs">{runs.map(run => <section key={run.run_id} className="population-run-record">
+    {active && definition && <details open={!runs.length} className="population-create"><summary>Execution controls · {runs.find(r => r.run_id === useStore.getState().primaryRunId)?.status ?? "not started"}</summary><PopulationRunControl /></details>}
+    {active && <PopulationLens />}
+    {active && runs.length > 0 && <details className="population-create"><summary>Saved runs ({runs.length})</summary><div className="population-runs">{runs.map(run => <section key={run.run_id} className="population-run-record">
       <div className="row between"><b>{run.status}</b><span className="mono">{run.run_id.slice(-8)}</span></div>
       <div className="small dim">{Math.round(run.progress * 100)}% simulated{run.error ? ` · ${run.error}` : ''}</div>
       <div className="small dim">{run.engine_version} · seed {run.seed}</div>
       {run.warnings.map((warning, index) => <div className="small warn" key={index}>{warning}</div>)}
       <button className="ghostbtn" disabled={busy} onClick={() => void useStore.getState().openRun(run.run_id, 'primary', true)}>View saved movement and decisions</button>
       <PopulationRunActions run={run} />
-    </section>)}</div>}
+    </section>)}</div></details>}
     {active && replay && <section className="population-playback" aria-label="Resident recorded history">
       <div className="row between"><strong>Recorded +{fmt(t)}</strong><span className="small dim">through +{fmt(replay.tMax)}</span></div>
       <label>Inspect recorded time<input type="range" aria-label="Resident recorded time" min={0} max={Math.max(1, replay.tMax)} step={1} value={Math.min(t, replay.tMax)} onChange={e => { usePopulationPlayback.getState().setFollowLive(false); clock.pause(); clock.seek(Number(e.target.value)) }} /></label>

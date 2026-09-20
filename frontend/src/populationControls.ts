@@ -56,7 +56,7 @@ export function populationUnavailableReason(status: PopulationStatus | null, err
 export function defaultPopulationSpec(status: PopulationStatus, options: { count?: number; seed?: number; horizon?: number; packId?: string; maxCostUsd?: number; modelIds?: string[] } = {}): PopulationSpec {
   const unavailable = populationDefinitionReason(status)
   if (unavailable) throw new Error(unavailable)
-  const cost = options.maxCostUsd ?? Math.min(5, populationCostLimit(status))
+  const cost = options.maxCostUsd ?? 5
   if (!Number.isFinite(cost) || cost < 0) throw new Error('Population budget must be a finite non-negative amount.')
   const count = options.count ?? Math.min(12, populationCountLimit(status))
   const horizon = options.horizon ?? 600
@@ -71,7 +71,8 @@ export function defaultPopulationSpec(status: PopulationStatus, options: { count
   return {
     generator_version: 'society-v1', rules_version: 'service-ledger-v1', pack_id: options.packId ?? 'toronto', seed, count, horizon_s: horizon,
     enabled_classes: ['pedestrian', 'bicycle', 'passenger', 'delivery', 'truck'], brains: brains.map((brain) => ({ ...brain })),
-    budget: { ...DEFAULT_POPULATION_BUDGET, max_cost_usd: Math.min(populationCostLimit(status), cost) },
+    // A frozen definition is reusable; current session headroom is enforced at execution, not frozen forever.
+    budget: { ...DEFAULT_POPULATION_BUDGET, max_cost_usd: Math.min(20, cost) },
     recurring_need_s: 900, service_duration_s: 60, decision_interval_s: 30, district_radius_m: 700,
   }
 }

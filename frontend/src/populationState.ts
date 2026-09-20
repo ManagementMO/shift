@@ -1,12 +1,14 @@
 import type { StateCreator } from 'zustand'
 import { api } from './api'
 import { enterCity, live } from './live/session'
-import { populationScaleReason, populationUnavailableReason } from './populationControls'
+import { populationDefinitionReason, populationScaleReason, populationUnavailableReason } from './populationControls'
+import { usePopulationStimuli } from './populationStimuli'
 import { canPausePopulationRun, canResumePopulationRun, needsPopulationReplayRefresh, populationReplayReady, populationRunRevision, runIsActive, type PopulationRunAction } from './populationLifecycle'
 import { buildIndex, type ReplayIndex } from './replay'
 import type { State } from './store'
-import type { PlanWithValidation, PopulationDefinition, PopulationSpec, PopulationStatus, ScenarioSpec, SimulationRun } from './types'
+import type { PlanWithValidation, PopulationDefinition, PopulationSpec, PopulationStatus, PopulationStimulus, ScenarioSpec, SimulationRun } from './types'
 import { clock } from './world/playback'
+import { usePopulationPlayback } from './populationLifecycle'
 
 export interface PopulationState {
   populationActive: boolean
@@ -26,6 +28,7 @@ export interface PopulationState {
   building: string | null
   refreshPopulationStatus: () => Promise<void>
   refreshPopulations: () => Promise<void>
+  enterNativePopulation: (packId: string) => Promise<void>
   selectScenario: (id: string) => Promise<void>
   createPopulation: (spec: PopulationSpec) => Promise<void>
   submitPopulationRun: () => Promise<void>
@@ -40,11 +43,20 @@ export interface PopulationState {
   leavePopulation: () => Promise<void>
 }
 
-const pendingRequests = new Map<string, string>()
+const pendingRequests = new Map<string, { key: string; stimuli: PopulationStimulus[] }>()
 const replayVersions = new Map<string, number>()
 const replayLoads = new Map<string, { version: number; revision: string; token: object; promise: Promise<ReplayIndex | null> }>()
 let selectionVersion = 0
 let refreshVersion = 0
+const lastPopulationKey = (packId: string) => `concrete-consequences:native-population:${packId}`
+
+function preferredPopulation(packId: string): string | null {
+  try { return localStorage.getItem(lastPopulationKey(packId)) } catch { return null }
+}
+
+function rememberPopulation(packId: string, scenarioId: string) {
+  try { localStorage.setItem(lastPopulationKey(packId), scenarioId) } catch { /* Storage is optional. */ }
+}
 
 export const createPopulationSlice: StateCreator<State, [], [], PopulationState> = (set, get) => ({
   populationActive: false, scenarios: [], scenarioId: null, populationDefinition: null,
@@ -60,6 +72,35 @@ export const createPopulationSlice: StateCreator<State, [], [], PopulationState>
   async refreshPopulations() {
     try { set({ scenarios: (await api.scenarios()).filter(s => s.scenario_kind === 'population') }) }
     catch (error) { set({ error: String(error) }) }
+  },
+
+  async enterNativePopulation(packId) {
+    const version = ++selectionVersion
+    refreshVersion++
+    live.stop()
+    clock.setLoop(null)
+    clock.setFrontier(0)
+    clock.seek(0)
+    set({ populationActive: true, tool: 'residents', scenarioId: null, primaryRunId: null, populationDefinition: null, plans: [], runs: [], selection: null, error: null })
+    try {
+      const [, scenarios] = await Promise.all([get().refreshPopulationStatus(), api.scenarios()])
+      if (version !== selectionVersion || get().pack?.pack_id !== packId) return
+      set({ scenarios: scenarios.filter(s => s.scenario_kind === 'population') })
+      const preferred = preferredPopulation(packId)
+      const candidates = scenarios.filter(s => s.scenario_kind === 'population' && s.pack_id === packId && s.population_id)
+        .sort((a, b) => Number(b.scenario_id === preferred) - Number(a.scenario_id === preferred) || b.created_at.localeCompare(a.created_at))
+      for (const candidate of candidates) {
+        let definition: PopulationDefinition
+        try { definition = await api.populationDefinition(candidate.population_id!) }
+        catch { continue }
+        if (version !== selectionVersion || get().pack?.pack_id !== packId) return
+        if (definition.population_id !== candidate.population_id || definition.spec.pack_id !== packId || definition.network_fingerprint !== get().pack?.network_fingerprint || !definition.spec.brains.length || definition.spec.brains.some(brain => brain.control_mode !== 'jiuwenswarm')) continue
+        await get().selectScenario(candidate.scenario_id)
+        return
+      }
+    } catch (error) {
+      if (version === selectionVersion) set({ error: `Native residents could not be loaded: ${String(error)}` })
+    }
   },
 
   async selectScenario(id) {
@@ -80,13 +121,19 @@ export const createPopulationSlice: StateCreator<State, [], [], PopulationState>
         if (version !== selectionVersion) return
         if (definition.population_id !== scenario.population_id) throw new Error('Population definition does not match the scenario.')
         set({ populationDefinition: definition, runs })
+        if (definition.spec.brains.length && definition.spec.brains.every(brain => brain.control_mode === 'jiuwenswarm')) rememberPopulation(scenario.pack_id, id)
       } else {
         const [plans, runs] = await Promise.all([api.plans(id), api.runs(id), api.demand(id)])
         if (version !== selectionVersion) return
         set({ plans, runs })
       }
       const saved = get().runs.filter(r => populationReplayReady(r) || r.status === 'completed')
-      if (saved.length) await get().openRun(saved[saved.length - 1].run_id)
+      const running = get().runs.find(runIsActive)
+      if (running) {
+        set({ primaryRunId: running.run_id })
+        usePopulationPlayback.getState().setFollowLive(true)
+        await get().openRun(running.run_id)
+      } else if (saved.length) await get().openRun(saved[saved.length - 1].run_id)
     } catch (error) {
       if (version === selectionVersion) set({ error: String(error) })
     }
@@ -103,7 +150,7 @@ export const createPopulationSlice: StateCreator<State, [], [], PopulationState>
 
   async createPopulation(spec) {
     if (get().building) return
-    const unavailable = populationUnavailableReason(get().populationStatus, get().populationStatusError)
+    const unavailable = populationDefinitionReason(get().populationStatus, get().populationStatusError)
     if (unavailable) { set({ error: unavailable }); return }
     if (spec.brains.some(b => b.control_mode !== 'jiuwenswarm')) { set({ error: 'Rules fixtures cannot be submitted as native population scenarios.' }); return }
     set({ building: `Defining ${spec.count} residents without inference`, error: null })
@@ -127,15 +174,23 @@ export const createPopulationSlice: StateCreator<State, [], [], PopulationState>
       await get().refreshPopulationStatus()
       const reason = populationUnavailableReason(get().populationStatus, get().populationStatusError) ?? populationScaleReason(get().populationStatus, definition.spec.count)
       if (reason) throw new Error(reason)
-      const key = pendingRequests.get(definition.population_id) ?? `population-${crypto.randomUUID()}`
-      pendingRequests.set(definition.population_id, key)
-      const run = await api.submitPopulationRun(definition.population_id, key)
+      usePopulationStimuli.getState().reset(definition.population_id)
+      const request = pendingRequests.get(definition.population_id) ?? { key: `population-${crypto.randomUUID()}`, stimuli: [...usePopulationStimuli.getState().pending] }
+      pendingRequests.set(definition.population_id, request)
+      const run = await api.submitPopulationRun(definition.population_id, request.key, request.stimuli)
       if (run.run_kind !== 'population' || run.population_id !== definition.population_id) throw new Error('Population API returned a run for a different population.')
       pendingRequests.delete(definition.population_id)
+      if (usePopulationStimuli.getState().populationId === definition.population_id) {
+        const sentIds = new Set(request.stimuli.map(stimulus => stimulus.stimulus_id))
+        const remaining = usePopulationStimuli.getState().pending.filter(stimulus => !sentIds.has(stimulus.stimulus_id))
+        if (!remaining.length) usePopulationStimuli.getState().clearPending()
+        else usePopulationStimuli.setState({ pending: remaining })
+      }
       if (get().scenarioId === scenarioId) {
         clock.pause()
         clock.seek(0)
-        set({ runs: [...get().runs.filter(r => r.run_id !== run.run_id), run], primaryRunId: null, selection: null })
+        usePopulationPlayback.getState().setFollowLive(true)
+        set({ runs: [...get().runs.filter(r => r.run_id !== run.run_id), run], primaryRunId: run.run_id, selection: null })
         await get().refreshRuns()
       }
     } catch (error) { set({ error: String(error) }) }
@@ -206,19 +261,23 @@ export const createPopulationSlice: StateCreator<State, [], [], PopulationState>
 
   async loadReplay(run, force = false) {
     const id = run.run_id, cached = get().replays[id]
-    if (run.run_kind === 'population' && !populationReplayReady(run)) return cached ?? null
-    if (cached && !force && !needsPopulationReplayRefresh(cached.bundle.run, run, Boolean(get().populationReplayDirty[id]))) return cached
+    const streaming = run.run_kind === 'population' && runIsActive(run)
+    if (cached && !streaming && !force && !needsPopulationReplayRefresh(cached.bundle.run, run, Boolean(get().populationReplayDirty[id]))) return cached
     const version = replayVersions.get(id) ?? 0, revision = populationRunRevision(run)
     const pending = replayLoads.get(id)
     if (pending?.version === version && pending.revision === revision) return pending.promise
     const token = {}, currentSelection = selectionVersion
     set({ loadingReplay: id })
-    const promise = api.bundle(run).then(bundle => {
+    const promise = (streaming ? api.populationSnapshot(run) : api.bundle(run)).then(bundle => {
+      if (!bundle) return cached ?? null
       const current = get().runs.find(r => r.run_id === id)
-      if ((replayVersions.get(id) ?? 0) !== version || (run.run_kind === 'population' && current && populationRunRevision(current) !== revision)) return null
+      if ((replayVersions.get(id) ?? 0) !== version || currentSelection !== selectionVersion || (run.run_kind === 'population' && current && !streaming && populationRunRevision(current) !== revision)) return null
       const rx = buildIndex(bundle)
       set({ replays: { ...get().replays, [id]: rx }, populationReplayDirty: { ...get().populationReplayDirty, [id]: false } })
-      if (get().primaryRunId === id && get().populationActive) { clock.setHorizon(rx.tMax); clock.setFrontier(rx.tMax) }
+      if (get().primaryRunId === id && get().populationActive) {
+        clock.setHorizon(rx.tMax); clock.setFrontier(rx.tMax)
+        if (streaming && usePopulationPlayback.getState().followLive) { clock.pause(); clock.seek(rx.tMax) }
+      }
       return rx
     }).catch(error => {
       if (currentSelection === selectionVersion && (replayVersions.get(id) ?? 0) === version) set({ error: `Recorded replay could not be refreshed: ${String(error)}` })
@@ -248,6 +307,7 @@ export const createPopulationSlice: StateCreator<State, [], [], PopulationState>
         if (run.run_kind === 'population' && runIsActive(run) && cached && !runIsActive(cached.bundle.run)) get().invalidatePopulationReplay(run.run_id)
       }
       await Promise.all(runs.filter(run => {
+        if (run.run_kind === 'population' && runIsActive(run) && get().primaryRunId === run.run_id) return true
         const cached = get().replays[run.run_id], dirty = Boolean(get().populationReplayDirty[run.run_id]), before = previous.get(run.run_id)
         return (cached || dirty || get().primaryRunId === run.run_id || (before && runIsActive(before))) && needsPopulationReplayRefresh(cached?.bundle.run, run, dirty)
       }).map(run => get().loadReplay(run)))

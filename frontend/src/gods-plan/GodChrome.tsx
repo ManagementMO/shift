@@ -82,7 +82,7 @@ export default function GodChrome({ activeTab, openTab = null, activeTool, timeL
         <form className="god-chrome__command-form" onSubmit={submitCommand} aria-label="City command" aria-busy={commandBusy}>
           <GlassSurface tone="dark" className="god-chrome__command-dock">
             <GodIcon name="sparkles" size={20} className="god-chrome__sparkles" />
-            <input className="god-chrome__command-input" type="text" aria-label="Tell the city what happens" placeholder="Tell the city what happens…" value={command} onChange={(event) => onCommandChange(event.target.value)} readOnly={commandBusy} autoComplete="off" spellCheck={false} />
+            <input className="god-chrome__command-input" type="text" aria-label="Tell the city what happens" placeholder={recordingControls ? 'Message the swarm, or set a temperature…' : 'Tell the city what happens…'} maxLength={400} value={command} onChange={(event) => onCommandChange(event.target.value)} readOnly={commandBusy} autoComplete="off" spellCheck={false} />
             <GlassIconButton icon="arrow-right" label={commandBusy ? 'Sending command' : 'Send command'} size={19} className="god-chrome__submit" type="submit" disabled={commandBusy || !command.trim()} />
           </GlassSurface>
         </form>

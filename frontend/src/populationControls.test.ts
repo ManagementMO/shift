@@ -24,10 +24,10 @@ describe('explicit native population controls', () => {
     expect(() => defaultPopulationSpec({ ...status(), models: [] })).toThrow(/model|brain/i)
   })
 
-  it('does not exceed the advertised or approved $20 budget and does not mutate public settings', () => {
+  it('preserves a reusable run ceiling within $20 without changing remaining session authority', () => {
     const available = status()
     available.budget.remaining_microdollars = 2_000_000
-    expect(defaultPopulationSpec(available, { maxCostUsd: 20 }).budget.max_cost_usd).toBe(2)
+    expect(defaultPopulationSpec(available, { maxCostUsd: 20 }).budget.max_cost_usd).toBe(20)
     expect(defaultPopulationSpec(status(), { maxCostUsd: 50 }).budget.max_cost_usd).toBe(20)
     expect(available.budget.remaining_microdollars).toBe(2_000_000)
     expect(() => defaultPopulationSpec(status(), { maxCostUsd: NaN })).toThrow(/budget/i)
@@ -41,7 +41,7 @@ describe('explicit native population controls', () => {
     expect(populationScaleReason({ ...parsed, initial_scale_gate: 300 }, 240)).toBeNull()
     const blocked = parsePopulationStatus({ ...status(), available: false, reason: 'Budget ledger unavailable', budget: { session_limit_microdollars: 20_000_000, blocked: true } })
     expect(populationUnavailableReason(blocked)).toMatch(/ledger unavailable/)
-    expect(defaultPopulationSpec(blocked).budget.max_cost_usd).toBe(0)
+    expect(defaultPopulationSpec(blocked).budget.max_cost_usd).toBe(5)
   })
 
   it('saves deterministic definitions with selected reviewed brains even after the inference budget is exhausted', () => {
@@ -50,7 +50,7 @@ describe('explicit native population controls', () => {
     expect(populationUnavailableReason(blocked)).toContain('Budget exhausted')
     const spec = defaultPopulationSpec(blocked, { modelIds: [openai.model_id] })
     expect(spec.brains).toEqual([openai])
-    expect(spec.budget.max_cost_usd).toBe(0)
+    expect(spec.budget.max_cost_usd).toBe(5)
     expect(() => defaultPopulationSpec(status(), { modelIds: [] })).toThrow(/at least one/)
     expect(() => defaultPopulationSpec(status(), { modelIds: ['unconfigured-model'] })).toThrow(/configured/)
     expect(populationCountLimit(null)).toBe(20)

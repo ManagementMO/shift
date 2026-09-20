@@ -1,4 +1,10 @@
 import type { SimulationRun } from './types'
+import { create } from 'zustand'
+
+/** Viewing the newest published boundary never starts or resumes cognition. */
+export const usePopulationPlayback = create<{ followLive: boolean; setFollowLive: (followLive: boolean) => void }>(set => ({
+  followLive: true, setFollowLive: followLive => set({ followLive }),
+}))
 
 export type PopulationRunAction =
   | { action: 'pause' | 'resume' | 'stop'; phase: 'submitting' | 'requested' }
