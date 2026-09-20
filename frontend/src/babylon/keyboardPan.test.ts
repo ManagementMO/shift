@@ -106,7 +106,22 @@ describe('WASD travel', () => {
     camera.apply({ target: [2900, 0], radius: 3000, heading: 90, elevation: 45 })
     pan.press('KeyW')
     hold(pan, 3)
-    expect(camera.pose.target[0]).toBe(bounds[2])
+    expect(camera.eye.x).toBeCloseTo(bounds[2])
+  })
+
+  it('does not jump when looking beyond the boundary and then moving vertically', () => {
+    const { cam, camera, pan } = setup()
+    camera.apply({ target: [1900, 0], radius: 1000, heading: 270, elevation: 20 })
+    cam.inputs.attached.fixedEyeLook.attachControl()
+    cam.movement.rotationAccumulatedPixels.set(Math.PI, 0, 0)
+    cam._checkInputs()
+    expect(camera.pose.target[0]).toBeGreaterThan(bounds[2])
+    const eye = camera.eye
+    pan.press('KeyE')
+    hold(pan, 0.2)
+    expect(camera.eye.x).toBeCloseTo(eye.x)
+    expect(camera.eye.z).toBeCloseTo(eye.z)
+    expect(camera.eye.y).toBeGreaterThan(eye.y)
   })
 
   it('raises with E and lowers with Q without rotating or zooming', () => {
@@ -115,7 +130,7 @@ describe('WASD travel', () => {
     const initial = camera.pose
     pan.press('KeyE')
     hold(pan, 1)
-    expect(camera.pose.y).toBeGreaterThan(initial.y! + 500)
+    expect(camera.pose.y).toBeGreaterThan(initial.y! + PAN_SPEED * 1000 * 0.7)
     expect(camera.pose.target).toEqual(initial.target)
     expect(camera.pose.radius).toBe(initial.radius)
     expect(camera.pose.heading).toBe(initial.heading)
@@ -124,7 +139,7 @@ describe('WASD travel', () => {
     const elevated = camera.pose.y!
     pan.press('KeyQ')
     hold(pan, 1)
-    expect(camera.pose.y).toBeLessThan(elevated - 500)
+    expect(camera.pose.y).toBeLessThan(elevated - PAN_SPEED * 1000 * 0.7)
   })
 
   it('keeps the camera above the ground while descending', () => {

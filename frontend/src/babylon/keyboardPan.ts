@@ -19,7 +19,7 @@ export const PAN_KEYS: Record<string, readonly [number, number]> = {
   KeyD: [1, 0],
 }
 /** Ground metres per second per metre of orbit radius. */
-export const PAN_SPEED = 0.9
+export const PAN_SPEED = 0.35
 /** Shift multiplies the speed. */
 export const PAN_BOOST = 2.5
 /** How quickly velocity settles on the held direction (1/s). */
@@ -110,6 +110,7 @@ export class KeyboardPan {
   press(code: string): void {
     if ((!PAN_KEYS[code] && !VERTICAL_KEYS[code]) || !this.enabled || this.camera.fixed) return
     this.pressed.add(code)
+    this.camera.mode = 'city'
     if (this.camera.flying) this.camera.cancel()
   }
 
@@ -146,14 +147,8 @@ export class KeyboardPan {
       return
     }
     if (!this.moving) return
-    const [x0, z0, x1, z1] = this.bounds
-    const t = cam.cam.target
-    t.x = Math.max(x0, Math.min(x1, t.x + this.vx * dt))
-    t.z = Math.max(z0, Math.min(z1, t.z + this.vz * dt))
-    const horizontal = cam.cam.radius * Math.sin(cam.cam.beta)
-    const eyeX = t.x + Math.cos(cam.cam.alpha) * horizontal, eyeZ = t.z + Math.sin(cam.cam.alpha) * horizontal
-    const offsetY = cam.cam.radius * Math.cos(cam.cam.beta)
-    t.y = Math.max(this.groundHeight(eyeX, eyeZ) + 3 - offsetY, Math.min(12000 - offsetY, t.y + this.vy * dt))
+    cam.cam.target.addInPlaceFromFloats(this.vx * dt, this.vy * dt, this.vz * dt)
+    cam.constrainEye(this.bounds, this.groundHeight)
   }
 
   dispose(): void {
