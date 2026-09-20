@@ -35,7 +35,7 @@ from cityshift.providers import (
 
 SESSION_CAP_MICRODOLLARS = 20_000_000
 DEFAULT_LEDGER_PATH = Path(__file__).resolve().parents[2] / "var" / "population" / "model-budget.sqlite3"
-MAX_REQUEST_BYTES = 65_536
+MAX_REQUEST_BYTES = 131_072
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_CATALOG_BYTES = 8_388_608
 MAX_KEY_METADATA_BYTES = 32_768
@@ -810,7 +810,12 @@ def _normalize_request(scope: RunScope, body: dict[str, Any]) -> tuple[dict[str,
     if (not _integer(output, 1, min(scope.limits.max_output_tokens, model.max_completion_tokens))
             or any(item != output or type(item) is not int for item in outputs)):
         raise GatewayError("invalid_request")
-    payload_estimate = 4 * len(encoded) + 4096 + 256 * len(body["messages"]) + 1024 * len(declared_tools)
+    # Count every ASCII-escaped JSON byte as a token, plus bounded framing
+    # overhead. Escaping already expands Unicode; multiplying bytes by four
+    # again rejected ordinary native retry histories well below context size.
+    # Billing still reserves the entire model context, independently of this
+    # admission estimate, and verifies actual provider usage at settlement.
+    payload_estimate = len(encoded) + 4096 + 256 * len(body["messages"]) + 1024 * len(declared_tools)
     if payload_estimate + output > model.context_length:
         raise GatewayError("payload_too_large")
     input_tokens = max(model.context_length, payload_estimate)

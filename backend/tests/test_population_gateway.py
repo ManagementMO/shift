@@ -15,6 +15,7 @@ from fastapi import FastAPI
 
 from cityshift.agents.population_gateway import (
     DEFAULT_LEDGER_PATH,
+    MAX_REQUEST_BYTES,
     SESSION_CAP_MICRODOLLARS,
     GatewayError,
     PopulationGateway,
@@ -609,7 +610,7 @@ async def test_rate_tokens_do_not_refund_early_and_expire_by_window(tmp_path: Pa
     {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}]},
     {"tools": [{"type": "web_search"}]},
     {"tools": [{"type": "function", "function": {"name": "shell", "parameters": {}}}]},
-    {"messages": [{"role": "user", "content": "x" * 65537}]},
+    {"messages": [{"role": "user", "content": "x" * (MAX_REQUEST_BYTES + 1)}]},
 ])
 async def test_unsafe_or_unbounded_requests_rejected_without_network(setup_gateway: Any, extra: dict) -> None:
     gateway, fake = setup_gateway
@@ -629,6 +630,85 @@ async def test_output_cap_default_and_tool_formatting_in_ceiling(setup_gateway: 
     await gateway.complete(LOCAL_SECRET, body)
     sent = json.loads(fake.posts[0].content)
     assert sent["max_tokens"] == 512 and sent["tools"] == tools
+
+
+@pytest.mark.parametrize("content,copies", [("x" * 17971, 3), ("x" * 102400, 1), ("界" * 17000, 1)])
+async def test_native_retry_payloads_fit_without_reducing_full_context_reservation(tmp_path, content, copies):
+    fake = FakeOpenRouter()
+    model = "anthropic/claude-haiku-4.5"
+    fake.output = completion(model=model, provider=POPULATION_MODELS[model].endpoint_provider)
+    gateway = gateway_at(tmp_path / "payload.sqlite3", fake)
+    registration = gateway.register_run("payload-run", [model], limits=RunLimits(max_output_tokens=1024))
+    small = gateway.quote(registration.token, request_body(model=model))
+    body = request_body(model=model, messages=[{"role": "user", "content": content} for _ in range(copies)])
+    encoded = json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    assert 54000 < len(encoded) < MAX_REQUEST_BYTES
+    quote = gateway.quote(registration.token, body)
+    assert quote.input_tokens == small.input_tokens == POPULATION_MODELS[model].context_length
+    assert quote.ceiling_microdollars == small.ceiling_microdollars
+    # Exercise both HTTP byte guards and model admission with a mock provider;
+    # this proves request handling, not native or paid model execution.
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_population_gateway] = lambda: gateway
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+        response = await client.post("/api/population/model/v1/chat/completions", content=encoded,
+            headers={"Authorization": f"Bearer {registration.token}", "Content-Type": "application/json"})
+    assert response.status_code == 200
+    assert len(fake.posts) == 1
+    assert json.loads(fake.posts[0].content)["messages"] == body["messages"]
+
+
+def test_native_payload_byte_boundary_and_legacy_run_limit_are_preserved(tmp_path):
+    fake = FakeOpenRouter()
+    gateway = gateway_at(tmp_path / "payload.sqlite3", fake)
+    model = "anthropic/claude-haiku-4.5"
+    token = gateway.register_run("new-payload-run", [model]).token
+    body = request_body(model=model, messages=[{"role": "user", "content": ""}])
+    overhead = len(json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode())
+    body["messages"][0]["content"] = "x" * (MAX_REQUEST_BYTES - overhead)
+    assert gateway.quote(token, body).input_tokens == POPULATION_MODELS[model].context_length
+    body["messages"][0]["content"] += "x"
+    with pytest.raises(GatewayError) as oversized:
+        gateway.quote(token, body)
+    assert oversized.value.code == "payload_too_large"
+
+    legacy = gateway.register_run("legacy-payload-run", [model], limits=RunLimits(max_request_bytes=65536))
+    with pytest.raises(GatewayError) as legacy_limit:
+        gateway.quote(legacy.token, request_body(model=model, messages=[{"role": "user", "content": "x" * 70000}]))
+    assert legacy_limit.value.code == "payload_too_large"
+    with pytest.raises(GatewayError) as immutable:
+        gateway.register_run("legacy-payload-run", [model], token=legacy.token)
+    assert immutable.value.code == "run_conflict"
+    assert not fake.gets and not fake.posts
+
+
+def test_context_ceiling_includes_message_and_tool_framing_below_byte_limit(tmp_path):
+    fake = FakeOpenRouter()
+    gateway = gateway_at(tmp_path / "payload.sqlite3", fake)
+    model = "anthropic/claude-haiku-4.5"
+    tool_names = [f"lookup_{index}" for index in range(64)]
+    registration = gateway.register_run("framing-run", [model], allowed_tools=tool_names)
+    body = request_body(model=model, messages=[{"role": "user", "content": "x" * 750} for _ in range(128)],
+        tools=[{"type": "function", "function": {"name": name, "parameters": {}}} for name in tool_names])
+    encoded = json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    assert len(encoded) < MAX_REQUEST_BYTES
+    assert len(encoded) + 4096 + 256 * 128 + 1024 * 64 > POPULATION_MODELS[model].context_length
+    with pytest.raises(GatewayError) as too_much_context:
+        gateway.quote(registration.token, body)
+    assert too_much_context.value.code == "payload_too_large"
+    assert not fake.gets and not fake.posts
+
+
+async def test_large_payload_cannot_bypass_per_run_reservation_ceiling(tmp_path):
+    fake = FakeOpenRouter()
+    gateway = gateway_at(tmp_path / "payload.sqlite3", fake)
+    model = "anthropic/claude-haiku-4.5"
+    token = gateway.register_run("limited-payload-run", [model], limits=RunLimits(max_cost_microdollars=1)).token
+    with pytest.raises(GatewayError) as exhausted:
+        await gateway.complete(token, request_body(model=model, messages=[{"role": "user", "content": "x" * 102400}]))
+    assert exhausted.value.code == "run_limit_exceeded"
+    assert not fake.posts
 
 
 @pytest.mark.asyncio
@@ -667,7 +747,7 @@ async def test_router_auth_size_errors_and_sse_tool_deltas(setup_gateway: Any) -
         response = await client.get(prefix + "/models", headers=headers)
         assert [entry["id"] for entry in response.json()["data"]] == [MODEL]
         response = await client.post(prefix + "/chat/completions", headers=headers,
-                                    content=b"x" * 65537)
+                                    content=b"x" * (MAX_REQUEST_BYTES + 1))
         assert response.status_code == 413
         response = await client.post(prefix + "/chat/completions", headers=headers,
                                     content=b'{"messages":NaN}')
