@@ -44,6 +44,8 @@
 .gp-shell .gp-selection-bubble .bubble { background: linear-gradient(125deg,#accfed26,#143b56a6); backdrop-filter: blur(20px) saturate(1.3); border: 1px solid #e7f6ff69; border-radius: 22px; color: #edf7ff; padding: 20px; box-shadow: 0 16px 42px #09233f38,inset 0 1px 1px #ffffff6b; font: inherit; }
 .gp-shell .gp-selection-bubble .dim { color: #bbd7e9; }
 .gp-shell .gp-selection-bubble button { border-radius: 13px; background: #e5f3ff14; color: #f2f8ff; padding: 7px 12px; }
+/* the card's close glyph is text: no button padding, so it sits in the exact centre of its square */
+.gp-shell .gp-selection-bubble .iconbtn, .gp-shell .gp-legacy-inline .iconbtn, .gp-shell .gp-legacy-panel .iconbtn { display: grid; place-items: center; padding: 0; line-height: 1; border-radius: 50%; }
 .gp-shell .gp-legacy-panel .drawer { position: relative; inset: auto; width: 100%; max-height: none; border: 0; background: none; box-shadow: none; backdrop-filter: none; color: #f0f8ff; padding: 0; }
 .gp-shell .gp-legacy-panel .drawer-head { padding: 0 0 17px; border-color: #daefff26; font-size: 22px; }
 .gp-shell .gp-legacy-panel .drawer-head:not(:first-child) { padding-top: 20px; }
@@ -57,6 +59,8 @@
 .gp-shell .gp-legacy-inline .toolpanel { position: relative; inset: auto; transform: none; width: 100%; max-height: none; border: 0; background: none; box-shadow: none; backdrop-filter: none; padding: 0; }
 .gp-shell .gp-legacy-inline .toolpanel-head { display: none; }
 .gp-shell .gp-legacy-inline .tool { display: grid; gap: 13px; padding: 5px 0; }
+/* the tool lists (District / Corridor, the streets) are glass buttons: give them room to read as separate rows */
+.gp-shell .gp-legacy-inline .list { gap: 8px; max-height: none; }
 .gp-shell .gp-legacy-inline label { color: #c9dfef; }
 .gp-shell .gp-legacy-inline select,.gp-shell .gp-legacy-inline input:not([type=checkbox]):not([type=range]),.gp-shell .gp-legacy-inline textarea { width: 100%; background: #13374f4d; color: #f0f7ff; border: 1px solid #d9efff40; border-radius: 12px; padding: 10px 12px; margin-top: 7px; font: inherit; }
 .gp-shell select option { background: #315b78; color: white; }
@@ -234,3 +238,34 @@
   .gp-shell .gp-laser-targeting .gp-laser-actions > button:first-child, .gp-shell .gp-laser-targeting > small { display: none; }
   .gp-shell .gp-laser-targeting > button, .gp-shell .gp-laser-targeting .gp-laser-actions button { min-width: 0; min-height: 36px; white-space: normal; line-height: 1.3; }
 }
+
+/* city log: announcements in the voice of the department that would issue them, newest first */
+.gp-shell .gp-city-log { display: grid; gap: 14px; align-content: start; }
+.gp-shell .gp-city-log > header { display: flex; align-items: center; gap: 11px; }
+.gp-shell .gp-city-log > header > button { margin-left: auto; }
+.gp-shell .gp-log-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.gp-shell .gp-log-entry { display: flex; gap: 12px; padding: 12px 13px; border: 1px solid #def1ff26; border-radius: 14px; background: #cce7fa12; }
+.gp-shell .gp-log-entry.is-visual { border-style: dashed; }
+.gp-shell .gp-log-entry.is-breaking { border-color: #ff6b6b66; background: linear-gradient(90deg, #ff4d4d1f, #cce7fa12 60%); }
+.gp-shell .gp-log-entry.is-alert { border-color: #ffb54780; background: linear-gradient(90deg, #ff9f1c24, #cce7fa12 60%); }
+.gp-shell .gp-log-kind { padding: 0 7px; border-radius: 8px; font-weight: 700; letter-spacing: .08em; }
+.gp-shell .gp-log-kind-breaking { background: #ff4d4d; color: #fff; }
+.gp-shell .gp-log-kind-alert { background: #ffb547; color: #2b1d00; }
+.gp-shell .gp-log-icon-citynews { color: #ff8a8a; } .gp-shell .gp-log-icon-alertready { color: #ffcf7a; }
+.gp-shell .gp-log-icon { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; border-radius: 10px; background: #d2ecff1f; color: #e8f4ff; }
+.gp-shell .gp-log-icon-roads { color: #ffb36b; } .gp-shell .gp-log-icon-emergency { color: #ff8d7a; } .gp-shell .gp-log-icon-weather { color: #bfe3ff; } .gp-shell .gp-log-icon-planning { color: #c9f0c1; } .gp-shell .gp-log-icon-people { color: #f3d7ff; } .gp-shell .gp-log-icon-transit { color: #9fd0ff; }
+.gp-shell .gp-log-copy { display: grid; gap: 3px; min-width: 0; }
+.gp-shell .gp-log-meta { display: flex; gap: 8px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: #b0cadd; }
+.gp-shell .gp-log-meta time { font-variant-numeric: tabular-nums; color: #dbeefc; }
+.gp-shell .gp-log-visual { padding: 0 6px; border-radius: 8px; background: #ffffff1c; }
+.gp-shell .gp-log-copy b { font-size: 14px; font-weight: 600; }
+.gp-shell .gp-log-copy p { margin: 0; font-size: 13px; line-height: 1.5; color: #c6dceb; }
+
+/* The prompt and resident playback share one bottom-centred stack in normal flow. */
+.gp-shell .gp-population-dock { width: 100%; min-width: 0; pointer-events: auto; }
+.gp-shell .gp-population-dock .population-dock { background: linear-gradient(145deg, #547a96d9, #183e59e6); border: 1px solid #dcf1ff70; border-radius: 15px; backdrop-filter: blur(18px) saturate(1.2); box-shadow: inset 0 1px 1px #f0f9ff33, 0 5px 20px #0f2e4826; color: #f5faff; }
+.gp-shell[data-population-active] .god-chrome__dock { display: none; }
+.gp-shell[data-population-active] { --gp-resident-panel-bottom: calc(var(--gp-edge) + 232px); }
+.gp-shell[data-population-active] .gp-utility-panel { max-height: calc(100dvh - 126px - var(--gp-resident-panel-bottom)); }
+.gp-shell .resident-details { position: absolute; top: 126px; right: 22px; bottom: 96px; margin: 0; width: min(420px, calc(100vw - 132px)); z-index: 56; pointer-events: auto; }
+.gp-shell[data-population-active] .resident-details { bottom: var(--gp-resident-panel-bottom); }

@@ -2,16 +2,23 @@ import { useCallback, useEffect, useRef } from 'react'
 import '@babylonjs/core/Culling/ray'
 
 import type { LiveChannel } from '../live/channel'
+import type { ReplayIndex } from '../replay'
+import { selectionEntityId } from '../selection'
 import { live, liveClosuresAt } from '../live/session'
 import { useStore, type Selection } from '../store'
 import { useGodVisuals } from '../gods-plan/state'
+import { applyNow } from '../live/session'
+import { weatherTrackFor, WEATHER_VISUALS, type HazardTrack as WeatherTrack } from '../weather'
 import type { Restriction } from '../types'
 import { corridorPose, currentPose, districtPose } from '../world/camera'
 import DevelopmentMarkers from '../world/DevelopmentMarkers'
 import { clock } from '../world/playback'
 import { cameraTo, registerMap } from '../world/registry'
 import type { BuildingIndex } from './buildingIndex'
+import { useDisplay } from './display'
+import { watchFrameRate } from './adaptiveQuality'
 import { DevelopmentOverlay } from './developments'
+import { guideTrack, HazardEffects } from './hazardEffects'
 import { BabylonSyncMap } from './mapAdapter'
 import { CORRIDOR_PICK_PX, NavLabels, NavOverlay, type NavMode, type NavTarget } from './navigation'
 import { Overlay } from './overlay'
@@ -29,11 +36,17 @@ type Target = { kind: Kind | 'stop' | 'incident' | 'district' | 'corridor' | 'de
 
 /** The ground part of a target (what `NavOverlay` draws); null for replayed entities and developments (drawn by `DevelopmentOverlay`). */
 function ground(t: Target): NavTarget {
-  return t && t.kind !== 'bus' && t.kind !== 'car' && t.kind !== 'person' && t.kind !== 'development' ? { kind: t.kind, id: t.id, name: t.name } : null
+  if (!t) return null
+  switch (t.kind) {
+    case 'stop': case 'incident': case 'district': case 'corridor': case 'building':
+      return { kind: t.kind, id: t.id, name: t.name }
+    default: return null
+  }
 }
 
 /** The closures standing in the live city at sim time `t`, named after the street they cover when there is one. */
 function closuresAt(t: number): Restriction[] {
+  if (useStore.getState().populationActive) return []
   const corridors = useStore.getState().corridors
   return liveClosuresAt(live.session, t, (edges) => Object.values(corridors).find((c) => c.edge_ids.every((e) => edges.includes(e)))?.label ?? null)
 }
@@ -99,7 +112,18 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
       const buildings = ws.buildings
       const nav = new NavOverlay(ws.scene, ws.world, ws.roads, buildings)
       const streets = new RoadIndex(ws.world, (r) => r.allow.includes('car') || r.allow.includes('bus'))
+      // rain / storm / fire / flood incidents of the live city, plus the cloud following the cursor while one is aimed
+      const weather = new HazardEffects(ws.scene, ws.frame)
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      const animator = ws.scene.onBeforeRenderObservable.add(() => {
+        if (!reducedMotion) weather.animate(Math.min(ws.engine.getDeltaTime(), 100) / 1000)
+      })
       const unregister = registerMap(side, map)
+      // HD that this machine cannot hold (sub-28 fps once the city is on screen) switches itself off, and stays off here
+      const offFps = side === 'solo' ? watchFrameRate(ws, () => activeRef.current, () => useDisplay.getState().sharp, () => {
+        useDisplay.getState().set({ sharp: false })
+        useStore.getState().setError('HD rendering turned off: this device could not hold the frame rate. Turn it back on in Settings if you prefer.')
+      }) : () => {}
       if (side !== 'left') {
         // a development branch that loaded before any map was registered still gets its framing
         const pending = useStore.getState().pendingDevelopmentFocus
@@ -183,6 +207,12 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
       const onMove = (e: PointerEvent): void => {
         if (useGodVisuals.getState().armed) return
         last = local(e)
+        if (useGodVisuals.getState().weather) {
+          const g = map.unprojectGround(last.x, last.y)
+          useGodVisuals.getState().setWeatherAt(g ? ws.frame.worldToLonLat(g[0], g[1]) : null)
+          canvas.style.cursor = 'crosshair'
+          return
+        }
         if (down) {
           if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > DRAG_PX) {
             if (hover) applyHover(null)
@@ -207,6 +237,19 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         if (!down) return
         const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y)
         down = null
+        const aim = useGodVisuals.getState().weather
+        if (aim) {
+          // casting a weather / fire event: one click posts the live incident where the cloud is
+          if (moved > DRAG_PX) return
+          const p = local(e)
+          const g = map.unprojectGround(p.x, p.y)
+          if (!g) return
+          const [lon, lat] = ws.frame.worldToLonLat(g[0], g[1])
+          useGodVisuals.getState().setWeather(null)
+          canvas.style.cursor = ''
+          void applyNow({ kind: 'incident', hazard: aim.hazard, lon, lat, radius_m: Math.round(aim.radius_m), duration_s: Math.round(aim.duration_s), label: aim.label || null })
+          return
+        }
         const p = local(e)
         if (moved > DRAG_PX) {
           if (!raf) raf = requestAnimationFrame(refreshHover)
@@ -276,21 +319,33 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
 
       // --- store + live session -> scene
       let attached: LiveChannel | null | undefined
+      let residentReplay: ReplayIndex | null = null
+      let populationActive = false
       let closureKey = ''
       let corridors: unknown = null
+      const syncSelection = (): void => {
+        const selection = useStore.getState().selection
+        ws.traffic.selectedId = residentReplay ? selectionEntityId(residentReplay, selection, clock.t)
+          : selection && ['bus', 'car', 'person'].includes(selection.kind) ? selection.id : null
+        ws.traffic.dimOthers = !populationActive && selection?.kind === 'person'
+      }
       const sync = (): void => {
         const s = useStore.getState()
-        const channel = live.getSnapshot().primary
-        if (attached !== channel) {
+        const channel = s.populationActive ? null : live.getSnapshot().primary
+        const replay = s.populationActive && s.primaryRunId ? s.replays[s.primaryRunId] ?? null : null
+        if (attached !== channel || residentReplay !== replay || populationActive !== s.populationActive) {
           attached = channel
+          residentReplay = replay
+          populationActive = s.populationActive
           // frames from another city's network would put people on the wrong streets
-          const compatible = !channel || channel.state.network_fingerprint === ws.world.network_fingerprint
-          ws.traffic.setLiveSource(compatible ? channel : null)
-          if (channel && !compatible) s.setError('This recording uses a different city network. Open its matching city pack.')
+          const fingerprint = populationActive ? replay?.population?.definition.network_fingerprint : channel?.state.network_fingerprint
+          const compatible = !fingerprint || fingerprint === ws.world.network_fingerprint
+          if (populationActive) ws.traffic.setReplay(compatible ? replay : null)
+          else ws.traffic.setLiveSource(compatible ? channel : null)
+          if (!compatible) s.setError('This recording uses a different city network. Open its matching city pack.')
         }
         const sel = s.selection
-        ws.traffic.selectedId = sel && (sel.kind === 'bus' || sel.kind === 'car' || sel.kind === 'person') ? sel.id : null
-        ws.traffic.dimOthers = sel?.kind === 'person'
+        syncSelection()
         const closures = closuresAt(clock.t)
         const key = closures.map((r) => `${r.restriction_id}:${r.edge_ids.length}`).join('|')
         if (key !== closureKey) {
@@ -311,7 +366,7 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
           if (last && !raf) raf = requestAnimationFrame(refreshHover)
         }
         nav.setSelected(selectedGround(sel, nav, buildings))
-        marks(ws, overlay, developments, clock.t, side)
+        marks(ws, overlay, developments, weather, clock.t, side)
       }
       ws.orbital.onImpact = () => { useStore.getState().select(null); applyHover(null); sync() }
       ws.orbital.onComplete = (id, impact) => useGodVisuals.getState().completeLaser(id, impact)
@@ -320,7 +375,8 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
       ws.simT = clock.t
       const offFrame = clock.onFrame((t) => {
         ws.simT = t
-        marks(ws, overlay, developments, t, side)
+        syncSelection()
+        marks(ws, overlay, developments, weather, t, side)
       })
       const unsub = useStore.subscribe(sync)
       const unsubLive = live.subscribe(sync)
@@ -343,10 +399,13 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
         unsub()
         unsubLive()
         unsubVisuals()
+        offFps()
         offFrame()
         unregister()
         nav.dispose()
         developments.dispose()
+        ws.scene.onBeforeRenderObservable.remove(animator)
+        weather.dispose()
         overlay.dispose()
         map.dispose()
         syncRef.current = () => {}
@@ -368,8 +427,14 @@ export default function WorldBabylon({ side, active = true, onWorldReady, onWorl
 }
 
 /** Standing closures, the tool's aim, the focused closure and the developments of the live city at sim time `t`. */
-function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverlay, t: number, side: string): void {
+function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverlay, weather: HazardEffects, t: number, side: string): void {
   const s = useStore.getState()
+  if (s.populationActive) {
+    overlay.set({ closed: [], ghost: [], focus: [], ghostStops: [] })
+    developments.set({ developments: [], draft: null, placed: false, ghostPosition: null, invalidDraft: false, focusedId: null, zones: [], t })
+    ws.storm.setHazards([])
+    return
+  }
   const view = live.getSnapshot()
   const savedDevelopments = view.primary?.state.developments ?? []
   ws.orbital.setStrikes(side === 'left' ? [] : useGodVisuals.getState().lasers.map(event => event.strike), savedDevelopments)
@@ -387,4 +452,22 @@ function marks(ws: WorldScene, overlay: Overlay, developments: DevelopmentOverla
     ghostPosition: draft ? s.developmentPlaced ? draft.position : s.developmentHover : null, invalidDraft: !!s.developmentError && s.developmentPlaced,
     focusedId: s.selection?.kind === 'development' ? s.selection.id : null, zones: s.pack?.zones ?? [], t })
   ws.storm.setHazards([...(s.ghost?.hazard ? [s.ghost.hazard] : []), ...(side === 'left' ? [] : useGodVisuals.getState().events.map(event => event.track))])
+  weather.set(weatherTracks(ws, t), t, useGodVisuals.getState().weather ? 'weather-guide' : null)
+}
+
+/** Weather / fire visuals for the live incidents in their windows, plus the muted guide cloud where one is being aimed. */
+function weatherTracks(ws: WorldScene, t: number): WeatherTrack[] {
+  const tracks: WeatherTrack[] = []
+  for (const incident of live.session?.incidents ?? []) {
+    if (!(incident.hazard in WEATHER_VISUALS) || t < incident.start_s || t >= incident.end_s) continue
+    const track = weatherTrackFor(incident, ws.frame)
+    if (track) tracks.push(track)
+  }
+  const { weather, weatherAt } = useGodVisuals.getState()
+  if (weather && weatherAt) {
+    const kind = WEATHER_VISUALS[weather.hazard]
+    const guide = kind && guideTrack({ waypoints: [weatherAt], radius_m: weather.radius_m, start_s: t, end_s: t + weather.duration_s, modes: [], kind, label: weather.label }, ws.frame)
+    if (guide) tracks.push(guide)
+  }
+  return tracks
 }

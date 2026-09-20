@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=78.1.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cityshift-swarm-service"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "workswarm @ git+https://github.com/openJiuwen-ai/jiuwenswarm.git@70aa6715992d9cb2c3ec81ee35991d13747e5ce0",
+    "openjiuwen @ git+https://github.com/openJiuwen-ai/agent-core.git@ad0c9dfbbd577423cc60f73edffa0a4699cc53f9",
+    "fastapi>=0.115,<1",
+    "httpx>=0.28.1,<1",
+    "pydantic>=2.11,<3",
+    "pyyaml>=6.0.2,<7",
+    "uvicorn>=0.35,<1",
+]
+
+[project.scripts]
+cityshift-swarm = "cityshift_swarm.app:main"
+cityshift-swarm-prepare = "cityshift_swarm.prepare:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv]
+exclude-newer = "2026-09-12T00:00:00Z"
+override-dependencies = [
+    "openjiuwen @ git+https://github.com/openJiuwen-ai/agent-core.git@ad0c9dfbbd577423cc60f73edffa0a4699cc53f9",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.4,<10", "pytest-asyncio>=1.2,<2", "ruff>=0.12,<1"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]

@@ -1,6 +1,8 @@
-export type GodTab = 'live' | 'simulate' | 'agents' | 'events' | 'analytics'
+import type { ReactNode } from 'react'
+
+export type GodTab = 'live' | 'log' | 'agents' | 'events' | 'analytics'
 export type GodTool = 'select' | 'map' | 'people' | 'population' | 'events' | 'weather' | 'layers'
-export type GodEventKind = 'normal' | 'closure' | 'development' | 'tornado' | 'earthquake' | 'flood' | 'wildfire' | 'outage' | 'riot' | 'transit' | 'orbital' | 'custom'
+export type GodEventKind = 'normal' | 'closure' | 'development' | 'tornado' | 'rain' | 'storm' | 'earthquake' | 'flood' | 'wildfire' | 'outage' | 'riot' | 'transit' | 'orbital' | 'custom'
 export type GodEventCategory = 'all' | 'natural' | 'infrastructure' | 'social' | 'custom'
 export type GodIntensity = 'low' | 'medium' | 'high'
 
@@ -80,6 +82,8 @@ export interface GodHUDProps {
   is2D: boolean
   command: string
   commandBusy?: boolean
+  /** Recorded playback sits below the prompt in the shared bottom-centre stack. */
+  recordingControls?: ReactNode
   suggestions?: readonly string[]
   onTab: (tab: GodTab) => void
   onTool: (tool: GodTool) => void

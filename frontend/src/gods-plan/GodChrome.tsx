@@ -6,7 +6,7 @@ import './chrome.css'
 
 const tabs: { value: GodTab; label: string }[] = [
   { value: 'live', label: 'Live' },
-  { value: 'simulate', label: 'Simulate' },
+  { value: 'log', label: 'City log' },
   { value: 'agents', label: 'Agents' },
   { value: 'events', label: 'Events' },
   { value: 'analytics', label: 'Analytics' },
@@ -22,7 +22,7 @@ const tools: { value: GodTool; icon: string; label: string }[] = [
   { value: 'layers', icon: 'layers', label: 'Map layers' },
 ]
 
-export default function GodChrome({ activeTab, openTab = null, activeTool, timeLabel, weatherLabel, temperatureLabel, weatherNote, statusLabel, playing, speed, speeds = [], ready = true, command, commandBusy = false, onTab, onTool, onHome, onCommandChange, onCommand, onTogglePlay, onSpeed }: GodHUDProps) {
+export default function GodChrome({ activeTab, openTab = null, activeTool, timeLabel, weatherLabel, temperatureLabel, weatherNote, statusLabel, playing, speed, speeds = [], ready = true, command, commandBusy = false, recordingControls, onTab, onTool, onHome, onCommandChange, onCommand, onTogglePlay, onSpeed }: GodHUDProps) {
   const selectedTab = openTab ?? activeTab
 
   function submitCommand(event: FormEvent<HTMLFormElement>) {
@@ -86,6 +86,7 @@ export default function GodChrome({ activeTab, openTab = null, activeTool, timeL
             <GlassIconButton icon="arrow-right" label={commandBusy ? 'Sending command' : 'Send command'} size={19} className="god-chrome__submit" type="submit" disabled={commandBusy || !command.trim()} />
           </GlassSurface>
         </form>
+        {recordingControls && <div className="gp-population-dock">{recordingControls}</div>}
       </div>
     </div>
   )

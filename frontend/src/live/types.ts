@@ -12,13 +12,15 @@ export interface LiveConfig {
   car_share: number
 }
 
-export type Hazard = 'crash' | 'fire' | 'flood' | 'tornado' | 'gas_leak'
+export type Hazard = 'crash' | 'fire' | 'flood' | 'tornado' | 'gas_leak' | 'rain' | 'storm'
 export const HAZARDS: { id: Hazard; label: string; blocks: string; detail: string }[] = [
   { id: 'crash', label: 'Vehicle collision', blocks: 'Cars and buses', detail: 'Streets inside the footprint close to traffic. Sidewalks stay open.' },
   { id: 'fire', label: 'Building fire', blocks: 'Everyone', detail: 'People inside leave for the nearest street outside; informed walkers detour.' },
   { id: 'flood', label: 'Flash flood', blocks: 'Everyone', detail: 'Streets and sidewalks stay impassable until the water recedes.' },
   { id: 'tornado', label: 'Tornado', blocks: 'Everyone', detail: 'A wide warning radius: many witnesses, fast word of mouth.' },
   { id: 'gas_leak', label: 'Gas leak', blocks: 'Everyone', detail: 'The footprint is evacuated and closed to all traffic.' },
+  { id: 'rain', label: 'Heavy rain', blocks: 'Nothing', detail: 'Streets stay open under the downpour; people inside see it and pass it on.' },
+  { id: 'storm', label: 'Storm', blocks: 'Cars and buses', detail: 'Streets inside the footprint close to traffic until the storm passes. Sidewalks stay open.' },
 ]
 
 export type Intervention =

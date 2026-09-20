@@ -1,7 +1,8 @@
 // Replay indexing: every rendered position comes from a stored TraCI sample; gaps are never interpolated
 // across a recorded break (teleport) or beyond MAX_GAP_S.
 
-import type { EntityTrack, HazardTrack, PersonEvent, RunBundle } from './types'
+import type { EntityTrack, HazardTrack, MobilityBinding, PersonEvent, RunBundle } from './types'
+import { bindingsForEntityAt, buildPopulationIndex, populationTrackVisible, residentForEntityAt, stationaryPresenceAt, type PopulationIndex } from './population'
 
 export const MAX_GAP_S = 3
 const ACTIVITY_START_FRACTION = 0.25
@@ -10,7 +11,12 @@ export type PersonState = 'not_departed' | 'walking' | 'waiting' | 'riding' | 'a
 
 export type EntityAt = {
   id: string
-  kind: 'bus' | 'car' | 'person'
+  kind: EntityTrack['kind']
+  residentId?: string
+  vehicleClass?: string
+  ownership?: MobilityBinding['ownership']
+  measured?: boolean
+  anchorId?: string
   lon: number
   lat: number
   angle: number
@@ -27,6 +33,7 @@ export type TrackIndex = {
 
 export type ReplayIndex = {
   bundle: RunBundle
+  population: PopulationIndex | null
   tracks: Record<string, TrackIndex>
   personEvents: Record<string, PersonEvent[]>
   occupancy: Record<string, { times: number[]; values: number[] }>
@@ -48,9 +55,10 @@ function lowerBound(arr: number[], t: number): number {
 
 export function buildIndex(bundle: RunBundle): ReplayIndex {
   const tracks: Record<string, TrackIndex> = {}
+  const population = bundle.run.run_kind === 'population' && bundle.population ? buildPopulationIndex(bundle.population) : null
   const movingAtTime = new Map<number, number>()
   let peakMoving = 0
-  let tMax = bundle.run.metrics?.horizon_s ?? 0
+  let tMax = population?.artifact?.metrics.end_time_s ?? bundle.run.metrics?.horizon_s ?? 0
   for (const [id, tr] of Object.entries(bundle.tracks)) {
     const times = tr.samples.map((s) => {
       if (s[4] > 0.1) {
@@ -74,7 +82,7 @@ export function buildIndex(bundle: RunBundle): ReplayIndex {
   const threshold = Math.max(1, Math.ceil(peakMoving * ACTIVITY_START_FRACTION))
   let activityStart = Infinity
   for (const [t, moving] of movingAtTime) if (moving >= threshold && t < tMax) activityStart = Math.min(activityStart, t)
-  return { bundle, tracks, personEvents, occupancy: series(bundle.occupancy), stopQueue: series(bundle.stopQueue), tMax, activityStart: Number.isFinite(activityStart) ? activityStart : 0 }
+  return { bundle, population, tracks, personEvents, occupancy: series(bundle.occupancy), stopQueue: series(bundle.stopQueue), tMax, activityStart: Number.isFinite(activityStart) ? activityStart : 0 }
 }
 
 export function seriesAt(s: { times: number[]; values: number[] } | undefined, t: number): number | undefined {
@@ -137,7 +145,7 @@ export function trailAt(ix: TrackIndex, t: number, windowS: number): number[][][
   let cur: number[][] = []
   for (let i = start; i <= end; i++) {
     const s = ix.track.samples[i]
-    if (ix.breakSet.has(i) || (cur.length && s[0] - cur[cur.length - 1][0] > MAX_GAP_S)) {
+    if (ix.breakSet.has(i) || (cur.length && i > 0 && s[0] - ix.track.samples[i - 1][0] > MAX_GAP_S)) {
       if (cur.length > 1) segs.push(cur)
       cur = []
     }
@@ -152,16 +160,21 @@ export function entitiesAt(rx: ReplayIndex, t: number): EntityAt[] {
   const modes = rx.bundle.compile?.mode_assignment ?? {}
   for (const [id, ix] of Object.entries(rx.tracks)) {
     const s = positionAt(ix, t)
-    if (!s) continue
+    if (!s || (rx.population && !populationTrackVisible(rx.population, ix.track, t))) continue
     const kind = ix.track.kind
-    const e: EntityAt = { id, kind, lon: s[1], lat: s[2], angle: s[3], speed: s[4] }
+    const e: EntityAt = { id, kind, lon: s[1], lat: s[2], angle: s[3], speed: s[4], measured: true, vehicleClass: ix.track.vehicle_class ?? undefined }
+    if (rx.population) {
+      e.residentId = residentForEntityAt(rx.population, id, t) ?? undefined
+      e.ownership = bindingsForEntityAt(rx.population, id, t)[0]?.ownership
+    }
     if (kind === 'bus') e.occupancy = seriesAt(rx.occupancy[id], t) ?? 0
-    if (kind === 'person') {
+    if (kind === 'person' && rx.bundle.run.run_kind !== 'population') {
       e.state = personStateAt(rx.personEvents[id], t, modes[id])
       if (e.state === 'riding') continue // rendered as part of the bus; the person record still exists
     }
     out.push(e)
   }
+  if (rx.population) out.push(...stationaryPresenceAt(rx.population, t))
   return out
 }
 

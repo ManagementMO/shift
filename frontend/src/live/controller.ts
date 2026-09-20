@@ -167,13 +167,27 @@ export class LiveController {
   setSpeed(speed: number): void { this.clock.setSpeed(Math.max(1, Math.min(20, speed))); this.emit() }
   async liveEdge(): Promise<void> { await this.seek(this.recordedUntil()); this.followLive = true; await this.play() }
 
+  /**
+   * The second a change applies at. Following the live edge it is SUMO's own paused time (the pump keeps SUMO a few
+   * seconds ahead of the clock, and a change dated before SUMO's time would fork a branch and re-simulate it all);
+   * while scrubbing history it is the clock.
+   */
+  private applyTime(channel: LiveChannel): number {
+    if (this.followLive) {
+      const at = Math.max(0, Math.min(channel.state.time_s, channel.state.available_until_s))
+      this.clock.setFrontier(Math.max(this.clock.t, at))
+      this.clock.seek(at)
+      return at
+    }
+    return Math.floor(this.clock.t)
+  }
+
   async preview(intervention: Intervention): Promise<void> {
     if (!this.primary) return
     await this.action('Validating intervention', async () => {
       await this.pauseNow(true)
       const channel = this.primary!
-      this.clock.seek(Math.floor(this.clock.t))
-      const command: LiveCommand = { command_id: `cmd-${crypto.randomUUID()}`, at_s: this.clock.t, expected_revision: channel.state.revision, intervention }
+      const command: LiveCommand = { command_id: `cmd-${crypto.randomUUID()}`, at_s: this.applyTime(channel), expected_revision: channel.state.revision, intervention }
       this.draft = await liveApi.preview(channel.state.session_id, command)
       this.command = command
     })
@@ -185,8 +199,16 @@ export class LiveController {
     if (!this.primary || !this.command) return
     await this.action('Applying changes in SUMO', async () => {
       this.clock.pause()
-      const command = this.command!
-      const state = await liveApi.apply(this.primary!.state.session_id, command)
+      const channel = this.primary!
+      let command = this.command!
+      if (this.followLive) {
+        // SUMO may have stepped since the preview; re-date the command to its paused time so it applies in place
+        await liveApi.pause(channel.state.session_id)
+        await channel.refresh()
+        const at = this.applyTime(channel)
+        if (at !== command.at_s || channel.state.revision !== command.expected_revision) command = { ...command, at_s: at, expected_revision: channel.state.revision }
+      }
+      const state = await liveApi.apply(channel.state.session_id, command)
       await this.install(state, command.at_s)
       this.followLive = true
       this.autoPlay = true

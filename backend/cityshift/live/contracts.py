@@ -68,8 +68,11 @@ HAZARDS: dict[str, HazardProfile] = {
     "flood": HazardProfile("Flash flood", EVERYONE, 2.0, 3600, "Streets and sidewalks inside the footprint are impassable until the water recedes."),
     "tornado": HazardProfile("Tornado", EVERYONE, 4.0, 600, "A wide warning radius: everyone who sees it leaves the footprint and spreads the word."),
     "gas_leak": HazardProfile("Gas leak", EVERYONE, 3.0, 1200, "The footprint is evacuated and closed to all traffic."),
+    # weather: rain blocks nothing (people see it and hear about it; the visual is the point), a storm closes its streets
+    "rain": HazardProfile("Heavy rain", (), 1.5, 600, "Streets stay open under the downpour. People inside see it; the visual is illustrative."),
+    "storm": HazardProfile("Storm", ("passenger", "bus"), 2.0, 600, "Streets inside the footprint close to cars and buses until the storm passes. Sidewalks stay open."),
 }
-Hazard = Literal["crash", "fire", "flood", "tornado", "gas_leak"]
+Hazard = Literal["crash", "fire", "flood", "tornado", "gas_leak", "rain", "storm"]
 
 
 class IncidentChange(InputModel):
@@ -112,11 +115,28 @@ Intervention = Annotated[
 ]
 
 
+# Computed convenience fields that a stored incident command carries; they are derived, so a stored command must
+# validate again without them being treated as unknown inputs.
+COMPUTED_INTERVENTION_FIELDS = {"effective_duration_s", "alarm_radius_m"}
+
+
+def stored_command(data: dict) -> dict:
+    """A persisted command as `InterventionRequest` input: derived fields dropped, nothing else touched."""
+    intervention = data.get("intervention")
+    if isinstance(intervention, dict) and COMPUTED_INTERVENTION_FIELDS & intervention.keys():
+        return {**data, "intervention": {k: v for k, v in intervention.items() if k not in COMPUTED_INTERVENTION_FIELDS}}
+    return data
+
+
 class InterventionRequest(InputModel):
     command_id: Identifier
     at_s: int = Field(ge=0, le=14400, strict=True)
     expected_revision: int = Field(ge=0, strict=True)
     intervention: Intervention
+
+    def stored(self) -> dict:
+        """The persisted form: what `model_validate` accepts back, with the derived incident fields left out."""
+        return stored_command(self.model_dump(mode="json"))
 
     @model_validator(mode="after")
     def validate_window(self):

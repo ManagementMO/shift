@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,7 +18,9 @@ from pymongo.errors import PyMongoError
 
 from cityshift.api.live_router import close_registry
 from cityshift.api.live_router import router as live_router
-from cityshift.api.service import close_service, get_service
+from cityshift.api.population_gateway_router import router as population_gateway_router
+from cityshift.api.population_router import router as population_router
+from cityshift.api.service import PopulationScenarioError, close_service, get_service
 from cityshift.contracts import SCHEMA_VERSION, DemandSet, ScenarioSpec, ServicePlan
 from cityshift.domain.network import PACK_ROOT, load_pack, pack_dir
 from cityshift.domain.runs import RUN_ROOT
@@ -36,7 +39,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Concrete Consequences", version="0.1.0", lifespan=lifespan)
 app.include_router(live_router)
-app.add_middleware(GZipMiddleware, minimum_size=2048)
+# level 1: the 38 MB Toronto world compresses to 13.6 MB in ~0.2 s; the default level 9 spent ~3 s of CPU per request
+app.add_middleware(GZipMiddleware, minimum_size=2048, compresslevel=1)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -57,6 +61,8 @@ RUN_ARTIFACTS = {
     "demand": "demand.json",
     "scenario": "scenario.json",
     "tripinfo_summary": "tripinfo_summary.json",
+    "population": "population.json",
+    "native": "native.json",
 }
 PACK_ARTIFACTS = {"roads": "roads.geojson", "walk": "walk.geojson", "corridors": "corridors.json", "world": "world.json", "massing": "massing.json"}
 
@@ -72,18 +78,30 @@ async def storage_error(_request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=503, content={"detail": detail})
 
 
+# A failed storage probe is remembered briefly: every attempt to reach an unreachable Atlas waits out the 5 s server
+# selection timeout, and the shell polls /api/health.
+_storage_failure: tuple[float, dict] | None = None
+STORAGE_FAILURE_TTL_S = 30.0
+
+
 def storage_status() -> dict:
+    global _storage_failure
     backend = storage_backend()
     configured = backend == "json" or bool(os.environ.get("MONGODB_URI") and os.environ.get("MONGODB_DATABASE"))
+    if _storage_failure and time.monotonic() - _storage_failure[0] < STORAGE_FAILURE_TTL_S:
+        return dict(_storage_failure[1])
     try:
         store = get_service().store
+        _storage_failure = None
         return {"backend": store.backend, "configured": True, "available": store.ping()}
     except (StorageUnavailable, PyMongoError) as exc:
-        return {
+        status = {
             "backend": backend if backend in {"mongodb", "json"} else "invalid",
             "configured": configured, "available": False,
             "message": str(exc) if isinstance(exc, StorageUnavailable) else STORAGE_UNAVAILABLE_MESSAGE,
         }
+        _storage_failure = (time.monotonic(), status)
+        return status
 
 
 # --- health / providers -----------------------------------------------------------------------
@@ -306,6 +324,14 @@ def _include_optional_routers() -> None:
 
 
 _include_optional_routers()
+app.include_router(population_router)
+app.include_router(population_gateway_router)
+
+
+@app.exception_handler(PopulationScenarioError)
+def population_boundary_error(request: Request, exc: PopulationScenarioError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
 
 STATIC_DIR = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 if STATIC_DIR.exists():

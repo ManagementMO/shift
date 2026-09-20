@@ -20,6 +20,7 @@ from cityshift.contracts import (
     DemandSet,
     EvidenceBundle,
     Investigation,
+    PopulationDefinition,
     ScenarioSpec,
     ServicePlan,
     SimulationRun,
@@ -112,6 +113,16 @@ class MongoStore(Store):
             except (ValueError, KeyError):
                 continue
         return out
+
+    def put_population(self, population: PopulationDefinition) -> None:
+        self._population_key(population.population_id)
+        document = {"_id": population.population_id, "data": population.model_dump(mode="json")}
+        self._check_size(document)
+        try:
+            self.database.populations.insert_one(document)
+        except DuplicateKeyError:
+            if self.get_population(population.population_id) != population:
+                raise ValueError("population definitions are immutable") from None
 
     def put_scenario(self, s: ScenarioSpec, demand: DemandSet) -> None:
         if s.demand_id != demand.demand_id:
