@@ -9,7 +9,7 @@ from itertools import pairwise
 import traci
 
 from cityshift.domain.network import route
-from cityshift.live.contracts import RoadChange
+from cityshift.live.contracts import EVERYONE, RoadChange
 from cityshift.live.swarm import SwarmEvent
 
 VEHICLE_CLASSES = frozenset({"passenger", "bus"})
@@ -193,7 +193,8 @@ class LiveNetwork:
         if change.until_s is not None and change.until_s <= t:
             raise ValueError("closure must end after the playhead")
         if change.kind == "close_road":
-            self.closures.append(Closure(frozenset(edges), change.until_s, VEHICLE_CLASSES, True, "closure"))
+            # a closed street is closed to everyone: vehicles lose the lanes in SUMO, walkers are re-planned around it
+            self.closures.append(Closure(frozenset(edges), change.until_s, frozenset(EVERYONE), True, "closure"))
         else:
             kept = []
             for c in self.closures:
