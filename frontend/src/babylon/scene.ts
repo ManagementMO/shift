@@ -112,7 +112,7 @@ export class WorldScene {
 
     // --- city
     this.city = buildCity(scene, world, balanced ? 512 : 1024)
-    const streets = buildStreetDetails(scene, world)
+    const streets = buildStreetDetails(scene, world, this.city.treePositions)
     this.city.chunks.push(...streets)
     this.city.shadowCasters.push(...streets.filter(m => m.name.startsWith('street-trees-')))
     // Placeholder countryside past the pack: grassland hills, the lake carried on, main roads to the horizon.

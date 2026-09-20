@@ -6,6 +6,7 @@ import { Ray } from '@babylonjs/core/Culling/ray'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 
 import { Y } from './city'
+import { boundaryDistance, pointInRing, TREE_RADIUS } from './details'
 import { CityMaterials } from './materials'
 import { boxDistance, buildTerrain, countryTrees, farmland, farmParcels, horizonRoads, parcelKey, rollingNoise, terrainShape, terrainVertexData } from './terrain'
 import type { WorldData, WorldRoad } from './worldData'
@@ -115,6 +116,46 @@ describe('Placeholder countryside', () => {
       expect((p[b * 3] - p[a * 3]) * (p[c * 3 + 2] - p[a * 3 + 2]) - (p[c * 3] - p[a * 3]) * (p[b * 3 + 2] - p[a * 3 + 2])).toBeGreaterThan(0)
     }
     for (let i = 0; i < farm.lanes.positions.length; i += 3) expect(shape.inWater(farm.lanes.positions[i], farm.lanes.positions[i + 2])).toBe(false)
+  })
+
+  it('does not draw rural lanes on top of an arterial crossing', () => {
+    const shape = terrainShape(world())
+    const farm = farmland(shape, [{ shape: [-4500, 2500, 4500, 2500], width: 60 }], 0)
+    const b = farm.lanes
+    let area = 0
+    for (let i = 0; i < b.indices.length; i += 3) {
+      let p = b.indices.slice(i, i + 3).map(v => [b.positions[v * 3], b.positions[v * 3 + 2]])
+      for (const [axis, edge, sign] of [[0, -4500, 1], [0, 4500, -1], [1, 2470, 1], [1, 2530, -1]]) {
+        const out: number[][] = []
+        for (let j = 0; j < p.length; j++) {
+          const a = p[j], c = p[(j + 1) % p.length]
+          const da = (a[axis] - edge) * sign, dc = (c[axis] - edge) * sign
+          if (da >= 0) out.push(a)
+          if ((da >= 0) !== (dc >= 0)) out.push([a[0] + (c[0] - a[0]) * da / (da - dc), a[1] + (c[1] - a[1]) * da / (da - dc)])
+        }
+        p = out
+      }
+      for (let j = 1; j < p.length - 1; j++) area += Math.abs((p[j][0] - p[0][0]) * (p[j + 1][1] - p[0][1]) - (p[j + 1][0] - p[0][0]) * (p[j][1] - p[0][1])) / 2
+    }
+    expect(area).toBeLessThan(0.001)
+  })
+
+  it('keeps farm-tree crowns out of houses, barns, and other trees', () => {
+    const farm = farmland(terrainShape(world()), [], 600)
+    expect(farm.buildings.vertexCount).toBeGreaterThan(0)
+    const positions = farm.buildings.positions
+    const footprints: number[][] = []
+    for (let base = 0; base < farm.buildings.vertexCount; base += 20) {
+      footprints.push([16, 17, 18, 19].flatMap(v => [positions[(base + v) * 3], positions[(base + v) * 3 + 2]]))
+    }
+    for (const t of farm.trees) for (const ring of footprints) {
+      expect(pointInRing(t.x, t.z, ring)).toBe(false)
+      expect(boundaryDistance(t.x, t.z, ring)).toBeGreaterThanOrEqual(TREE_RADIUS * t.scale)
+    }
+    for (let i = 0; i < farm.trees.length; i++) for (const b of farm.trees.slice(i + 1)) {
+      const a = farm.trees[i]
+      expect(Math.hypot(a.x - b.x, a.z - b.z)).toBeGreaterThanOrEqual(TREE_RADIUS * (a.scale + b.scale))
+    }
   })
 
   it('meets the compiled meadow without a vertical step at the plate edge', () => {

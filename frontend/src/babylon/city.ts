@@ -17,7 +17,7 @@ import { appendMassing } from './massing'
 
 import { Batch, bounds, centroid, hash01, mix, onBoxEdge, scale, signedArea, type RGB } from './geometry'
 import { facadeFor, TEXTURE_RECIPES, type TextureKind } from './appearance'
-import { roadDashes, treePlacements } from './details'
+import { roadDashes, treePlacements, type TreePlacement } from './details'
 import { CityMaterials } from './materials'
 import { buildVegetation } from './vegetation'
 import type { BuildingCategory, WorldBuilding, WorldData, WorldLandmark, WorldRoad } from './worldData'
@@ -105,6 +105,7 @@ export interface CityMeshes {
   landmarks: Mesh
   stops: Mesh
   shadowCasters: Mesh[]
+  treePositions: TreePlacement[]
   materials: CityMaterials
   buildingRanges: Map<string, BuildingRange[]>
   setBuildingsHidden(keys: Iterable<string>, hidden: boolean): void
@@ -351,7 +352,8 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     for (const mesh of dirty) mesh.updateVerticesData(VertexBuffer.PositionKind, mesh.getVerticesData(VertexBuffer.PositionKind) as Float32Array, false, false)
   }
 
-  const trees = buildVegetation(scene, treePlacements(world), foliageMat, world.surfaces ? Y.road : Y.green)
+  const treePositions = treePlacements(world)
+  const trees = buildVegetation(scene, treePositions, foliageMat, world.surfaces ? Y.road : Y.green)
   chunks.push(...trees)
   casters.push(...trees)
 
@@ -382,6 +384,7 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     landmarks,
     stops,
     shadowCasters: casters,
+    treePositions,
     materials,
     buildingRanges,
     setBuildingsHidden,

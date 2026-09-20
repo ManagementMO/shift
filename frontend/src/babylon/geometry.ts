@@ -259,6 +259,29 @@ export function bounds(ring: Flat): [number, number, number, number] {
   return [x0, z0, x1, z1]
 }
 
+export function pointInRing(x: number, z: number, ring: Flat): boolean {
+  let inside = false
+  for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
+    const ax = ring[i], az = ring[i + 1], bx = ring[j], bz = ring[j + 1]
+    if ((az > z) !== (bz > z) && x < ((bx - ax) * (z - az)) / (bz - az) + ax) inside = !inside
+  }
+  return inside
+}
+
+export function distanceToSegment(x: number, z: number, ax: number, az: number, bx: number, bz: number): number {
+  const dx = bx - ax, dz = bz - az
+  const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1)))
+  return Math.hypot(x - ax - t * dx, z - az - t * dz)
+}
+
+export function boundaryDistance(x: number, z: number, ring: Flat): number {
+  let d = Infinity
+  for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
+    d = Math.min(d, distanceToSegment(x, z, ring[j], ring[j + 1], ring[i], ring[i + 1]))
+  }
+  return d
+}
+
 /** Deterministic per-id jitter in [0, 1) so buildings get stable colour variation. */
 export function hash01(s: string): number {
   let h = 2166136261
