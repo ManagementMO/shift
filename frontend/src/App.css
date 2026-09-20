@@ -1124,6 +1124,16 @@ details summary {
   background: var(--hazard);
   top: 8px;
 }
+.band.hazard.ghost {
+  background: transparent;
+  border: 1px dashed var(--hazard);
+  opacity: 0.8;
+}
+.ghostbtn.cue {
+  border: 1px solid var(--glass-line);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
 .ticks {
   position: absolute;
   left: 0;

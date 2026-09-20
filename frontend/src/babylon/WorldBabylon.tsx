@@ -47,14 +47,14 @@ export default function WorldBabylon({ runId, side, onWorldReady, onWorldError }
         const sel = s.selection
         ws.traffic.selectedId = sel && sel.kind !== 'restriction' && sel.kind !== 'stop' ? sel.id : null
         ws.traffic.dimOthers = sel?.kind === 'person'
-        marks(overlay, clock.t)
+        marks(ws, overlay, clock.t)
       }
       syncRef.current = sync
       sync()
       ws.simT = clock.t
       const offFrame = clock.onFrame((t) => {
         ws.simT = t
-        marks(overlay, t)
+        marks(ws, overlay, t)
       })
       const unsub = useStore.subscribe(sync)
 
@@ -114,8 +114,8 @@ export default function WorldBabylon({ runId, side, onWorldReady, onWorldError }
   return <WorldCanvas packId={pack.pack_id} onReady={onReady} onError={onWorldError} quality={side === 'solo' ? 'high' : 'balanced'} className={`world world-${side} bworld`} />
 }
 
-/** Active closures, ghost proposal and focus corridor for sim time `t`, from the store. */
-function marks(overlay: Overlay, t: number): void {
+/** Active closures, ghost proposal, focus corridor and hazard tracks for sim time `t`, from the store. */
+function marks(ws: WorldScene, overlay: Overlay, t: number): void {
   const s = useStore.getState()
   const scenario = s.scenarios.find((x) => x.scenario_id === s.scenarioId)
   const closed: string[] = []
@@ -123,4 +123,7 @@ function marks(overlay: Overlay, t: number): void {
   const focusId = s.selection?.kind === 'restriction' ? s.selection.id : null
   const focus = focusId ? scenario?.restrictions.find((r) => r.restriction_id === focusId)?.edge_ids ?? [] : []
   overlay.set({ closed, ghost: s.ghost?.edges ?? [], focus, ghostStops: s.ghost?.stops ?? [] })
+  const hazards = [...(scenario?.hazards ?? [])]
+  if (s.ghost?.hazard && !hazards.some((h) => h.track_id === s.ghost!.hazard!.track_id)) hazards.push(s.ghost.hazard)
+  ws.storm.setHazards(hazards)
 }

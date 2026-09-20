@@ -35,6 +35,7 @@ import { Traffic } from './traffic'
 import type { WorldData } from './worldData'
 import { buildStreetDetails } from './streetDetails'
 import { loadLandmarkModels } from './landmarkModels'
+import { StormSystem } from './tornado'
 
 export interface WorldSceneOptions {
   shadows?: boolean
@@ -54,6 +55,8 @@ export class WorldScene {
   readonly world: WorldData
   readonly roads: RoadIndex
   readonly traffic: Traffic
+  /** Declared moving hazards drawn as tornadoes, with the buildings in their path made destructible. */
+  readonly storm: StormSystem
   readonly fill: HemisphericLight
   private readonly post: DefaultRenderingPipeline
   /** Sim time (s) the traffic is drawn at; set by the playback clock each frame. */
@@ -194,9 +197,11 @@ export class WorldScene {
     // --- replay traffic (created after the static materials are frozen: its own materials stay live)
     this.roads = new RoadIndex(world)
     this.traffic = new Traffic(scene, this.frame, balanced ? null : this.shadows, world.surfaces ? Y.road : Y.path)
+    this.storm = new StormSystem(scene, this.frame, world, this.city, balanced ? null : this.shadows)
     scene.onBeforeRenderObservable.add(() => {
       const p = this.camera.cam.globalPosition
       this.traffic.update(this.simT, { x: p.x, y: p.y, z: p.z, radius: this.camera.cam.radius })
+      this.storm.update(this.simT)
     })
 
     scene.autoClear = true
@@ -243,6 +248,7 @@ export class WorldScene {
     window.removeEventListener('resize', this.resize)
     this.engine.stopRenderLoop()
     this.camera.cancel()
+    this.storm.dispose()
     this.traffic.dispose()
     this.city.dispose()
     this.scene.dispose()

@@ -42,7 +42,13 @@ export default function SimDock({ active = true }: { active?: boolean }) {
     return out
   }, [horizon])
   const bands = scenario?.restrictions.map((r) => ({ id: r.restriction_id, a: r.start_s / horizon, b: r.end_s / horizon, label: r.label })) ?? []
-  const hazardBands = scenario?.hazards.map((h) => ({ id: h.track_id, a: h.start_s / horizon, b: h.end_s / horizon, label: h.label })) ?? []
+  const ghostHazard = useStore((s) => s.ghost?.hazard ?? null)
+  const hazardBands = [
+    ...(scenario?.hazards.map((h) => ({ id: h.track_id, a: h.start_s / horizon, b: h.end_s / horizon, label: h.label, ghost: false })) ?? []),
+    ...(ghostHazard && !scenario?.hazards.some((h) => h.track_id === ghostHazard.track_id)
+      ? [{ id: ghostHazard.track_id, a: ghostHazard.start_s / horizon, b: ghostHazard.end_s / horizon, label: `${ghostHazard.label} (preview)`, ghost: true }]
+      : []),
+  ]
 
   return (
     <div className="dock">
@@ -71,7 +77,7 @@ export default function SimDock({ active = true }: { active?: boolean }) {
             <i key={b.id} className="band closure" style={{ left: `${b.a * 100}%`, width: `${(b.b - b.a) * 100}%` }} title={b.label} />
           ))}
           {hazardBands.map((b) => (
-            <i key={b.id} className="band hazard" style={{ left: `${b.a * 100}%`, width: `${(b.b - b.a) * 100}%` }} title={b.label} />
+            <i key={b.id} className={`band hazard${b.ghost ? ' ghost' : ''}`} style={{ left: `${b.a * 100}%`, width: `${(b.b - b.a) * 100}%` }} title={b.label} />
           ))}
         </div>
         <input

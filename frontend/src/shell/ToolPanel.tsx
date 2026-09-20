@@ -3,6 +3,10 @@ import { api } from '../api'
 import { useStore, type ToolId } from '../store'
 import type { Corridor, ServicePlan } from '../types'
 import { fmt } from '../util'
+import { hazardFootprint } from '../replay'
+import { currentPose, incidentPose } from '../world/camera'
+import { clock } from '../world/playback'
+import { cameraTo, leadMap } from '../world/registry'
 import { ghostFromProposal } from './ghost'
 import ProposalCard from './ProposalCard'
 
@@ -12,7 +16,7 @@ const TITLES: Record<ToolId, string> = {
   stop: 'Bus stops',
   population: 'Population',
   event: 'Event',
-  weather: 'Moving hazard',
+  weather: 'Tornado',
   road: 'Roads',
   intersection: 'Intersections',
   custom: 'Custom intervention',
@@ -146,6 +150,8 @@ function ClosureTool() {
 function HazardTool() {
   const pack = useStore((s) => s.pack)
   const scenario = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId) ?? null)
+  const ghostHazard = useStore((s) => s.ghost?.hazard ?? null)
+  const activeHazard = useStore((s) => s.scenarios.find((x) => x.scenario_id === s.scenarioId)?.hazards[0] ?? null)
   const horizon = scenario?.constraints.horizon_s ?? 2700
   const places = useMemo(() => [{ id: 'venue', name: 'the venue' }, ...(pack?.zones.map((z) => ({ id: z.zone_id, name: z.name })) ?? [])], [pack])
   const [from, setFrom] = useState('venue')
@@ -156,9 +162,21 @@ function HazardTool() {
   const [end, setEnd] = useState(Math.round(horizon * 0.7))
   const { preview, busy } = usePreview()
   const name = (id: string) => places.find((p) => p.id === id)?.name ?? id
+  const cued = ghostHazard ?? activeHazard
+  // Rewind to just before touchdown, frame the funnel and play at the speed the choreography is authored for.
+  const cue = () => {
+    if (!cued) return
+    clock.pause()
+    clock.seek(Math.max(0, cued.start_s - 45))
+    clock.setSpeed(10)
+    const lead = leadMap()
+    const fp = hazardFootprint(cued, cued.start_s)
+    if (lead && fp) cameraTo(incidentPose(fp.center, cued.radius_m * 3, currentPose(lead)), 'incident')
+    clock.play()
+  }
   return (
     <div className="tool">
-      <div className="small dim">A declared moving hazard region: roads inside its footprint become unavailable while it passes. It is not a weather model.</div>
+      <div className="small dim">The backend models a timed closure of the full corridor. The moving tornado, building damage and debris are visual effects, not structural physics. Previewing them does not change the current SUMO replay.</div>
       <label className="small">
         from
         <select value={from} onChange={(e) => setFrom(e.target.value)}>
@@ -187,6 +205,17 @@ function HazardTool() {
       <button className="primary" disabled={busy || !to} onClick={() => void preview(`storm corridor via ${name(from)} and ${name(to)} ${radius} m from ${fmt(start)} to ${fmt(end)}`)}>
         {busy ? 'Proposing…' : 'Preview path'}
       </button>
+      {cued && (
+        <div className="row">
+          <button className="ghostbtn cue" onClick={cue} title="Rewind to touchdown, frame the funnel, play at 10×">
+            Cue tornado
+          </button>
+          <span className="small dim">
+            touches down +{fmt(cued.start_s)} · lifts +{fmt(cued.end_s)}
+            {ghostHazard ? ' · preview only until confirmed' : ''}
+          </span>
+        </div>
+      )}
     </div>
   )
 }

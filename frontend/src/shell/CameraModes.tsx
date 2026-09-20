@@ -106,7 +106,7 @@ function go(mode: CameraMode) {
       return
     }
     case 'incident': {
-      const h = scenario?.hazards[0]
+      const h = scenario?.hazards[0] ?? s.ghost?.hazard ?? undefined
       const fp = h ? hazardFootprint(h, Math.max(h.start_s, Math.min(s.t, h.end_s))) : null
       if (fp && h) cameraTo(incidentPose(fp.center, h.radius_m * 3, base), 'incident')
       else if (venue) cameraTo(incidentPose(venue, 400, base), 'incident')

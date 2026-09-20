@@ -6,6 +6,7 @@
  */
 
 import { Color3 } from '@babylonjs/core/Maths/math.color'
+import { VertexBuffer } from '@babylonjs/core/Buffers/buffer'
 import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
@@ -81,16 +82,40 @@ const LANDMARK_COLOR: Record<string, { wall: RGB; roof: RGB }> = {
   quantum_nano: { wall: hex('#b5c2c5'), roof: hex('#73868b') },
 }
 
+/** Vertex range [start, end) that one building occupies inside a batched chunk mesh. */
+export interface BuildingRange {
+  mesh: Mesh
+  start: number
+  end: number
+}
+
+/** Key under which a building's batched geometry is tracked: reconciled sections share their source building. */
+export function buildingKey(b: Pick<WorldBuilding, 'id' | 'source_id'>): string {
+  return `osm:${b.source_id ?? b.id}`
+}
+
+export function massingKey(id: string): string {
+  return `massing:${id}`
+}
+
+/** Where a hidden building's vertices are parked: below the lake bed, so degenerate walls and the roof never show. */
+export const HIDDEN_Y = -3
+
 export interface CityMeshes {
   ground: Mesh
   chunks: Mesh[]
   landmarks: Mesh
   stops: Mesh
   shadowCasters: Mesh[]
+  materials: CityMaterials
+  /** Batched geometry of every building by `buildingKey` / `massingKey`, so one can be folded away without a rebuild. */
+  buildingRanges: Map<string, BuildingRange[]>
+  /** Fold the named buildings' batched vertices below ground (or restore them). Idempotent per building. */
+  setBuildingsHidden(keys: Iterable<string>, hidden: boolean): void
   dispose(): void
 }
 
-export function meshFromBatch(name: string, batch: Batch, scene: Scene, material: Material): Mesh {
+export function meshFromBatch(name: string, batch: Batch, scene: Scene, material: Material, updatable = false): Mesh {
   const mesh = new Mesh(name, scene)
   if (!batch.isEmpty()) {
     const vd = new VertexData()
@@ -99,7 +124,7 @@ export function meshFromBatch(name: string, batch: Batch, scene: Scene, material
     vd.colors = new Float32Array(batch.colors)
     vd.uvs = new Float32Array(batch.uvs)
     vd.indices = batch.vertexCount > 65535 ? new Uint32Array(batch.indices) : new Uint16Array(batch.indices)
-    vd.applyToMesh(mesh, false)
+    vd.applyToMesh(mesh, updatable)
   }
   mesh.material = material
   mesh.isPickable = false
@@ -145,7 +170,7 @@ function roadColor(r: WorldRoad, pedOnlyLane: boolean): RGB {
   return PALETTE.asphaltMinor
 }
 
-function buildingColor(b: WorldBuilding): { wall: RGB; roof: RGB } {
+export function buildingColor(b: WorldBuilding): { wall: RGB; roof: RGB } {
   const c = CATEGORY[b.cat] ?? CATEGORY.generic
   const j = hash01(b.source_id ?? b.id)
   const wall = mix(c.wall, c.alt, j * 0.9)
@@ -194,16 +219,30 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     }
     return batch
   }
-  const flush = (grid: ChunkGrid<ReturnType<typeof makeBatches>>, prefix: string, shadows: boolean) => {
+  const batchMesh = new Map<Batch, Mesh>()
+  const flush = (grid: ChunkGrid<ReturnType<typeof makeBatches>>, prefix: string, shadows: boolean, updatable = false) => {
     for (const [key, cell] of grid.cells) {
       for (const [kind, batch] of cell) {
         if (batch.isEmpty()) continue
-        const mesh = meshFromBatch(`${prefix}-${key}-${kind}`, batch, scene, kind === 'paint' ? flatMat : materials.get(kind))
+        const mesh = meshFromBatch(`${prefix}-${key}-${kind}`, batch, scene, kind === 'paint' ? flatMat : materials.get(kind), updatable)
         mesh.receiveShadows = true
         chunks.push(mesh)
+        batchMesh.set(batch, mesh)
         if (shadows) casters.push(mesh)
       }
     }
+  }
+  // Which vertices each building wrote into which batch: the storm folds these away instead of rebuilding chunks.
+  const pending = new Map<string, { batch: Batch; start: number; end: number }[]>()
+  const track = (key: string, batches: Batch[], fill: () => void): void => {
+    const unique = [...new Set(batches)]
+    const starts = unique.map((b) => b.vertexCount)
+    fill()
+    const list = pending.get(key) ?? []
+    unique.forEach((batch, i) => {
+      if (batch.vertexCount > starts[i]) list.push({ batch, start: starts[i], end: batch.vertexCount })
+    })
+    if (list.length) pending.set(key, list)
   }
 
   // --- water (one mesh; the lake polygon is huge and culls badly anyway)
@@ -276,17 +315,47 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     const c = buildingColor(b)
     const cell = bld.at(cx, cz)
     const appearance = { id: b.source_id ?? b.id, cat: b.cat, h: b.source_height ?? b.h }
-    addArchitecture({
+    const out = {
       facade: batchFor(cell, facadeFor(appearance)), roof: batchFor(cell, 'roof'),
       stone: batchFor(cell, 'concrete'), glass: batchFor(cell, 'glass'), metal: batchFor(cell, 'industrial'),
-    }, b, c, Math.hypot(cx - focus.x, cz - focus.z) < 1500)
+    }
+    track(buildingKey(b), Object.values(out), () => addArchitecture(out, b, c, Math.hypot(cx - focus.x, cz - focus.z) < 1500))
   }
   for (const b of world.massing?.buildings ?? []) {
     const cell = bld.at(b.x, b.z)
     const color = buildingColor({ ...b, ring: [] })
-    appendMassing(b, batchFor(cell, facadeFor(b)), batchFor(cell, 'roof'), color.wall)
+    const facade = batchFor(cell, facadeFor(b))
+    const roof = batchFor(cell, 'roof')
+    track(massingKey(b.id), [facade, roof], () => appendMassing(b, facade, roof, color.wall))
   }
-  flush(bld, 'buildings', true)
+  flush(bld, 'buildings', true, true)
+  const buildingRanges = new Map<string, BuildingRange[]>()
+  for (const [key, list] of pending) {
+    const ranges = list.flatMap((r) => (batchMesh.has(r.batch) ? [{ mesh: batchMesh.get(r.batch)!, start: r.start, end: r.end }] : []))
+    if (ranges.length) buildingRanges.set(key, ranges)
+  }
+  const originals = new Map<Mesh, Float32Array>()
+  const hidden = new Set<string>()
+  const setBuildingsHidden = (keys: Iterable<string>, hide: boolean): void => {
+    const dirty = new Set<Mesh>()
+    for (const key of keys) {
+      if (hide === hidden.has(key)) continue
+      if (hide) hidden.add(key)
+      else hidden.delete(key)
+      for (const r of buildingRanges.get(key) ?? []) {
+        const positions = r.mesh.getVerticesData(VertexBuffer.PositionKind) as Float32Array | null
+        if (!positions) continue
+        let orig = originals.get(r.mesh)
+        if (!orig) {
+          orig = Float32Array.from(positions)
+          originals.set(r.mesh, orig)
+        }
+        for (let v = r.start; v < r.end; v++) positions[v * 3 + 1] = hide ? HIDDEN_Y : orig[v * 3 + 1]
+        dirty.add(r.mesh)
+      }
+    }
+    for (const mesh of dirty) mesh.updateVerticesData(VertexBuffer.PositionKind, mesh.getVerticesData(VertexBuffer.PositionKind) as Float32Array, false, false)
+  }
 
   const trees = buildVegetation(scene, treePlacements(world), foliageMat, world.surfaces ? Y.road : Y.green)
   chunks.push(...trees)
@@ -319,6 +388,9 @@ export function buildCity(scene: Scene, world: WorldData, facadeResolution = 102
     landmarks,
     stops,
     shadowCasters: casters,
+    materials,
+    buildingRanges,
+    setBuildingsHidden,
     dispose() {
       ground.dispose()
       for (const c of chunks) c.dispose()
