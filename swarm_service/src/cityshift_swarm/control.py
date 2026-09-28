@@ -352,10 +352,12 @@ class RunControl:
                     "structured_output with the same proposal as a nested JSON object, not a string, Python repr, "
                     "or plain prose. Format-only proposal example: "
                     '{"action":"wait","duration_s":30,"idempotency_key":"fresh-epoch-key"}. '
-                    "Choose your own action and key, not the example key. travel/request_service target_id uses an "
-                    "accessible anchor_id; accept/decline/prepare/pickup/deliver/visit/serve/report_delay/"
+                    "Choose your own action and key, not the example key. "
+                    "travel/request_service/redirect target_id uses "
+                    "an accessible anchor_id; accept/decline/prepare/pickup/deliver/visit/serve/report_delay/"
                     "revise_commitment "
                     "uses an actual visible task_id; message uses a known contact's resident_id. "
+                    "While travelling, choose continue, redirect, or message. "
                     "Proposals are not committed world outcomes. Do not invent completion or advance city time."
                 ),
             }, sort_keys=True, allow_nan=False)

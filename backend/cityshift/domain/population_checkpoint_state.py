@@ -30,6 +30,14 @@ class PendingActivity(PopulationContract):
     cause_id: str | None
 
 
+class KnownIncident(PopulationContract):
+    """How a resident learned of an incident: seen (hop 0) or told by `source` at a shared place (hop n)."""
+
+    hop: int = Field(ge=0)
+    t: int = Field(ge=0)
+    source: str | None = None
+
+
 class SavedSociety(PopulationContract):
     version: Literal["society-checkpoint-1"] = "society-checkpoint-1"
     run_id: str
@@ -54,6 +62,8 @@ class SavedSociety(PopulationContract):
     completed_trips: int = Field(ge=0)
     failed_trips: int = Field(ge=0)
     stimuli: list[PopulationStimulusRecord] = Field(default_factory=list)
+    awareness: dict[str, dict[str, KnownIncident]] = Field(default_factory=dict)
+    travel_wakes: list[str] = Field(default_factory=list)
 
     def validate_consistency(self, definition: PopulationDefinition) -> None:
         ids, task_ids = set(self.states), set(self.tasks)
@@ -69,6 +79,18 @@ class SavedSociety(PopulationContract):
                        and event.cause_id == f"stimulus:{row.stimulus.stimulus_id}"
                        and event.resident_ids == row.resident_ids for event in self.events):
                 raise ValueError("checkpoint observation receipt lacks its scoped event")
+        incidents = {row.stimulus.stimulus_id: row for row in self.stimuli if row.stimulus.kind == "incident"}
+        for rid, known in self.awareness.items():
+            if rid not in ids or set(known) - set(incidents):
+                raise ValueError("checkpoint incident awareness references unknown residents or incidents")
+            for sid, item in known.items():
+                if (item.t > self.t or item.t < incidents[sid].applied_s or (item.source is not None and item.source not in ids)
+                        or (item.hop == 0) != (item.source is None) or (item.hop == 0 and rid not in incidents[sid].resident_ids)):
+                    raise ValueError("checkpoint incident awareness has an invalid source or time")
+        if len(set(self.travel_wakes)) != len(self.travel_wakes) or any(
+            rid not in ids or self.states[rid].activity != "traveling" for rid in self.travel_wakes
+        ):
+            raise ValueError("checkpoint wakes a resident who is not travelling")
         records = {record.decision_id: record for record in self.decisions}
         if len(events) != len(self.events) or len(records) != len(self.decisions):
             raise ValueError("checkpoint contains duplicate event or decision identities")

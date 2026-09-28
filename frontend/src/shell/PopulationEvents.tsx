@@ -11,7 +11,7 @@ export default function PopulationEvents() {
   return <details open={!!notice || pending.length > 0} className="population-run small" aria-label="Swarm event inbox">
     <summary>Events and messages{pending.length ? ` · ${pending.length} queued` : ""}</summary>
     <p>Place an event from Events, or use the prompt to address the swarm. Nearby residents receive warnings; their own models choose actions and messages.</p>
-    <p className="dim">Warnings affect resident observations. They do not yet close native transport routes or simulate injuries.</p>
+    <p className="dim">Incidents close the streets inside their footprint while they last. Residents who see one, or hear about it from someone at the same place, decide for themselves how to respond, even mid-trip. Injuries are not simulated.</p>
     {notice && <p role="status">{notice}</p>}
     {pending.length > 0 && <><p>{pending.length} event(s) waiting for a new run.</p><button className="ghostbtn" onClick={() => usePopulationStimuli.getState().clearPending()}>Clear pending events</button></>}
     {applied.slice(-5).map(({ stimulus, applied_s, resident_ids }) => <div key={stimulus.stimulus_id} className="population-record">

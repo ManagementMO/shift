@@ -12,6 +12,7 @@ TravelClass = Literal["pedestrian", "bicycle", "passenger", "delivery", "truck"]
 PopulationAction = Literal[
     "request_service", "accept", "decline", "travel", "prepare", "pickup", "deliver",
     "visit", "serve", "report_delay", "message", "wait", "rest", "revise_commitment",
+    "continue", "redirect",
 ]
 CITY_TOOLS = frozenset({
     "observe_local_state", "recall_experience", "view_tasks", "estimate_trip", "propose_action",
@@ -28,9 +29,9 @@ class ActionProposal(Contract):
         "One eligible city action name, not a function call or Python expression."
     ))
     target_id: str | None = Field(default=None, max_length=160, description=(
-        "Use a visible anchor_id for travel/request_service; an actual visible task_id for "
+        "Use a visible anchor_id for travel/request_service/redirect; an actual visible task_id for "
         "accept/decline/prepare/pickup/deliver/visit/serve/report_delay/revise_commitment; "
-        "a known contact's resident_id for message. Omit for wait/rest. Never invent an ID."
+        "a known contact's resident_id for message. Omit for wait/rest/continue. Never invent an ID."
     ))
     travel_class: TravelClass | None = Field(default=None, description=(
         "A travel class available to this resident at the current anchor, respecting vehicle ownership."

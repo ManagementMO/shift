@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import heapq
-import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from itertools import pairwise
 
 import traci
 
 from cityshift.domain.network import route
-from cityshift.live.contracts import EVERYONE, RoadChange
+from cityshift.live.contracts import RoadChange
 from cityshift.live.swarm import SwarmEvent
+from cityshift.transport.hazards import EVERYONE, distance_to_edge, edges_within
 
 VEHICLE_CLASSES = frozenset({"passenger", "bus"})
 
@@ -80,19 +79,10 @@ class LiveNetwork:
         return self.centers[edge_id]
 
     def distance_to(self, edge_id: str, x: float, y: float) -> float:
-        points = self.net.getEdge(edge_id).getShape()
-        best = math.inf
-        for (ax, ay), (bx, by) in pairwise(points):
-            dx, dy = bx - ax, by - ay
-            length2 = dx * dx + dy * dy
-            k = 0.0 if length2 == 0 else max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / length2))
-            best = min(best, math.hypot(ax + dx * k - x, ay + dy * k - y))
-        if len(points) == 1:
-            best = math.hypot(points[0][0] - x, points[0][1] - y)
-        return best
+        return distance_to_edge(self.net, edge_id, x, y)
 
     def edges_within(self, x: float, y: float, radius: float) -> list[str]:
-        return sorted(e.getID() for e in self.net.getEdges() if not e.isSpecial() and self.distance_to(e.getID(), x, y) <= radius)
+        return edges_within(self.net, x, y, radius)
 
     def walk(self, source: str, destination: str) -> WalkingPath | None:
         """Sidewalk route between two edges. People who know about an incident keep out of its footprint."""

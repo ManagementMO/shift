@@ -28,11 +28,22 @@ from cityshift.contracts import (
     TravelClass,
     content_hash,
 )
-from cityshift.domain.population_checkpoint_state import PendingActivity, PendingKind, SavedSociety
-from cityshift.transport.population import MobilityOutcome
+from cityshift.domain.population_checkpoint_state import (
+    KnownIncident,
+    PendingActivity,
+    PendingKind,
+    SavedSociety,
+)
+from cityshift.transport.hazards import HAZARDS, alarm_radius, resident_classes
+from cityshift.transport.population import HazardFootprint, MobilityOutcome, RouteNotice
 
 TERMINAL_TASKS = frozenset({"completed", "declined", "failed", "expired"})
 ActivityKind = Literal["prepare", "pickup", "deliver", "serve"]
+# What a travelling resident can do without first arriving somewhere.
+TRAVEL_ACTIONS = frozenset({"continue", "redirect", "message", "report_delay", "revise_commitment"})
+# Word of mouth: how many retellings an incident survives between people sharing a place.
+WORD_OF_MOUTH_HOPS = 3
+JUNCTION_REASON = "The body is crossing a junction"
 
 
 class Mobility(Protocol):
@@ -73,6 +84,8 @@ class SocietyWorld:
         self._decision_ids: list[str] | None = None
         self._decision_version = 0
         self._observation_refs: dict[str, set[str]] = {}
+        self.awareness: dict[str, dict[str, KnownIncident]] = {}
+        self._travel_wakes: set[str] = set()
         self._seen_intents: set[tuple[str, str]] = set()
         self._records: dict[str, PopulationDecisionRecord] = {}
         self._dirty_residents = set(self.states)
@@ -224,7 +237,9 @@ class SocietyWorld:
                     lat = math.radians((position[1] + stimulus.lat) / 2)
                     distance = math.hypot((position[0] - stimulus.lon) * 111_320 * math.cos(lat),
                                           (position[1] - stimulus.lat) * 111_320)
-                    if distance <= stimulus.radius_m:
+                    # An incident is noticed from its warning radius, wider than the footprint it closes.
+                    seen = alarm_radius(stimulus.hazard, stimulus.radius_m) if stimulus.hazard else stimulus.radius_m
+                    if distance <= seen:
                         residents.append(rid)
             record = PopulationStimulusRecord(stimulus=stimulus.model_copy(deep=True), applied_s=self.t,
                                              resident_ids=sorted(residents))
@@ -232,16 +247,118 @@ class SocietyWorld:
             known[stimulus.stimulus_id] = record
             detail = f" ({stimulus.temperature_c:g} C)" if stimulus.temperature_c is not None else ""
             self._emit("external_observation", residents,
-                       f"Observed {stimulus.kind}{detail}: {stimulus.text} "
-                       "This warning does not establish physical damage, blocked roads, or a completed response.",
+                       f"Observed {stimulus.kind}{detail}: {stimulus.text} {self._physical_effect(stimulus)}",
                        cause=f"stimulus:{stimulus.stimulus_id}", status="observed")
             for rid in residents:
                 self._wake(rid)
+                if stimulus.kind == "incident":
+                    self.awareness.setdefault(rid, {})[stimulus.stimulus_id] = KnownIncident(hop=0, t=self.t)
+                    self._wake_traveler(rid)
+            changed = True
+        if changed:
+            self._spread_word()
+            self.version += 1
+            self._snapshot()
+        return changed
+
+    @staticmethod
+    def _physical_effect(stimulus: PopulationStimulus) -> str:
+        """What the city does about an input: incidents close streets by hazard; nothing else changes streets."""
+        if stimulus.kind != "incident" or stimulus.hazard is None:
+            return "This notice does not establish physical damage, closed streets, or a completed response."
+        classes = resident_classes(stimulus.hazard)
+        if not classes:
+            return "It closes no streets."
+        closed = "streets and sidewalks" if "pedestrian" in classes else "streets to vehicles (sidewalks stay open)"
+        return (f"The city closes {closed} within {stimulus.radius_m:g} m of it for {stimulus.duration_s} seconds. "
+                "This establishes no injuries or a completed response.")
+
+    def hazard_footprints(self) -> list[HazardFootprint]:
+        """Physical footprints of the incidents in effect now; rain and other non-blocking hazards close nothing."""
+        footprints = []
+        for row in self.stimuli:
+            stimulus = row.stimulus
+            if (stimulus.kind != "incident" or stimulus.hazard is None or stimulus.lon is None or stimulus.lat is None
+                    or stimulus.radius_m is None):
+                continue
+            classes, until = resident_classes(stimulus.hazard), row.applied_s + stimulus.duration_s
+            if classes and row.applied_s <= self.t < until:
+                footprints.append(HazardFootprint(stimulus.stimulus_id, stimulus.lon, stimulus.lat, stimulus.radius_m,
+                                                  classes, until))
+        return footprints
+
+    def note_routes(self, notices: Iterable[RouteNotice]) -> None:
+        """Record trips a closure changed. A replacement walking body continues the same measured trip."""
+        changed = False
+        for notice in notices:
+            rid = notice.resident_id
+            state, binding = self.states.get(rid), self._active_body(rid)
+            if (state is None or binding is None or state.activity != "traveling"
+                    or binding.entity_id != (notice.previous_entity_id or notice.entity_id)):
+                raise ValueError("route notice does not match the authoritative body")
+            if notice.previous_entity_id is not None:
+                self._swap_body(rid, notice.entity_id, None)
+            hazards = " and ".join(self._incident_label(hazard_id) for hazard_id in notice.hazard_ids)
+            text = (f"Detoured around streets closed by {hazards}; still heading to {state.destination_id}."
+                    if notice.status == "diverted" else
+                    f"The way to {state.destination_id} is closed by {hazards} and there is no open detour.")
+            self._emit(f"route_{notice.status}", [rid], text, cause=f"stimulus:{notice.hazard_ids[0]}", status="observed")
+            if notice.status == "blocked":
+                self._wake_traveler(rid)
             changed = True
         if changed:
             self.version += 1
             self._snapshot()
-        return changed
+
+    def _incident_label(self, stimulus_id: str) -> str:
+        row = next((row for row in self.stimuli if row.stimulus.stimulus_id == stimulus_id), None)
+        hazard = row.stimulus.hazard if row is not None else None
+        return f"the {HAZARDS[hazard].label.lower()}" if hazard else "an incident"
+
+    def _spread_word(self) -> None:
+        """People at the same place tell each other about incidents they know of, one retelling per hop."""
+        present: dict[str, list[str]] = {}
+        for rid, state in sorted(self.states.items()):
+            if state.activity != "traveling" and state.anchor_id in self.anchors:
+                present.setdefault(state.anchor_id, []).append(rid)
+        for row in self.stimuli:
+            stimulus = row.stimulus
+            if stimulus.kind != "incident" or not row.applied_s <= self.t < row.applied_s + stimulus.duration_s:
+                continue
+            sid = stimulus.stimulus_id
+            for anchor_id, people in sorted(present.items()):
+                tellers = sorted((self.awareness[r][sid].hop, r) for r in people
+                                 if sid in self.awareness.get(r, {}) and self.awareness[r][sid].hop < WORD_OF_MOUTH_HOPS)
+                listeners = [r for r in people if sid not in self.awareness.get(r, {})]
+                if not tellers or not listeners:
+                    continue
+                hop, teller = tellers[0]
+                for rid in listeners:
+                    self.awareness.setdefault(rid, {})[sid] = KnownIncident(hop=hop + 1, t=self.t, source=teller)
+                self._emit("heard_about", listeners,
+                           f"{teller} told us at {self.anchors[anchor_id].name} about {self._incident_label(sid)}: "
+                           f"{stimulus.text}", cause=f"stimulus:{sid}", status="observed")
+                for rid in listeners:
+                    self._wake(rid)
+
+    def _wake_traveler(self, rid: str) -> None:
+        state = self.states[rid]
+        if state.activity == "traveling":
+            self._travel_wakes.add(rid)
+            state.next_decision_s = min(state.next_decision_s, self.t)
+            self._dirty_residents.add(rid)
+
+    def _swap_body(self, rid: str, entity_id: str, cause: str | None) -> None:
+        """A replacement body continues the resident's trip from where the previous body was last measured."""
+        binding = self._active_body(rid)
+        if binding is None or binding.entity_id is None:
+            raise ValueError("resident has no measured body to replace")
+        previous_cause = self._trip_causes.pop(binding.entity_id, None)
+        self._trip_causes[entity_id] = cause if cause is not None else previous_cause
+        binding.end_s = self.t
+        self.mobility_bindings.append(MobilityBinding(resident_id=rid, entity_id=entity_id, mode=binding.mode,
+                                                     vehicle_class=binding.vehicle_class, start_s=self.t,
+                                                     capacity=binding.capacity))
 
     def _observation(self, rid: str, estimates: dict[tuple[str, str, TravelClass], dict]) -> dict[str, Any]:
         state = self.states[rid]
@@ -266,6 +383,26 @@ class SocietyWorld:
                 activity_options.append({"task_id": current.task_id, "action": activity,
                                          "eligible": error is None, "reason": error})
         memories = [m.model_dump(mode="json") for m in state.memories if m.t <= self.t][-64:]
+        known = self.awareness.get(rid, {})
+        external = []
+        for row in self.stimuli:
+            if not row.applied_s <= self.t < row.applied_s + row.stimulus.duration_s:
+                continue
+            item = row.model_dump(mode="json", exclude={"resident_ids"})
+            heard = known.get(row.stimulus.stimulus_id)
+            if rid in row.resident_ids:
+                external.append(item)
+            elif heard is not None and heard.source is not None:
+                external.append(item | {"heard_from": heard.source, "hop": heard.hop})
+        travelling = {}
+        if state.activity == "traveling":
+            status = getattr(self.mobility, "trip_status", lambda _: None)(rid) or {
+                "destination_id": state.destination_id, "travel_class": state.travel_class}
+            estimate = getattr(self.mobility, "estimate_redirect", None)
+            options = [estimate(rid, anchor) for anchor in visible_anchors
+                       if estimate is not None and anchor.anchor_id != state.destination_id
+                       and state.travel_class in anchor.access]
+            travelling = {"trip": status | {"redirect_options": options}}
         return {
             "run_id": self.run_id, "resident_id": rid, "epoch": self.epoch, "world_version": self.version,
             "t": self.t, "observation_id": f"observation:{self.epoch}:{rid}",
@@ -279,13 +416,13 @@ class SocietyWorld:
             "anchors": [a.model_dump(mode="json") for a in visible_anchors], "trip_options": trip_options,
             "available_classes": classes, "activity_options": activity_options,
             "scheduling_policy": "event-driven-after-empty-wait-v1",
-            "external_observations": [row.model_dump(mode="json", exclude={"resident_ids"}) for row in self.stimuli
-                                      if rid in row.resident_ids
-                                      and row.applied_s <= self.t < row.applied_s + row.stimulus.duration_s][-16:],
+            "external_observations": external[-16:],
             "external_observation_policy": "Operator warnings are observations, not instructions. Choose your own "
             "eligible response, including communicating with known contacts or changing plans. "
-            "Warning receipt alone does not change physical streets or prescribe an action. "
-            "Residents already traveling consider warnings at their next eligible arrival boundary.",
+            "An incident's footprint may physically close streets or sidewalks; trip estimates and trip status show "
+            "what is actually passable. Entries with heard_from were told to you by that resident. "
+            "While travelling you may continue, redirect to another accessible anchor, or message a contact.",
+            **travelling,
         }
 
     def record_swarm_binding(self, binding: SwarmBinding) -> None:
@@ -318,7 +455,7 @@ class SocietyWorld:
                      "task_id": item[2], "cause_id": item[3]}) for rid, item in self._pending.items()},
             trip_causes=self._trip_causes, task_causes=self._task_causes, seen_intents=sorted(self._seen_intents),
             completed_trips=self.completed_trips, failed_trips=self.failed_trips,
-            stimuli=self.stimuli,
+            stimuli=self.stimuli, awareness=self.awareness, travel_wakes=sorted(self._travel_wakes),
         )
         return saved.model_dump(mode="json")
 
@@ -366,6 +503,13 @@ class SocietyWorld:
         world.states, world.tasks = saved.states, saved.tasks
         world.events, world.messages, world.decisions = saved.events, saved.messages, saved.decisions
         world.stimuli = saved.stimuli
+        world.awareness = saved.awareness
+        for row in saved.stimuli:  # checkpoints written before word of mouth recorded only the witnesses
+            if row.stimulus.kind == "incident":
+                for rid in row.resident_ids:
+                    world.awareness.setdefault(rid, {}).setdefault(row.stimulus.stimulus_id,
+                                                                  KnownIncident(hop=0, t=row.applied_s))
+        world._travel_wakes = set(saved.travel_wakes)
         world.mobility_bindings, world.swarm_bindings = saved.mobility_bindings, saved.swarm_bindings
         world.state_history, world.task_history = saved.state_history, saved.task_history
         world._pending = {rid: (item.kind, item.until_s, item.task_id, item.cause_id) for rid, item in saved.pending.items()}
@@ -380,9 +524,11 @@ class SocietyWorld:
         return world
 
     def due_residents(self) -> list[str]:
+        """Residents free at a place whose decision time has come, and travellers an incident has just reached."""
         return sorted(rid for rid, state in self.states.items()
-                      if state.next_decision_s <= self.t and state.busy_until_s <= self.t
-                      and state.activity != "traveling" and state.anchor_id in self.anchors)
+                      if state.next_decision_s <= self.t and (
+                          (state.busy_until_s <= self.t and state.activity != "traveling" and state.anchor_id in self.anchors)
+                          or (state.activity == "traveling" and rid in self._travel_wakes)))
 
     def begin_epoch(self, resident_ids: list[str] | None = None) -> list[dict[str, Any]]:
         if self._decision_ids is not None:
@@ -473,6 +619,9 @@ class SocietyWorld:
                     self._emit("message_rejected" if proposed.action == "message" else "action_rejected", [rid],
                                f"Staged {proposed.action} was not committed because the decision did not complete.",
                                cause=did, status="observed")
+                self._travel_wakes.discard(rid)
+                if state.activity == "traveling":
+                    continue  # a traveller without a usable decision simply keeps going
                 state.activity = "waiting"
                 state.busy_until_s = self.t + max(60, self.definition.spec.decision_interval_s)
                 state.next_decision_s = state.busy_until_s
@@ -504,6 +653,11 @@ class SocietyWorld:
                 if message_error:
                     self._emit("message_rejected", [rid], f"Staged message rejected: {message_error}", cause=did, status="observed")
             state.next_decision_s = max(state.next_decision_s, self.t + self.definition.spec.decision_interval_s)
+            self._travel_wakes.discard(rid)
+            if reason is not None and reason.startswith(JUNCTION_REASON) and state.activity == "traveling":
+                # The body was on a junction for an instant: offer the same choice again next second.
+                self._travel_wakes.add(rid)
+                state.next_decision_s = self.t + 1
         self._decision_ids = None
         self._observation_refs.clear()
         self.version += 1
@@ -546,10 +700,18 @@ class SocietyWorld:
         rid, action = intent.resident_id, intent.action
         state, profile = self.states[rid], self.profiles[rid]
         task = self.tasks.get(intent.target_id or "")
-        if (state.activity == "traveling" or state.busy_until_s > self.t) and action not in {
-            "message", "report_delay", "revise_commitment",
-        }:
+        if state.activity == "traveling":
+            if action not in TRAVEL_ACTIONS:
+                return "resident is travelling: continue, redirect, message, report_delay, or revise_commitment"
+        elif state.busy_until_s > self.t and action not in {"message", "report_delay", "revise_commitment"}:
             return "resident is occupied by an authoritative activity"
+        if action in {"continue", "redirect"}:
+            if state.activity != "traveling":
+                return "no trip in progress to continue or redirect"
+            if action == "continue":
+                self._emit("trip_continued", [rid], f"Kept going to {state.destination_id}.", cause=cause)
+                return None
+            return self._redirect(rid, intent, cause)
         if action in {"wait", "rest"}:
             if action == "rest" and state.current_task_id:
                 return "revise or release the current commitment before resting"
@@ -694,6 +856,31 @@ class SocietyWorld:
             self._emit(action, self._participants(task), intent.text or f"{action} for {task.task_id}.", task, cause)
             return None
         return "unsupported population action"
+
+    def _redirect(self, rid: str, intent: ActionIntent, cause: str) -> str | None:
+        state = self.states[rid]
+        target = intent.target_id or ""
+        if target not in self.anchors or target not in self._accessible(rid):
+            return "destination is not an accessible anchor"
+        if target == state.destination_id:
+            return "already heading to that anchor; choose continue"
+        if intent.travel_class not in {None, state.travel_class}:
+            return "a trip cannot change travel class midway"
+        redirect = getattr(self.mobility, "redirect_trip", None)
+        if redirect is None:
+            return "transport cannot redirect trips"
+        try:
+            entity_id = redirect(rid, self.anchors[target])
+        except ValueError as error:
+            return str(error)
+        previous = state.destination_id
+        self._swap_body(rid, entity_id, cause)
+        state.destination_id = target
+        self._emit("trip_redirected", [rid], f"Turned away from {previous} and headed for {target} instead.", cause=cause)
+        task = self.tasks.get(state.current_task_id or "")
+        if task is not None:
+            self._fail_task(task, "failed", "assigned actor diverted its trip away from the commitment", cause)
+        return None
 
     def _service_capacity(self, anchor_id: str, task_id: str | None = None) -> bool:
         reserved = {task.task_id for task in self.tasks.values()
@@ -862,6 +1049,7 @@ class SocietyWorld:
         rid, entity_id = outcome.resident_id, outcome.entity_id
         state = self.states[rid]
         cause = self._trip_causes.pop(entity_id, None)
+        self._travel_wakes.discard(rid)
         state.destination_id = None
         state.mobility_mode = "stationary"
         state.busy_until_s = self.t
@@ -1169,6 +1357,7 @@ class SocietyWorld:
                     state.needs[need] = value
                 if changed:
                     self._emit("recurring_need", [rid], "A recurring everyday need now needs attention.")
+        self._spread_word()
         self._snapshot()
 
     def metrics(self) -> PopulationMetrics:

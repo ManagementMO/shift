@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from cityshift.contracts import DevelopmentSpec
+from cityshift.transport.hazards import HAZARDS
 
 MAX_TRAVELERS = 10000
 Identifier = Annotated[str, Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")]
@@ -52,26 +52,6 @@ class PopulationChange(InputModel):
     release_window_s: int = Field(default=300, ge=0, le=1800, strict=True)
 
 
-@dataclass(frozen=True)
-class HazardProfile:
-    label: str
-    blocks: tuple[str, ...]
-    alarm_factor: float
-    default_duration_s: int
-    description: str
-
-
-EVERYONE = ("passenger", "bus", "pedestrian")
-HAZARDS: dict[str, HazardProfile] = {
-    "crash": HazardProfile("Vehicle collision", ("passenger", "bus"), 2.5, 900, "Streets inside the footprint close to cars and buses. Sidewalks stay open."),
-    "fire": HazardProfile("Building fire", EVERYONE, 3.0, 1800, "Nobody may enter the footprint. People inside leave for the nearest street outside it."),
-    "flood": HazardProfile("Flash flood", EVERYONE, 2.0, 3600, "Streets and sidewalks inside the footprint are impassable until the water recedes."),
-    "tornado": HazardProfile("Tornado", EVERYONE, 4.0, 600, "A wide warning radius: everyone who sees it leaves the footprint and spreads the word."),
-    "gas_leak": HazardProfile("Gas leak", EVERYONE, 3.0, 1200, "The footprint is evacuated and closed to all traffic."),
-    # weather: rain blocks nothing (people see it and hear about it; the visual is the point), a storm closes its streets
-    "rain": HazardProfile("Heavy rain", (), 1.5, 600, "Streets stay open under the downpour. People inside see it; the visual is illustrative."),
-    "storm": HazardProfile("Storm", ("passenger", "bus"), 2.0, 600, "Streets inside the footprint close to cars and buses until the storm passes. Sidewalks stay open."),
-}
 Hazard = Literal["crash", "fire", "flood", "tornado", "gas_leak", "rain", "storm"]
 
 
