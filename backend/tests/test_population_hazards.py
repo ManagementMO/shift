@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from itertools import dropwhile
 from pathlib import Path
 
 import pytest
@@ -188,7 +189,10 @@ def test_closures_and_blockages_survive_a_checkpoint_restart(tmp_path, grid):
         begin(mobility)
         expected, _ = run_to_arrivals(mobility, [fire, at_shop], 3, stop_at=400)
         expected_blocked = dict(mobility._blocked)
-    assert expected_blocked  # the driver bound for the closed shop street waits at the closure
+        driver = mobility._residents["driver"]
+        # The driver bound for the closed shop street has pulled over and waits, well past SUMO's teleport limit.
+        assert "fire-2" in expected_blocked[driver] and mobility._conn.vehicle.isStopped(driver)
+    assert not any(outcome.reason == "SUMO teleport" for outcome in expected)
     with PopulationMobility(grid, tmp_path / "first", "restart", 7, 1500) as mobility:
         begin(mobility)
         first, _ = run_to_arrivals(mobility, [fire, at_shop], 3, stop_at=120)
@@ -348,13 +352,15 @@ def test_detour_walks_follow_sumo_pedestrian_connectivity(tmp_path, monkeypatch,
                                                          departPos=mid_a, arrivalPos=mid_b)
             assert (mobility._walk_path(a, mid_a, b, mid_b) is not None) == (len(stages) == 1 and bool(stages[0].edges))
         mobility._blocked_walk = frozenset(rng.sample(walkable, len(walkable) // 8))
+        mobility._walk_trees.clear()  # set directly here; closures normally clear it themselves
         started = 0
         for index, (a, b) in enumerate(pairs):
             source, target = rng.uniform(0, mobility.net.getEdge(a).getLength()), rng.uniform(0, mobility.net.getEdge(b).getLength())
             path = mobility._walk_path(a, source, b, target)
             if path is None:
                 continue
-            assert not mobility._blocked_walk & set(path[0][1:])
+            # A walk may leave the closed area it starts in, but never enter one.
+            assert not mobility._blocked_walk & set(dropwhile(mobility._blocked_walk.__contains__, path[0]))
             conn.person.add(f"w{index}", a, source, depart=0, typeID=POPULATION_TYPES["pedestrian"])
             conn.person.appendWalkingStage(f"w{index}", list(path[0]), arrivalPos=target)
             started += 1
@@ -367,3 +373,64 @@ def test_detour_walks_follow_sumo_pedestrian_connectivity(tmp_path, monkeypatch,
             arrived += conn.simulation.getArrivedPersonNumber()
     assert started > 40 and arrived == started
     assert "Error" not in (tmp_path / "run" / "sumo.log").read_text()
+
+
+def test_blocked_vehicles_pull_over_until_the_closure_ends_without_blocking_the_lane(tmp_path, grid):
+    home, shop, _, _ = places(grid)
+    at_shop = HazardFootprint("fire-2", shop.lon, shop.lat, 30, resident_classes("fire"), 700)
+    with PopulationMobility(grid, tmp_path, "held", 7, 1500) as mobility:
+        cars = [mobility.start_trip(f"driver-{i}", home, shop, "passenger") for i in range(2)]
+        for _ in range(3):
+            mobility.step()
+        mobility.set_hazards([at_shop])
+        assert {notice.status for notice in mobility.take_notices()} == {"blocked"}
+        stops = [mobility._conn.vehicle.getStops(car, 1)[0] for car in cars]
+        assert all(stop.until == 700 and stop.stopFlags & 1 for stop in stops)  # parked, not standing in the lane
+        outcomes, notices = run_to_arrivals(mobility, [at_shop], 2)
+        # Both wait out the fire (the second, queued behind the first, is not jam-teleported), then arrive.
+        assert sorted((o.resident_id, o.status) for o in outcomes) == [("driver-0", "arrived"), ("driver-1", "arrived")]
+        assert all(o.t > 700 for o in outcomes) and notices == [] and mobility.teleports == 0
+        assert mobility._blocked == {}
+
+
+def test_a_vehicle_caught_inside_a_large_footprint_waits_there_instead_of_teleporting(tmp_path, grid):
+    _, shop, _, _ = places(grid)
+    net = sumolib.net.readNet(str(grid))
+    inside = anchor(net, "inside", "g_00_10", 60)
+    lon, lat = net.convertXY2LonLat(*net.getNode("n10").getCoord())
+    big = HazardFootprint("fire-4", lon, lat, 260, resident_classes("fire"), 600)
+    with PopulationMobility(grid, tmp_path, "trapped", 7, 1500) as mobility:
+        car = mobility.start_trip("driver", inside, shop, "passenger")
+        for _ in range(3):
+            mobility.step()
+        mobility.set_hazards([big])
+        assert [notice.status for notice in mobility.take_notices()] == ["blocked"]
+        # Its own street stays open to it (SUMO refuses a stop on a closed lane), and to no new trip.
+        assert "passenger" not in mobility._conn.lane.getDisallowed("g_00_10_1")
+        assert "g_00_10" in mobility._closed_to("passenger")
+        assert not mobility.estimate_trip(anchor(net, "west", "g_00_10", 20), shop, "passenger")["reachable"]
+        outcomes, _ = run_to_arrivals(mobility, [big], 1)
+        assert [(o.entity_id, o.status) for o in outcomes] == [(car, "arrived")] and outcomes[0].t > 600
+        assert mobility.teleports == 0
+
+
+def test_residents_inside_a_large_footprint_may_walk_out_but_not_back_in(tmp_path):
+    grid5 = build_grid_network(tmp_path / "net", size=5)
+    net = sumolib.net.readNet(str(grid5))
+    inside = anchor(net, "inside", "g_22_32", 100)
+    far = anchor(net, "far", "g_40_41", 100)
+    lon, lat = net.convertXY2LonLat(*net.getNode("n22").getCoord())
+    big = HazardFootprint("fire-5", lon, lat, 230, resident_classes("fire"), 900)  # two blocks in every direction
+    with PopulationMobility(grid5, tmp_path / "run", "escape", 7, 1500) as mobility:
+        mobility.set_hazards([big])
+        # Every street at both ends of the resident's street is closed too.
+        assert {edge.getID() for node in ("n22", "n32") for edge in (*net.getNode(node).getIncoming(),
+                                                                     *net.getNode(node).getOutgoing())} <= mobility._blocked_walk
+        out = mobility.estimate_trip(inside, far, "pedestrian")
+        assert out["reachable"], out["reason"]
+        assert not mobility.estimate_trip(far, inside, "pedestrian")["reachable"]
+        walker = mobility.start_trip("walker", inside, far, "pedestrian")
+        edges = mobility._conn.person.getEdges(walker, 1)
+        assert not mobility._blocked_walk & set(dropwhile(mobility._blocked_walk.__contains__, edges))
+        outcomes, _ = run_to_arrivals(mobility, [big], 1)
+        assert [(o.entity_id, o.status) for o in outcomes] == [(walker, "arrived")]

@@ -39,7 +39,7 @@ Drop an incident on the map (fire, flood, gas leak, tornado, crash, storm or rai
   | Crash, storm | Vehicles; sidewalks stay open |
   | Rain | Nothing |
 
-  Vehicles already on the road reroute. Walkers take a detour. New trips route around the closure, and a destination inside it is unreachable. With no detour, the resident is told its way is blocked: a vehicle waits at the closure, and a walker keeps going unless its resident chooses otherwise, because SUMO cannot hold a walker back.
+  Vehicles already on the road reroute. Walkers take a detour. New trips route around the closure, and a destination inside it is unreachable. People caught inside may still leave. With no detour, the resident is told its way is blocked and is asked again while it stays blocked: a vehicle pulls over before the closure and waits for it to lift, and a walker keeps going unless its resident chooses otherwise, because SUMO cannot hold a walker back.
 - **People notice them.** Residents within the warning radius see the incident, including residents who are travelling. The warning radius is wider than the footprint (three times wider for a fire). Word of mouth passes the news between people at the same place, for up to three retellings. Telling friends elsewhere is the model’s own choice, by message.
 - **Each resident decides.** Nothing scripts a response. A resident who hears about a fire might cancel an errand, warn a contact, or keep going. A traveller who sees an incident, or whose route it blocks, is woken mid-trip and can `continue`, `redirect` to another destination, or send a message. Turning away from a trip that serves a commitment fails that commitment.
 

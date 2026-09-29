@@ -20,6 +20,10 @@ class TravelMobility(FixtureMobility):
     tracks: dict = field(default_factory=dict)
     route: str = "clear"
     junction: bool = False
+    ready: bool = True
+
+    def trip_ready(self, resident_id):
+        return self.ready
 
     def start_trip(self, resident_id, origin, destination, travel_class):
         entity_id = super().start_trip(resident_id, origin, destination, travel_class)
@@ -74,7 +78,8 @@ def test_incidents_are_seen_from_their_warning_radius_and_close_streets_only_whi
     world.apply_stimuli([wider])
     assert set(world.stimuli[1].resident_ids) == set(at(world, "home-a") + at(world, "home-b"))
     receipt = world.states[at(world, "home-a")[0]].memories[-1].text
-    assert "closes streets and sidewalks within 30 m" in receipt and "no injuries" in receipt
+    assert "Vehicles cannot enter streets within 30 m" in receipt and "walking routes go around it" in receipt
+    assert "no injuries" in receipt
     rain = incident("rain-1", anchors["home-a"], hazard="rain", radius=200)
     world.apply_stimuli([rain])
     assert "closes no streets" in world.states[at(world, "home-a")[0]].memories[-1].text
@@ -225,3 +230,61 @@ def test_checkpoint_rejects_wakes_for_residents_who_are_not_travelling():
     saved["travel_wakes"] = [pop.profiles[0].resident_id]
     with pytest.raises(ValueError, match="not travelling"):
         SocietyWorld.from_checkpoint(world.run_id, pop, FixtureMobility(), saved)
+
+
+def test_travellers_decide_only_once_their_body_is_on_a_street():
+    pop = definition()
+    mobility = TravelMobility()
+    world = SocietyWorld("society-ready", pop, mobility)
+    anchors = {anchor.anchor_id: anchor for anchor in pop.anchors}
+    rid = at(world, "home-a")[0]
+    assert turn(world, rid, "travel", target_id="shop", travel_class="pedestrian").accepted
+    mobility.ready = False  # e.g. a detour body inserted this second, not yet walking
+    world.apply_stimuli([incident("fire-1", anchors["home-a"], duration=3000)])
+    assert rid in world._travel_wakes and rid not in world.due_residents()
+    mobility.ready = True
+    world.advance(world.t + 1)
+    assert rid in world.due_residents()
+
+
+def test_a_traveller_whose_way_stays_closed_is_asked_again_each_decision_interval():
+    pop = definition()
+    mobility = TravelMobility(route="blocked")
+    world = SocietyWorld("society-held", pop, mobility)
+    rid = at(world, "home-d")[0]
+    assert turn(world, rid, "travel", target_id="shop", travel_class="pedestrian").accepted
+    world._wake_traveler(rid)  # as a blocked route notice does
+    interval = pop.spec.decision_interval_s
+    for key in ("k1", "k2"):
+        world.begin_epoch([rid])
+        assert world.commit_decisions({rid: decision("continue", key)}, source="rules")[0].accepted
+        assert rid not in world.due_residents()
+        world.advance(world.t + interval - 1)
+        assert rid not in world.due_residents()
+        world.advance(world.t + 1)
+        assert rid in world.due_residents()
+    world.begin_epoch([rid])
+    world.commit_decisions({rid: None}, source="rules", failures={rid: "no usable decision"})
+    assert rid in world._travel_wakes  # a failed turn does not end the questions while the way is closed
+    mobility.route = "clear"
+    world.advance(world.t + interval)
+    world.begin_epoch([rid])
+    world.commit_decisions({rid: decision("continue", "k3")}, source="rules")
+    world.advance(world.t + interval)
+    assert rid not in world.due_residents()  # once the way is open, no more mid-trip questions
+    SocietyWorld.from_checkpoint(world.run_id, pop, TravelMobility(), world.checkpoint_state())
+
+
+def test_a_replacement_body_is_located_where_the_previous_one_was_last_measured():
+    pop = definition()
+    mobility = TravelMobility()
+    world = SocietyWorld("society-position", pop, mobility)
+    anchors = {anchor.anchor_id: anchor for anchor in pop.anchors}
+    rid = at(world, "home-d")[0]
+    assert turn(world, rid, "travel", target_id="shop", travel_class="pedestrian").accepted
+    old = world._active_body(rid).entity_id
+    mobility.tracks[old].samples.append([world.t, anchors["rest"].lon, anchors["rest"].lat, 0.0, 1.0])
+    mobility.tracks["body-detour"] = SimpleNamespace(samples=[])  # inserted this second, not measured yet
+    world._swap_body(rid, "body-detour", None)  # as a diverted route notice does
+    world.apply_stimuli([incident("fire-1", anchors["rest"], duration=3000)])
+    assert rid in world.stimuli[0].resident_ids  # seen from where the walk was last measured

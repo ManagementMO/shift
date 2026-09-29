@@ -357,7 +357,7 @@ class RunControl:
                     "an accessible anchor_id; accept/decline/prepare/pickup/deliver/visit/serve/report_delay/"
                     "revise_commitment "
                     "uses an actual visible task_id; message uses a known contact's resident_id. "
-                    "While travelling, choose continue, redirect, or message. "
+                    "While travelling, choose continue, redirect, message, report_delay, or revise_commitment. "
                     "Proposals are not committed world outcomes. Do not invent completion or advance city time."
                 ),
             }, sort_keys=True, allow_nan=False)

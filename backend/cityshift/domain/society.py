@@ -222,17 +222,8 @@ class SocietyWorld:
                 if stimulus.lon is None:
                     residents.append(rid)
                     continue
-                position = None
                 anchor = self.anchors.get(state.anchor_id or "")
-                if anchor is not None:
-                    position = (anchor.lon, anchor.lat)
-                else:
-                    binding = next((b for b in reversed(self.mobility_bindings)
-                                    if b.resident_id == rid and b.end_s is None and b.measured), None)
-                    track = getattr(self.mobility, "tracks", {}).get(binding.entity_id) if binding else None
-                    samples = [s for s in track.samples if s[0] <= self.t] if track else []
-                    if samples:
-                        position = (samples[-1][1], samples[-1][2])
+                position = (anchor.lon, anchor.lat) if anchor is not None else self._measured_position(rid)
                 if position is not None and stimulus.lat is not None and stimulus.radius_m is not None:
                     lat = math.radians((position[1] + stimulus.lat) / 2)
                     distance = math.hypot((position[0] - stimulus.lon) * 111_320 * math.cos(lat),
@@ -261,6 +252,22 @@ class SocietyWorld:
             self._snapshot()
         return changed
 
+    def _measured_position(self, rid: str) -> tuple[float, float] | None:
+        """A traveller's last measured position, through any replacement bodies that continued the same trip."""
+        tracks = getattr(self.mobility, "tracks", {})
+        start = None
+        for binding in reversed(self.mobility_bindings):
+            if binding.resident_id != rid:
+                continue
+            if not binding.measured or (start is not None and binding.end_s != start):
+                return None
+            track = tracks.get(binding.entity_id)
+            samples = [row for row in track.samples if row[0] <= self.t] if track else []
+            if samples and all(math.isfinite(value) for value in samples[-1][1:3]):
+                return samples[-1][1], samples[-1][2]
+            start = binding.start_s
+        return None
+
     @staticmethod
     def _physical_effect(stimulus: PopulationStimulus) -> str:
         """What the city does about an input: incidents close streets by hazard; nothing else changes streets."""
@@ -269,9 +276,10 @@ class SocietyWorld:
         classes = resident_classes(stimulus.hazard)
         if not classes:
             return "It closes no streets."
-        closed = "streets and sidewalks" if "pedestrian" in classes else "streets to vehicles (sidewalks stay open)"
-        return (f"The city closes {closed} within {stimulus.radius_m:g} m of it for {stimulus.duration_s} seconds. "
-                "This establishes no injuries or a completed response.")
+        walking = ("walking routes go around it too, though people already inside may walk out"
+                   if "pedestrian" in classes else "sidewalks stay open")
+        return (f"Vehicles cannot enter streets within {stimulus.radius_m:g} m of it for {stimulus.duration_s} seconds; "
+                f"{walking}. This establishes no injuries or a completed response.")
 
     def hazard_footprints(self) -> list[HazardFootprint]:
         """Physical footprints of the incidents in effect now; rain and other non-blocking hazards close nothing."""
@@ -299,9 +307,14 @@ class SocietyWorld:
             if notice.previous_entity_id is not None:
                 self._swap_body(rid, notice.entity_id, None)
             hazards = " and ".join(self._incident_label(hazard_id) for hazard_id in notice.hazard_ids)
-            text = (f"Detoured around streets closed by {hazards}; still heading to {state.destination_id}."
-                    if notice.status == "diverted" else
-                    f"The way to {state.destination_id} is closed by {hazards} and there is no open detour.")
+            if notice.status == "diverted":
+                text = f"Detoured around streets closed by {hazards}; still heading to {state.destination_id}."
+            elif state.travel_class == "pedestrian":
+                text = (f"The way to {state.destination_id} is closed by {hazards} and there is no open detour; "
+                        "walking on means entering the closed area.")
+            else:
+                text = (f"The way to {state.destination_id} is closed by {hazards} and there is no open detour; "
+                        "the vehicle has pulled over and waits until it reopens.")
             self._emit(f"route_{notice.status}", [rid], text, cause=f"stimulus:{notice.hazard_ids[0]}", status="observed")
             if notice.status == "blocked":
                 self._wake_traveler(rid)
@@ -340,6 +353,14 @@ class SocietyWorld:
                            f"{stimulus.text}", cause=f"stimulus:{sid}", status="observed")
                 for rid in listeners:
                     self._wake(rid)
+
+    def _rewake_if_blocked(self, rid: str) -> None:
+        """A traveller whose way stays closed is asked again every decision interval, like a resident waiting."""
+        status = getattr(self.mobility, "trip_status", lambda _: None)(rid)
+        if status is not None and status.get("route") == "blocked":
+            state = self.states[rid]
+            self._travel_wakes.add(rid)
+            state.next_decision_s = self.t + self.definition.spec.decision_interval_s
 
     def _wake_traveler(self, rid: str) -> None:
         state = self.states[rid]
@@ -524,11 +545,15 @@ class SocietyWorld:
         return world
 
     def due_residents(self) -> list[str]:
-        """Residents free at a place whose decision time has come, and travellers an incident has just reached."""
+        """Residents free at a place whose decision time has come, and travellers an incident has just reached.
+
+        A traveller decides once its body is on a street, so a redirect can start from where it is.
+        """
+        ready = getattr(self.mobility, "trip_ready", None)
         return sorted(rid for rid, state in self.states.items()
                       if state.next_decision_s <= self.t and (
                           (state.busy_until_s <= self.t and state.activity != "traveling" and state.anchor_id in self.anchors)
-                          or (state.activity == "traveling" and rid in self._travel_wakes)))
+                          or (state.activity == "traveling" and rid in self._travel_wakes and (ready is None or ready(rid)))))
 
     def begin_epoch(self, resident_ids: list[str] | None = None) -> list[dict[str, Any]]:
         if self._decision_ids is not None:
@@ -621,6 +646,7 @@ class SocietyWorld:
                                cause=did, status="observed")
                 self._travel_wakes.discard(rid)
                 if state.activity == "traveling":
+                    self._rewake_if_blocked(rid)
                     continue  # a traveller without a usable decision simply keeps going
                 state.activity = "waiting"
                 state.busy_until_s = self.t + max(60, self.definition.spec.decision_interval_s)
@@ -658,6 +684,8 @@ class SocietyWorld:
                 # The body was on a junction for an instant: offer the same choice again next second.
                 self._travel_wakes.add(rid)
                 state.next_decision_s = self.t + 1
+            elif state.activity == "traveling":
+                self._rewake_if_blocked(rid)
         self._decision_ids = None
         self._observation_refs.clear()
         self.version += 1

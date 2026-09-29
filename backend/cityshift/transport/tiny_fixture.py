@@ -81,22 +81,24 @@ def build_tiny_network(out_dir: Path, geo: bool = False) -> Path:
     return net
 
 
-def build_grid_network(out_dir: Path) -> Path:
-    """A 3x3 geographic street grid (~210 m blocks) with sidewalks and crossings, so a closed street has a detour.
+def build_grid_network(out_dir: Path, size: int = 3) -> Path:
+    """A size x size geographic street grid (~210 m blocks) with sidewalks and crossings, so a closed street has a detour.
 
     Node `n{i}{j}` is column i (west to east), row j (south to north); edge `g_{a}_{b}` runs from node a to node b.
     Every junction has a crossing over each of its streets.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    nodes = out_dir / "grid.nod.xml"
-    edges = out_dir / "grid.edg.xml"
-    crossings = out_dir / "grid.con.xml"
-    net = out_dir / "grid.net.xml"
+    stem = "grid" if size == 3 else f"grid{size}"
+    nodes = out_dir / f"{stem}.nod.xml"
+    edges = out_dir / f"{stem}.edg.xml"
+    crossings = out_dir / f"{stem}.con.xml"
+    net = out_dir / f"{stem}.net.xml"
     nodes.write_text("<nodes>\n" + "".join(
         f'    <node id="n{i}{j}" x="{-79.39 + i * 0.0026:.5f}" y="{43.64 + j * 0.0019:.5f}" type="priority"/>\n'
-        for i in range(3) for j in range(3)
+        for i in range(size) for j in range(size)
     ) + "</nodes>\n")
-    streets = [(f"{i}{j}", f"{i + 1}{j}") for i in range(2) for j in range(3)] + [(f"{i}{j}", f"{i}{j + 1}") for i in range(3) for j in range(2)]
+    streets = ([(f"{i}{j}", f"{i + 1}{j}") for i in range(size - 1) for j in range(size)]
+               + [(f"{i}{j}", f"{i}{j + 1}") for i in range(size) for j in range(size - 1)])
     edges.write_text("<edges>\n" + "".join(
         f'    <edge id="g_{a}_{b}" from="n{a}" to="n{b}" numLanes="1" speed="11.1" sidewalkWidth="2.0"/>\n'
         for p, q in streets for a, b in ((p, q), (q, p))

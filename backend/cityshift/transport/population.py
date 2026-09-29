@@ -10,6 +10,7 @@ import sys
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import dropwhile
 from pathlib import Path
 from types import TracebackType
 from typing import BinaryIO, Literal, Self
@@ -101,8 +102,7 @@ class MobilityOutcome:
 class _WalkLinks:
     """Which sidewalks meet at each junction, through its walking areas and crossings, as SUMO's walkers see it."""
 
-    def __init__(self, net_file: Path):
-        net = sumolib.net.readNet(str(net_file), withInternal=True, withPedestrianConnections=True)
+    def __init__(self, net: sumolib.net.Net) -> None:
         parent: dict[tuple[str, str], tuple[str, str]] = {}
 
         def find(key: tuple[str, str]) -> tuple[str, str]:
@@ -221,7 +221,9 @@ class PopulationMobility:
         self._residents: dict[str, str] = {}
         self._hazards: dict[str, _Hazard] = {}
         self._street_closures: dict[str, frozenset[str]] = {}
+        self._lane_closures: dict[str, frozenset[str]] = {}
         self._blocked_walk: frozenset[str] = frozenset()
+        self._walk_trees: dict[tuple[str, float], tuple] = {}
         self._lane_disallowed: dict[str, tuple[str, ...]] = {}
         self._blocked: dict[str, tuple[str, ...]] = {}
         self._replan: set[str] = set()
@@ -678,7 +680,9 @@ class PopulationMobility:
         except traci.TraCIException as error:
             raise ValueError(f"No {travel_class} route: {error}") from error
         edges = tuple(stage.edges)
-        if not edges and self._closed_to(travel_class):
+        closed = self._closed_to(travel_class)
+        # A closed street stays open to SUMO while a resident vehicle is still on it; no new trip may use it.
+        if (not edges and closed) or (travel_class != "pedestrian" and closed & set(edges[1:])):
             raise ValueError(f"No {travel_class} route around the streets closed by a hazard")
         if not edges or edges[0] != source.edge_id or edges[-1] != target.edge_id:
             raise ValueError(f"No {travel_class} route between the declared access positions")
@@ -739,6 +743,8 @@ class PopulationMobility:
         self._require_open()
         active = {hazard.hazard_id: hazard for hazard in hazards if hazard.until_s > self.t}
         if set(active) == set(self._hazards) and all(h.until_s > self.t for h in self._hazards.values()):
+            if self._street_closures:
+                self._close_lanes()
             for entity_id in sorted(self._replan):
                 waiting = self._active.get(entity_id)
                 if waiting is None:
@@ -773,6 +779,16 @@ class PopulationMobility:
         return {"destination_id": trip.destination_id, "travel_class": trip.travel_class, "position": position,
                 "route": "blocked" if entity_id in self._blocked else "clear",
                 "blocked_by": list(self._blocked.get(entity_id, ()))}
+
+    def trip_ready(self, resident_id: str) -> bool:
+        """Whether a travelling resident's body is on a street now, so a new destination can start from it."""
+        entity_id = self._residents.get(resident_id)
+        if entity_id is None or not self._active[entity_id].departed:
+            return False
+        conn = self._require_open()
+        domain = conn.person if self._active[entity_id].travel_class == "pedestrian" else conn.vehicle
+        road = domain.getRoadID(entity_id)
+        return bool(road) and not road.startswith(":")
 
     def estimate_redirect(self, resident_id: str, destination: ActivityAnchor) -> dict:
         """Estimate a new destination for a travelling resident, from where its body is now and in the same class."""
@@ -885,7 +901,7 @@ class PopulationMobility:
                             if travel_class in hazard.classes and hazard.edges & edges))
 
     def _apply_closures(self) -> None:
-        conn = self._require_open()
+        """Derive the closed streets from the active hazards and apply them to SUMO's lanes."""
         closed: dict[str, set[str]] = {}
         walk: set[str] = set()
         for hazard in self._hazards.values():
@@ -894,21 +910,44 @@ class PopulationMobility:
                     walk.add(edge_id)
                 if hazard.classes - {"pedestrian"}:
                     closed.setdefault(edge_id, set()).update(hazard.classes - {"pedestrian"})
-        wanted = {edge_id: frozenset(classes) for edge_id, classes in closed.items()}
-        for edge_id in sorted(set(wanted) | set(self._street_closures)):
-            if wanted.get(edge_id) == self._street_closures.get(edge_id):
+        self._street_closures = {edge_id: frozenset(classes) for edge_id, classes in closed.items()}
+        if frozenset(walk) != self._blocked_walk:
+            self._walk_trees.clear()
+        self._blocked_walk = frozenset(walk)
+        self._close_lanes()
+
+    def _close_lanes(self) -> None:
+        """Close lanes to vehicles, except under resident vehicles still on them: a street closes once they leave.
+
+        SUMO neither lets a vehicle stop on a lane closed to it nor lets it leave by another closed lane, so a vehicle
+        caught on a street when it closes keeps that street until it drives out (or waits there, held).
+        """
+        conn = self._require_open()
+        occupied: set[str] = set()
+        for trip in self._active.values():
+            if trip.travel_class == "pedestrian" or not trip.departed:
+                continue
+            road = conn.vehicle.getRoadID(trip.entity_id)
+            if road.startswith(":"):  # on a junction: already committed to its next street
+                route, index = conn.vehicle.getRoute(trip.entity_id), conn.vehicle.getRouteIndex(trip.entity_id)
+                road = route[index + 1] if 0 <= index < len(route) - 1 else ""
+            occupied.add(road)
+        wanted = {edge_id: classes for edge_id, classes in self._street_closures.items() if edge_id not in occupied}
+        for edge_id in sorted(set(wanted) | set(self._lane_closures)):
+            if wanted.get(edge_id) == self._lane_closures.get(edge_id):
                 continue
             for lane in self.net.getEdge(edge_id).getLanes():
                 lane_id = lane.getID()
                 original = self._lane_disallowed.setdefault(lane_id, tuple(conn.lane.getDisallowed(lane_id)))
                 conn.lane.setDisallowed(lane_id, sorted(set(original) | wanted.get(edge_id, frozenset())))
-        self._street_closures = wanted
-        self._blocked_walk = frozenset(walk)
+        self._lane_closures = wanted
 
     def _avoid_closures(self, trip: _Trip) -> None:
         """Keep a trip off closed streets: vehicles take a new route, walkers continue in a body on a detour.
 
-        A body on a junction (or not yet on the road) is decided at the next `set_hazards` call.
+        A body on a junction (or not yet on the road) is decided at the next `set_hazards` call. A vehicle with no
+        open way on pulls over before the closure until it ends; SUMO cannot hold a walker, so a blocked walker is
+        only reported.
         """
         conn = self._require_open()
         self._replan.discard(trip.entity_id)
@@ -919,6 +958,8 @@ class PopulationMobility:
                 road = conn.person.getRoadID(trip.entity_id) if trip.departed else ""
                 on_street = trip.departed and road in edges
                 ahead = edges[edges.index(road) + 1:] if on_street else edges[1:]
+                if road in self._blocked_walk:  # leaving a closed area is allowed; only entering one is blocked
+                    ahead = list(dropwhile(self._blocked_walk.__contains__, ahead))
             else:
                 edges = conn.vehicle.getRoute(trip.entity_id)
                 index = max(0, conn.vehicle.getRouteIndex(trip.entity_id))
@@ -929,7 +970,7 @@ class PopulationMobility:
             return
         blocking = self._hazards_on(ahead, kind)
         if not blocking:
-            self._blocked.pop(trip.entity_id, None)
+            self._release(trip)
             return
         if not on_street:
             self._replan.add(trip.entity_id)
@@ -945,7 +986,6 @@ class PopulationMobility:
                 replacement = _Trip(trip.resident_id, self._next_entity_id(), trip.destination_id, kind, trip.destination)
                 self._add_body(replacement, path[0], position, 0)
             except ValueError:
-                # SUMO cannot stop a walker on a closed sidewalk; the resident is told and chooses what to do.
                 self._report_blocked(trip, blocking)
                 return
             self._retire(trip)
@@ -953,15 +993,53 @@ class PopulationMobility:
             self._report_diverted(replacement, trip.entity_id, blocking)
             return
         route = self._drive_route(road, position, kind, trip.destination)
-        try:
-            if route is None:
-                raise traci.TraCIException("no detour")
-            conn.vehicle.setRoute(trip.entity_id, route[0])
-        except traci.TraCIException:
-            # With no detour the vehicle stops at the closure, where SUMO's own rules apply.
-            self._report_blocked(trip, blocking)
+        if route is not None:
+            self._release(trip)
+            try:
+                conn.vehicle.setRoute(trip.entity_id, route[0])
+            except traci.TraCIException:
+                pass
+            else:
+                self._report_diverted(trip, None, blocking)
+                return
+        if self._blocked.get(trip.entity_id) != blocking:
+            self._release(trip)
+            self._hold(trip, edges, index, blocking)
+        self._report_blocked(trip, blocking)
+
+    def _hold(self, trip: _Trip, route: tuple[str, ...], index: int, blocking: tuple[str, ...]) -> None:
+        """Pull a vehicle over at the end of its last open street until the closures in its way end.
+
+        A parked stop keeps the lane free for others and is exempt from SUMO's teleport of stuck vehicles.
+        """
+        conn = self._require_open()
+        closed = self._closed_to(trip.travel_class)
+        first_closed = next((i for i in range(index + 1, len(route)) if route[i] in closed), index + 1)
+        edge = self.net.getEdge(route[first_closed - 1])
+        lane = next((lane for lane in edge.getLanes() if lane.allows(trip.travel_class)), None)
+        if lane is None:
             return
-        self._report_diverted(trip, None, blocking)
+        try:
+            conn.vehicle.setStop(trip.entity_id, edge.getID(), pos=lane.getLength(), laneIndex=lane.getIndex(),
+                                 duration=0, until=max(self._hazards[h].until_s for h in blocking),
+                                 flags=tc.STOP_PARKING)
+        except traci.TraCIException:
+            pass  # without a hold the vehicle waits at the closure under SUMO's own rules
+
+    def _release(self, trip: _Trip) -> None:
+        if trip.entity_id not in self._blocked:
+            return
+        del self._blocked[trip.entity_id]
+        if trip.travel_class == "pedestrian":
+            return
+        conn = self._require_open()
+        try:
+            if conn.vehicle.isStopped(trip.entity_id):
+                conn.vehicle.resume(trip.entity_id)
+            elif conn.vehicle.getStops(trip.entity_id, 1):
+                conn.vehicle.replaceStop(trip.entity_id, 0, "")
+        except traci.TraCIException:
+            pass
 
     def _report_blocked(self, trip: _Trip, hazard_ids: tuple[str, ...]) -> None:
         if self._blocked.get(trip.entity_id) != hazard_ids:
@@ -969,7 +1047,6 @@ class PopulationMobility:
             self._notices.append(RouteNotice(trip.resident_id, trip.entity_id, None, "blocked", hazard_ids))
 
     def _report_diverted(self, trip: _Trip, previous: str | None, hazard_ids: tuple[str, ...]) -> None:
-        self._blocked.pop(trip.entity_id, None)
         self._notices.append(RouteNotice(trip.resident_id, trip.entity_id, previous, "diverted", hazard_ids))
 
     def _walk_route(self, road: str, position: float, target: AnchorAccess) -> tuple[tuple[str, ...], float, float] | None:
@@ -1011,51 +1088,87 @@ class PopulationMobility:
         return best
 
     def _walk_path(self, source: str, source_pos: float, target: str, target_pos: float) -> tuple[tuple[str, ...], float, float] | None:
-        """Shortest sidewalk path that never enters a closed footprint; the walker's own street is always allowed.
+        """Shortest sidewalk path that never enters a closed footprint, though it may leave the one it starts in.
 
         SUMO builds its pedestrian router once, so it cannot see closures made later. This search follows SUMO's own
         walking rules instead: sidewalks meet only through a junction's walking areas and crossings, and a walk leaves
         its first street at the far end when the next street touches it.
         """
-        blocked = self._blocked_walk
-        if target in blocked:
+        if target in self._blocked_walk:
             return None
         if source == target:
             distance = abs(target_pos - source_pos)
             return (source,), distance / PEDESTRIAN_SPEED_MPS, distance
-        links = self._walk_links or _WalkLinks(self.net_file)
-        self._walk_links = links
-        start, goal = self.net.getEdge(source), self.net.getEdge(target)
-        ahead, behind = start.getToNode().getID(), start.getFromNode().getID()
-
-        def finish(node: str) -> float:
-            return target_pos if node == goal.getFromNode().getID() else goal.getLength() - target_pos
-
-        frontier: list[tuple[float, tuple[str, str], tuple[str, ...]]] = []
-        for node, cost, backward in ((ahead, start.getLength() - source_pos, False), (behind, source_pos, True)):
-            root = links.ends.get((node, source))
-            for edge_id, other in links.members.get(root, ()) if root else ():
-                touches_ahead = ahead in (self.net.getEdge(edge_id).getFromNode().getID(), self.net.getEdge(edge_id).getToNode().getID())
-                if edge_id == source or (backward and touches_ahead):
+        links, exits, settled = self._walk_tree(source, source_pos)
+        goal = self.net.getEdge(target)
+        best: tuple[float, tuple[str, ...]] | None = None
+        for node, finish in ((goal.getFromNode().getID(), target_pos), (goal.getToNode().getID(), goal.getLength() - target_pos)):
+            root = links.ends.get((node, target))
+            for exit_root, cost, backward in exits:
+                if root == exit_root and not (backward and self._touches(target, source)):
+                    candidate = (cost + finish, (source, target))
+                    best = candidate if best is None or candidate < best else best
+            for escaped in (False, True):
+                reached = settled.get((root, escaped))
+                if reached is None or reached[2] == target:
                     continue
-                if edge_id == target:
-                    heapq.heappush(frontier, (cost + finish(node), ("", ""), (source, target)))
-                elif edge_id not in blocked and (other, edge_id) in links.ends:
-                    heapq.heappush(frontier, (cost + self.net.getEdge(edge_id).getLength(), links.ends[(other, edge_id)], (source, edge_id)))
-        seen: set[tuple[str, str]] = set()
-        while frontier:
-            cost, root, path = heapq.heappop(frontier)
-            if not root[0]:
-                return path, cost / PEDESTRIAN_SPEED_MPS, cost
-            if root in seen:
+                edges = [target]
+                state = (root, escaped)
+                while state is not None:
+                    edges.append(settled[state][2])
+                    state = settled[state][1]
+                candidate = (reached[0] + finish, (source, *reversed(edges)))
+                best = candidate if best is None or candidate < best else best
+        if best is None:
+            return None
+        return best[1], best[0] / PEDESTRIAN_SPEED_MPS, best[0]
+
+    def _touches(self, edge_id: str, source: str) -> bool:
+        """Whether a street meets the far end of `source`, where SUMO sends a walk that continues onto it."""
+        edge, ahead = self.net.getEdge(edge_id), self.net.getEdge(source).getToNode().getID()
+        return ahead in (edge.getFromNode().getID(), edge.getToNode().getID())
+
+    def _walk_tree(self, source: str, source_pos: float):
+        """Shortest walks from one point to every junction it can reach, cached until the closures change."""
+        key = (source, round(source_pos, 3))
+        if key in self._walk_trees:
+            return self._walk_trees[key]
+        links = self._walk_links or _WalkLinks(self.net)
+        self._walk_links = links
+        blocked = self._blocked_walk
+        start = self.net.getEdge(source)
+        exits = []
+        frontier: list[tuple[float, tuple, tuple | None, str]] = []
+        escaped = source not in blocked
+        for node, cost, backward in ((start.getToNode().getID(), start.getLength() - source_pos, False),
+                                     (start.getFromNode().getID(), source_pos, True)):
+            root = links.ends.get((node, source))
+            if root is None:
                 continue
-            seen.add(root)
+            exits.append((root, cost, backward))
+            for edge_id, other in links.members[root]:
+                if edge_id == source or (backward and self._touches(edge_id, source)) or (other, edge_id) not in links.ends:
+                    continue
+                if edge_id not in blocked or not escaped:  # a closed street may only be used to leave
+                    state = (links.ends[(other, edge_id)], escaped or edge_id not in blocked)
+                    heapq.heappush(frontier, (cost + self.net.getEdge(edge_id).getLength(), state, None, edge_id))
+        settled: dict[tuple, tuple[float, tuple | None, str]] = {}
+        while frontier:
+            cost, state, previous, via = heapq.heappop(frontier)
+            if state in settled:
+                continue
+            settled[state] = (cost, previous, via)
+            root, out = state
             for edge_id, other in links.members.get(root, ()):
-                if edge_id == target:
-                    heapq.heappush(frontier, (cost + finish(root[0]), ("", ""), (*path, target)))
-                elif edge_id not in blocked and edge_id not in path and (other, edge_id) in links.ends:
-                    heapq.heappush(frontier, (cost + self.net.getEdge(edge_id).getLength(), links.ends[(other, edge_id)], (*path, edge_id)))
-        return None
+                if (edge_id in blocked and out) or (other, edge_id) not in links.ends:
+                    continue
+                following = (links.ends[(other, edge_id)], out or edge_id not in blocked)
+                if following not in settled:
+                    heapq.heappush(frontier, (cost + self.net.getEdge(edge_id).getLength(), following, state, edge_id))
+        if len(self._walk_trees) >= 16:
+            self._walk_trees.clear()
+        self._walk_trees[key] = (links, exits, settled)
+        return self._walk_trees[key]
 
     def _depart(self, trip: _Trip) -> None:
         if not trip.departed:
