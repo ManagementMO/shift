@@ -267,9 +267,9 @@ def test_a_traveller_whose_way_stays_closed_is_asked_again_each_decision_interva
     world.commit_decisions({rid: None}, source="rules", failures={rid: "no usable decision"})
     assert rid in world._travel_wakes  # a failed turn does not end the questions while the way is closed
     mobility.route = "clear"
-    world.advance(world.t + interval)
-    world.begin_epoch([rid])
-    world.commit_decisions({rid: decision("continue", "k3")}, source="rules")
+    body = world._active_body(rid).entity_id
+    world.note_routes([RouteNotice(rid, body, None, "cleared", ())])
+    assert world.events[-1].kind == "route_cleared" and rid not in world._travel_wakes
     world.advance(world.t + interval)
     assert rid not in world.due_residents()  # once the way is open, no more mid-trip questions
     SocietyWorld.from_checkpoint(world.run_id, pop, TravelMobility(), world.checkpoint_state())

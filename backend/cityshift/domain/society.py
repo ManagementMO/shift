@@ -306,6 +306,12 @@ class SocietyWorld:
                 raise ValueError("route notice does not match the authoritative body")
             if notice.previous_entity_id is not None:
                 self._swap_body(rid, notice.entity_id, None)
+            if notice.status == "cleared":
+                self._travel_wakes.discard(rid)  # no more mid-trip questions about a way that is no longer blocked
+                self._emit("route_cleared", [rid], f"Nothing closed lies ahead on the way to {state.destination_id} any more.",
+                           status="observed")
+                changed = True
+                continue
             hazards = " and ".join(self._incident_label(hazard_id) for hazard_id in notice.hazard_ids)
             if notice.status == "diverted":
                 text = f"Detoured around streets closed by {hazards}; still heading to {state.destination_id}."

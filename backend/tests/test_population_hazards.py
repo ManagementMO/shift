@@ -25,7 +25,7 @@ from cityshift.domain.population_runs import execute_population_run, population_
 from cityshift.domain.population_stimuli import enqueue_stimuli
 from cityshift.transport.hazards import HAZARDS, alarm_radius, resident_classes
 from cityshift.transport.population import HazardFootprint, PopulationMobility
-from cityshift.transport.tiny_fixture import build_grid_network
+from cityshift.transport.tiny_fixture import build_grid_network, build_tiny_network
 
 CLASSES: tuple[TravelClass, ...] = ("pedestrian", "bicycle", "passenger", "delivery", "truck")
 
@@ -389,8 +389,9 @@ def test_blocked_vehicles_pull_over_until_the_closure_ends_without_blocking_the_
         outcomes, notices = run_to_arrivals(mobility, [at_shop], 2)
         # Both wait out the fire (the second, queued behind the first, is not jam-teleported), then arrive.
         assert sorted((o.resident_id, o.status) for o in outcomes) == [("driver-0", "arrived"), ("driver-1", "arrived")]
-        assert all(o.t > 700 for o in outcomes) and notices == [] and mobility.teleports == 0
-        assert mobility._blocked == {}
+        assert all(o.t > 700 for o in outcomes) and mobility.teleports == 0
+        assert sorted((n.resident_id, n.status) for n in notices) == [("driver-0", "cleared"), ("driver-1", "cleared")]
+        assert mobility._blocked == {} and mobility._held == set()
 
 
 def test_a_vehicle_caught_inside_a_large_footprint_waits_there_instead_of_teleporting(tmp_path, grid):
@@ -434,3 +435,102 @@ def test_residents_inside_a_large_footprint_may_walk_out_but_not_back_in(tmp_pat
         assert not mobility._blocked_walk & set(dropwhile(mobility._blocked_walk.__contains__, edges))
         outcomes, _ = run_to_arrivals(mobility, [big], 1)
         assert [(o.entity_id, o.status) for o in outcomes] == [(walker, "arrived")]
+
+
+def held_cars(grid: Path, mobility: PopulationMobility, until: int, count: int = 3):
+    home, shop, _, fire = places(grid)
+    hazards = [HazardFootprint("fire-2", shop.lon, shop.lat, 30, resident_classes("fire"), until), fire]
+    for index in range(count):
+        mobility.start_trip(f"driver-{index}", home, shop, "passenger")
+        mobility.step()
+    for _ in range(8):
+        mobility.step()
+    mobility.set_hazards(hazards)
+    return hazards
+
+
+def test_a_pause_while_held_vehicles_rejoin_the_road_resumes_identically(tmp_path, grid):
+    """When holds end, parked vehicles wait off the road for a gap; a checkpoint then must still resume exactly."""
+    with PopulationMobility(grid, tmp_path / "whole", "rejoin", 7, 1200) as mobility:
+        hazards = held_cars(grid, mobility, 700)
+        expected, _ = run_to_arrivals(mobility, hazards, 3, limit=1200)
+    for cut in (700, 701, 704):
+        with PopulationMobility(grid, tmp_path / f"first-{cut}", "rejoin", 7, 1200) as mobility:
+            hazards = held_cars(grid, mobility, 700)
+            first, _ = run_to_arrivals(mobility, hazards, 3, stop_at=cut)
+            off_road = [e for e in mobility._active if e not in mobility._conn.vehicle.getIDList()]
+            metadata = mobility.save_checkpoint(tmp_path / f"state-{cut}.xml")
+        if cut == 701:
+            assert off_road  # the moment the review found: vehicles between parking and the lane
+        with PopulationMobility(grid, tmp_path / f"second-{cut}", "rejoin", 7, 1200) as restored:
+            restored.restore_checkpoint(tmp_path / f"state-{cut}.xml", metadata)
+            rest, _ = run_to_arrivals(restored, hazards, 3 - len(first), limit=1200)
+        assert first + rest == expected
+
+
+def test_a_parked_vehicle_can_redirect_from_where_it_waits(tmp_path, grid):
+    _, _, park, _ = places(grid)
+    with PopulationMobility(grid, tmp_path / "parked", "redirect", 7, 1500) as mobility:
+        hazards = held_cars(grid, mobility, 1400, count=1)
+        car = mobility._residents["driver-0"]
+        for _ in range(100):
+            mobility.step()
+            mobility.set_hazards(hazards)
+        assert mobility._conn.vehicle.isStopped(car) and mobility._conn.vehicle.getLaneIndex(car) < 0
+        assert mobility.trip_ready("driver-0") and mobility.estimate_redirect("driver-0", park)["reachable"]
+        new_car = mobility.redirect_trip("driver-0", park)
+        outcomes, _ = run_to_arrivals(mobility, hazards, 1)
+        assert [(o.entity_id, o.destination_id, o.status) for o in outcomes] == [(new_car, "park", "arrived")]
+
+
+def test_a_hold_refused_as_too_close_to_brake_is_retried_until_the_vehicle_stops(tmp_path):
+    corridor = build_tiny_network(tmp_path / "net", geo=True)  # straight 300 m streets taken at full speed
+    net = sumolib.net.readNet(str(corridor))
+    home, shop = anchor(net, "home", "e_AB", 10), anchor(net, "shop", "e_CD", 200)
+    fire = HazardFootprint("fire", shop.lon, shop.lat, 30, resident_classes("fire"), 1000)
+    with PopulationMobility(corridor, tmp_path / "run", "late", 7, 1500) as mobility:
+        conn = mobility._conn
+        car = mobility.start_trip("driver", home, shop, "passenger")
+        while not (conn.vehicle.getRoadID(car) == "e_BC"
+                   and conn.vehicle.getLanePosition(car) > conn.lane.getLength(conn.vehicle.getLaneID(car)) - 20):
+            mobility.step()
+        assert conn.vehicle.getSpeed(car) > 12
+        mobility.set_hazards([fire])
+        assert car in mobility._blocked and car not in mobility._held and car in mobility._replan
+        outcomes, _ = run_to_arrivals(mobility, [fire], 1)
+        assert [o.status for o in outcomes] == ["arrived"] and outcomes[0].t > 1000 and mobility.teleports == 0
+    assert "too close to brake" in (tmp_path / "run" / "sumo.log").read_text()
+
+
+def test_a_street_kept_open_for_a_held_vehicle_is_routed_around_by_everyone_else(tmp_path, grid):
+    home, shop, _, _ = places(grid)
+    net = sumolib.net.readNet(str(grid))
+    lon, lat = street_centre(net, "g_10_11")
+    closes_it = HazardFootprint("fire-1", lon, lat, 30, resident_classes("fire"), 900)
+    inside = anchor(net, "inside", "g_10_11", 40)
+    with PopulationMobility(grid, tmp_path, "exempt", 7, 1500) as mobility:
+        mobility.start_trip("held", inside, shop, "passenger")
+        for _ in range(3):
+            mobility.step()
+        mobility.set_hazards([closes_it, HazardFootprint("fire-2", shop.lon, shop.lat, 30, resident_classes("fire"), 900)])
+        assert "g_10_11" in mobility._exempt  # open to the car still on it
+        west = anchor(net, "west", "g_01_02", 100)
+        estimate = mobility.estimate_trip(home, west, "passenger")
+        assert estimate["reachable"], estimate["reason"]
+        driver = mobility.start_trip("driver", home, west, "passenger")
+        assert "g_10_11" not in mobility._conn.vehicle.getRoute(driver)
+
+
+def test_a_blocked_walker_is_cleared_once_nothing_closed_lies_ahead(tmp_path, grid):
+    home, shop, _, _ = places(grid)
+    at_shop = HazardFootprint("fire-2", shop.lon, shop.lat, 30, resident_classes("fire"), 1500)
+    with PopulationMobility(grid, tmp_path, "walker", 7, 1500) as mobility:
+        walker = mobility.start_trip("walker", home, shop, "pedestrian")
+        for _ in range(15):
+            mobility.step()
+        mobility.set_hazards([at_shop])
+        assert [(n.entity_id, n.status) for n in mobility.take_notices()] == [(walker, "blocked")]
+        outcomes, notices = run_to_arrivals(mobility, [at_shop], 1)
+        # SUMO cannot stop it; once it is inside the closed area with nothing closed beyond, it is no longer blocked.
+        assert [(n.entity_id, n.status) for n in notices] == [(walker, "cleared")]
+        assert [o.status for o in outcomes] == ["arrived"] and mobility._blocked == {}
