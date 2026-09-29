@@ -430,6 +430,7 @@ TRAVEL_CLASSES: tuple[TravelClass, ...] = ("pedestrian", "bicycle", "passenger",
 PopulationAction = Literal[
     "request_service", "accept", "decline", "travel", "prepare", "pickup", "deliver",
     "visit", "serve", "report_delay", "message", "wait", "rest", "revise_commitment",
+    "continue", "redirect",
 ]
 
 

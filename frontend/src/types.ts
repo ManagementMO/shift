@@ -358,7 +358,7 @@ export type EvidenceBundle = {
 }
 
 export type TravelClass = 'pedestrian' | 'bicycle' | 'passenger' | 'delivery' | 'truck'
-export type PopulationAction = 'request_service' | 'accept' | 'decline' | 'travel' | 'prepare' | 'pickup' | 'deliver' | 'visit' | 'serve' | 'report_delay' | 'message' | 'wait' | 'rest' | 'revise_commitment'
+export type PopulationAction = 'request_service' | 'accept' | 'decline' | 'travel' | 'prepare' | 'pickup' | 'deliver' | 'visit' | 'serve' | 'report_delay' | 'message' | 'wait' | 'rest' | 'revise_commitment' | 'continue' | 'redirect'
 export type ResidentRole = 'customer' | 'shop_worker' | 'service_worker' | 'courier' | 'driver'
 export type MobilityMode = 'stationary' | 'walk' | 'cycle' | 'drive' | 'transit'
 

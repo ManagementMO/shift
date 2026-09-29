@@ -83,7 +83,7 @@ const definition = shape({
   population_id: text, spec, network_fingerprint: text, anchors: list(anchor), profiles: list(profile), initial_states: list(state), initial_tasks: list(task), assignments: dict(brain), assumptions: strings,
 })
 const intent = shape({
-  action: enumeration('request_service', 'accept', 'decline', 'travel', 'prepare', 'pickup', 'deliver', 'visit', 'serve', 'report_delay', 'message', 'wait', 'rest', 'revise_commitment'),
+  action: enumeration('request_service', 'accept', 'decline', 'travel', 'prepare', 'pickup', 'deliver', 'visit', 'serve', 'report_delay', 'message', 'wait', 'rest', 'revise_commitment', 'continue', 'redirect'),
   target_id: optionalText, travel_class: nullable(travelClass), request_kind: nullable(taskKind), duration_s: number(1, 3600, true), text,
   idempotency_key: pattern(/^[a-zA-Z0-9_.:-]+$/), observation_refs: list(text, 0, 32), run_id: text, resident_id: text, epoch: uint, world_version: uint, effective_t: uint, expires_t: uint,
 })

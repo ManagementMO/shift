@@ -34,6 +34,16 @@ def baseline_decision(observation: dict[str, Any]) -> ResidentDecision:
             return choose("wait", "The intended destination is not currently reachable.", duration_s=patience)
         return choose("travel", summary, target_id=target, travel_class=option["travel_class"])
 
+    if state["activity"] == "traveling":
+        journey = observation.get("trip") or {}
+        if journey.get("route") == "blocked":
+            options = sorted((option for option in journey.get("redirect_options", []) if option.get("reachable")),
+                             key=lambda option: (option["target_id"] != profile["home_anchor_id"], option["duration_s"]))
+            if options:
+                return choose("redirect", "My way ahead is closed; head somewhere I can still reach.",
+                              target_id=options[0]["target_id"])
+        return choose("continue", "Keep going; nothing I know of requires changing this trip.")
+
     current = next((task for task in active if task["task_id"] == state["current_task_id"]), None)
     if current is not None:
         activity = next((option for option in observation.get("activity_options", [])

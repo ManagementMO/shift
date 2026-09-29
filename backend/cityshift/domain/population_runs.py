@@ -79,7 +79,7 @@ def _save(world: SocietyWorld, mobility: PopulationMobility, run: SimulationRun,
         "occupancy.json": {}, "stop_queue.json": {},
         "cohort.json": {"cohort": list(world.states), "desired_depart": {}, "arrived": {},
                         "population_lifecycle": "persistent; transport arrival is not resident completion"},
-        "compile.json": {"ok": True, "errors": [], "notes": ["Explicit population scenario; no transport flagship closures."],
+        "compile.json": {"ok": True, "errors": [], "notes": ["Explicit population scenario; streets close only inside applied incident footprints."],
                          "mode_assignment": {}, "unroutable": {}, "line_schedule": {}, "duties": []},
     }
     for name, value in data.items():
@@ -179,6 +179,11 @@ def execute_population_run(run: SimulationRun, pack: CityPack, population: Popul
                     run.status = RunStatus.paused
                     break
                 inputs_changed = world.apply_stimuli(read_stimuli(run_root, run.run_id))
+                # Incidents in effect close their streets before anyone decides; trips they cut are reported.
+                mobility.set_hazards(world.hazard_footprints())
+                notices = mobility.take_notices()
+                world.note_routes(notices)
+                inputs_changed = inputs_changed or bool(notices)
                 due = sorted(world.due_residents(), key=lambda rid: (world.states[rid].next_decision_s, rid))
                 if native and gateway is not None and due:
                     boundary_usage = gateway.usage(run.run_id)

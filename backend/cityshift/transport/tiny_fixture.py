@@ -79,3 +79,40 @@ def build_tiny_network(out_dir: Path, geo: bool = False) -> Path:
     if res.returncode != 0:
         raise RuntimeError(f"netconvert failed: {res.stderr}")
     return net
+
+
+def build_grid_network(out_dir: Path, size: int = 3) -> Path:
+    """A size x size geographic street grid (~210 m blocks) with sidewalks and crossings, so a closed street has a detour.
+
+    Node `n{i}{j}` is column i (west to east), row j (south to north); edge `g_{a}_{b}` runs from node a to node b.
+    Every junction has a crossing over each of its streets.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = "grid" if size == 3 else f"grid{size}"
+    nodes = out_dir / f"{stem}.nod.xml"
+    edges = out_dir / f"{stem}.edg.xml"
+    crossings = out_dir / f"{stem}.con.xml"
+    net = out_dir / f"{stem}.net.xml"
+    nodes.write_text("<nodes>\n" + "".join(
+        f'    <node id="n{i}{j}" x="{-79.39 + i * 0.0026:.5f}" y="{43.64 + j * 0.0019:.5f}" type="priority"/>\n'
+        for i in range(size) for j in range(size)
+    ) + "</nodes>\n")
+    streets = ([(f"{i}{j}", f"{i + 1}{j}") for i in range(size - 1) for j in range(size)]
+               + [(f"{i}{j}", f"{i}{j + 1}") for i in range(size) for j in range(size - 1)])
+    edges.write_text("<edges>\n" + "".join(
+        f'    <edge id="g_{a}_{b}" from="n{a}" to="n{b}" numLanes="1" speed="11.1" sidewalkWidth="2.0"/>\n'
+        for p, q in streets for a, b in ((p, q), (q, p))
+    ) + "</edges>\n")
+    crossings.write_text("<connections>\n" + "".join(
+        f'    <crossing node="n{node}" edges="g_{p}_{q} g_{q}_{p}" priority="true"/>\n'
+        for p, q in streets for node in (p, q)
+    ) + "</connections>\n")
+    if net.exists() and net.stat().st_mtime > max(path.stat().st_mtime for path in (nodes, edges, crossings)):
+        return net
+    res = subprocess.run([
+        binary("netconvert"), "--node-files", str(nodes), "--edge-files", str(edges), "--connection-files", str(crossings),
+        "--output-file", str(net), "--geometry.remove", "false", "--proj.utm", "true",
+    ], capture_output=True, text=True, check=False)
+    if res.returncode != 0:
+        raise RuntimeError(f"netconvert failed: {res.stderr}")
+    return net
