@@ -1,6 +1,6 @@
 # God’s Plan: A Living Multi-Agent City Simulator
 
-**Live demo → [agentsamong.us](https://www.agentsamong.us)**
+**Live demo → [[devpost](https://devpost.com/software/shift-t15x3m)**
 
 ![God's Plan — live Toronto city with CN Tower and Rogers Centre](docs/assets/gods-plan-city.png)
 
